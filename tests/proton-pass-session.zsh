@@ -713,14 +713,18 @@ case $1 in
       zmodload zsh/datetime
       trap 'print -r -- "$EPOCHREALTIME" >> "$FAKE_PASS_INFO_EXIT_LOG"' EXIT
     fi
+    # These holds end by wall-clock time, not a poll count: a loaded runner
+    # can stretch every short sleep, and a counted hold could then outlast the
+    # helper's deadline for this check.
     # Hold this check, well inside its three-second deadline, until a second
     # check also runs, and record whether one did.
     if [[ -n ${FAKE_PASS_INFO_BARRIER:-} ]]; then
+      zmodload zsh/datetime
       zmodload zsh/zselect
       : > "$FAKE_PASS_INFO_BARRIER/$$"
-      integer barrier_polls=200
+      typeset -F barrier_deadline=$(( EPOCHREALTIME + 2 ))
       barrier_arrivals=( "$FAKE_PASS_INFO_BARRIER"/<->(N) )
-      while (( barrier_polls-- > 0 && ${#barrier_arrivals} < 2 )); do
+      while (( EPOCHREALTIME < barrier_deadline && ${#barrier_arrivals} < 2 )); do
         zselect -t 1 || true
         barrier_arrivals=( "$FAKE_PASS_INFO_BARRIER"/<->(N) )
       done
@@ -737,17 +741,19 @@ case $1 in
     # it before a repair's cleanup would.
     if [[ -n ${FAKE_PASS_INFO_AWAIT_SESSION_ONCE:-} &&
       ! -e $FAKE_PASS_INFO_AWAIT_SESSION_ONCE ]]; then
+      zmodload zsh/datetime
       zmodload zsh/zselect
-      integer await_session_polls=150
-      while (( await_session_polls-- > 0 )) &&
+      typeset -F await_session_deadline=$(( EPOCHREALTIME + 1.5 ))
+      while (( EPOCHREALTIME < await_session_deadline )) &&
         [[ ! -e $FAKE_PASS_LOCAL_SESSION || ! -e $FAKE_PASS_REMOTE_SESSION ]]; do
         zselect -t 1 || true
       done
       if [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]]; then
         print -r -- seen > "$FAKE_PASS_INFO_AWAIT_SESSION_ONCE"
         if [[ -n ${FAKE_PASS_INFO_HOLD_WHILE:-} ]]; then
-          integer hold_polls=100
-          while (( hold_polls-- > 0 )) && [[ -e $FAKE_PASS_INFO_HOLD_WHILE ]]; do
+          typeset -F hold_deadline=$(( EPOCHREALTIME + 1 ))
+          while (( EPOCHREALTIME < hold_deadline )) &&
+            [[ -e $FAKE_PASS_INFO_HOLD_WHILE ]]; do
             zselect -t 1 || true
           done
           print -r -- 'account-metadata-canary'
@@ -1057,9 +1063,10 @@ case $1 in
       : > "$FAKE_PASS_LOCAL_SESSION"
       : > "$FAKE_PASS_REMOTE_SESSION"
       if [[ -n ${FAKE_PASS_LOGIN_PARTIAL_GATE:-} ]]; then
+        zmodload zsh/datetime
         zmodload zsh/zselect
-        integer partial_gate_polls=300
-        while (( partial_gate_polls-- > 0 )) &&
+        typeset -F partial_gate_deadline=$(( EPOCHREALTIME + 3 ))
+        while (( EPOCHREALTIME < partial_gate_deadline )) &&
           [[ ! -s $FAKE_PASS_LOGIN_PARTIAL_GATE ]]; do
           zselect -t 1 || true
         done
