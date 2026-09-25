@@ -1,0 +1,74 @@
+#!/bin/sh
+
+usage="usage: $(basename "$0") [-y|--yes] [<base>]"
+
+yes_flag=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -y|--yes) yes_flag=1; shift ;;
+        -h|--help)
+            echo "$usage"
+            echo "Deletes local branches merged into <base> (default: origin/HEAD, else main or master)."
+            exit 0 ;;
+        --) shift; break ;;
+        -*) echo "$usage" >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
+
+base="$1"
+if [ -z "$base" ]; then
+    base="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
+    if [ -z "$base" ]; then
+        if git show-ref --quiet refs/heads/main; then base=main
+        elif git show-ref --quiet refs/heads/master; then base=master
+        else base=main
+        fi
+    fi
+fi
+
+# Compare against the local base branch when it exists, else origin's.
+if git show-ref --quiet "refs/heads/$base"; then
+    base_ref="$base"
+elif git show-ref --quiet "refs/remotes/origin/$base"; then
+    base_ref="origin/$base"
+else
+    echo "error: cannot find base '$base' locally or at origin" >&2
+    exit 1
+fi
+
+# Skip branches checked out in any worktree.
+worktree_branches="$(
+    git worktree list --porcelain 2>/dev/null \
+        | sed -n 's@^branch refs/heads/@@p'
+)"
+
+current="$(git rev-parse --abbrev-ref HEAD)"
+branches="$(
+    git for-each-ref --merged "$base_ref" --format='%(refname:short)' refs/heads/ \
+        | grep -Fvx -e "$current" -e "$base" \
+        | while IFS= read -r branch; do
+            printf '%s\n' "$worktree_branches" | grep -Fqx -- "$branch" \
+                || printf '%s\n' "$branch"
+        done
+)"
+
+if [ -z "$branches" ]; then
+    echo "No local branches are fully merged into $base_ref."
+    exit 0
+fi
+
+printf 'These local branches are fully merged into %s and will be deleted:\n\n%s\n' \
+    "$base_ref" "$branches"
+if [ -z "$yes_flag" ]; then
+    printf '\nProceed? [y/N] '
+    IFS= read -r answer
+    case "$answer" in
+        y|Y) ;;
+        *) echo "Aborted."; exit 1 ;;
+    esac
+fi
+
+printf '%s\n' "$branches" | while IFS= read -r branch; do
+    git branch --delete -- "$branch"
+done
