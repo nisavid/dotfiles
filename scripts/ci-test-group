@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# Run one named group of the portability test battery from the repository root.
+#
+# The groups partition the commands that .github/workflows/platform-portability.yml
+# and zsh-deployment-portability.yml run serially, so CI can run them in parallel.
+# Each group expects the workflow's dependencies on PATH: zsh, chezmoi, age tooling
+# (AGE_TOOLING_DIRECTORY), python3 with uv/uvx, jq, rg, bat, and flock on macOS.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: ci-test-group GROUP
+       ci-test-group --list
+
+Groups:
+  shell-bindings   group drift check, shell syntax, zsh binding tests, privacy scan,
+                   private-skill transaction
+  proton-pass      Proton Pass startup and session behavior tests
+  discover         agent-equipment unittest discovery suite
+  python-checks    remaining unittests, pyrefly, JSON Schema checks
+  zsh-deployment   user-session deployment contracts
+EOF
+}
+
+groups=(shell-bindings proton-pass discover python-checks zsh-deployment)
+
+group_shell_bindings() {
+  zsh -f tests/ci-test-group.zsh
+  bash -n \
+    home/run_after_restore-acl.sh \
+    home/run_before_save-acl.sh \
+    scripts/private-skill-transaction \
+    scripts/private-skill-transaction.d/*.bash
+  zsh -n \
+    home/run_after_sync-global-agent-skills-to-claude.zsh \
+    tests/claude-skill-sync.zsh \
+    tests/container-runtime-bindings.zsh \
+    tests/global-agents-policy.zsh \
+    tests/hindsight-agents-bindings.zsh \
+    tests/identity-bindings.zsh \
+    tests/platform-portability.zsh \
+    tests/private-skill-transaction.zsh \
+    tests/privacy-scan.zsh \
+    tests/proton-pass-session.zsh \
+    tests/proton-pass-startup-bindings.zsh \
+    tests/proton-pass-startup.zsh \
+    tests/secret-command-shims.zsh \
+    tests/secret-exec-migrate.zsh \
+    tests/secret-exec.zsh \
+    tests/secret-injection-bindings.zsh \
+    tests/private-skill-transaction.d/*.zsh
+  zsh -f tests/claude-skill-sync.zsh
+  zsh -f tests/platform-portability.zsh
+  zsh -f tests/container-runtime-bindings.zsh
+  zsh -f tests/privacy-scan.zsh
+  python3 scripts/privacy-scan --root . --require-age-manifest
+  zsh -f tests/identity-bindings.zsh
+  zsh -f tests/secret-exec.zsh
+  zsh -f tests/secret-command-shims.zsh
+  zsh -f tests/secret-exec-migrate.zsh
+  zsh -f tests/secret-injection-bindings.zsh
+  zsh -f tests/proton-pass-startup-bindings.zsh
+  GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 \
+    zsh -f tests/global-agents-policy.zsh
+  if [[ "$(uname -s)" == Linux ]]; then
+    zsh -f tests/hindsight-agents-bindings.zsh
+  fi
+  zsh -f tests/private-skill-transaction.zsh all
+}
+
+group_proton_pass() {
+  zsh -f tests/proton-pass-startup.zsh
+  zsh -f tests/proton-pass-session.zsh
+}
+
+group_discover() {
+  python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'
+}
+
+group_python_checks() {
+  uvx --from pyrefly==1.2.0 pyrefly check \
+    --preset strict \
+    --min-severity warn \
+    --search-path home/private_dot_local/lib/agent-equipment \
+    --progress-bar no \
+    --summary=full \
+    home/private_dot_local/lib/agent-equipment/agent_equipment \
+    home/private_dot_local/bin/executable_agent-equipment
+  python3 -m unittest tests/test_chezmoi_source_ownership.py
+  python3 -m unittest tests/test_agent_equipment_acceptance.py
+  python3 -m unittest tests/test_agent_equipment_acceptance_evidence.py
+  python3 -m unittest tests/test_agent_equipment_adapter_contract.py
+  python3 -m unittest tests/test_agent_equipment_captured_state.py
+  python3 -m unittest tests/test_agent_equipment_deployment_contract.py
+  python3 -m unittest tests/test_agent_equipment_design.py
+  python3 -m unittest tests/test_agent_equipment_json_schema.py
+  REQUIRE_AGE_TOOLING=1 \
+    python3 -m unittest tests/test_agent_equipment_public_data.py
+  python3 -m unittest tests/test_privacy_age_integrity_gate.py
+  REQUIRE_AGE_TOOLING=1 \
+    python3 -m unittest tests/test_privacy_age_admission.py
+  REQUIRE_AGE_TOOLING=1 \
+    python3 -m unittest tests/test_privacy_age_envelopes.py
+  uvx --from check-jsonschema==0.35.0 \
+    check-jsonschema --check-metaschema \
+    docs/agent-equipment/adapter-contract-v1.schema.json \
+    docs/agent-equipment/acceptance-evidence-v1.schema.json \
+    docs/agent-equipment/catalog-v1.schema.json \
+    docs/agent-equipment/lock-v1.schema.json \
+    docs/agent-equipment/captured-state-v1.schema.json \
+    docs/agent-equipment/execution-authority-v1.schema.json \
+    docs/agent-equipment/plan-action-set-v1.schema.json
+  uvx --from check-jsonschema==0.35.0 check-jsonschema \
+    --base-uri "file://$PWD/docs/agent-equipment/adapter-contract-v1.schema.json" \
+    --schemafile docs/agent-equipment/adapter-contract-v1.schema.json \
+    tests/fixtures/agent-equipment/schema/valid-adapter-*.json
+  uvx --from check-jsonschema==0.35.0 check-jsonschema \
+    --schemafile docs/agent-equipment/catalog-v1.schema.json \
+    tests/fixtures/agent-equipment/schema/valid-catalog.json \
+    docs/agent-equipment/initial-catalog.proposed.json
+  uvx --from check-jsonschema==0.35.0 check-jsonschema \
+    --base-uri "file://$PWD/docs/agent-equipment/lock-v1.schema.json" \
+    --schemafile docs/agent-equipment/lock-v1.schema.json \
+    tests/fixtures/agent-equipment/schema/valid-lock.json \
+    docs/agent-equipment/initial-lock.proposed.json
+  uvx --from check-jsonschema==0.35.0 check-jsonschema \
+    --schemafile docs/agent-equipment/captured-state-v1.schema.json \
+    tests/fixtures/agent-equipment/schema/valid-captured-state.json
+  uvx --from check-jsonschema==0.35.0 check-jsonschema \
+    --schemafile docs/agent-equipment/plan-action-set-v1.schema.json \
+    tests/fixtures/agent-equipment/schema/valid-plan-action-set.json
+  # The fixture deliberately exercises a native remove inverse.  Until
+  # #115 supplies independently validated prepared authority, the
+  # capture validator must reject that plan-only path.
+  local captured_state_output captured_state_status
+  set +e
+  captured_state_output="$({
+    python3 scripts/agent_equipment_captured_state.py \
+      --authoritative-plan-actions \
+      tests/fixtures/agent-equipment/schema/valid-plan-action-set.json \
+      --expected-candidate-identity \
+      candidate:fixture/controller-v1 \
+      --expected-implementation-manifest-digest \
+      sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+      tests/fixtures/agent-equipment/schema/valid-captured-state.json
+  } 2>&1)"
+  captured_state_status=$?
+  set -e
+  if [[ "$captured_state_status" -ne 1 ]]; then
+    printf 'expected plan-only native inverse validation to exit 1, got %s\n%s\n' \
+      "$captured_state_status" "$captured_state_output" >&2
+    return 1
+  fi
+  case "$captured_state_output" in
+    *NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED*) ;;
+    *)
+      printf 'expected prepared-authority diagnostic was not emitted\n%s\n' \
+        "$captured_state_output" >&2
+      return 1
+      ;;
+  esac
+}
+
+group_zsh_deployment() {
+  zsh tests/zsh-gui-path.zsh
+  zsh tests/proton-pass-startup-bindings.zsh
+}
+
+main() {
+  if [[ $# -ne 1 ]]; then
+    usage >&2
+    return 64
+  fi
+  case "$1" in
+    -h | --help)
+      usage
+      return 0
+      ;;
+    --list)
+      printf '%s\n' "${groups[@]}"
+      return 0
+      ;;
+  esac
+  local group=$1 candidate
+  for candidate in "${groups[@]}"; do
+    if [[ "$candidate" == "$group" ]]; then
+      local script_path repo_root
+      script_path="$(realpath -- "${BASH_SOURCE[0]}")"
+      repo_root="${script_path%/*/*}"
+      cd -- "$repo_root"
+      "group_${group//-/_}"
+      return
+    fi
+  done
+  printf 'ci-test-group: unknown group: %s\n' "$group" >&2
+  usage >&2
+  return 64
+}
+
+main "$@"
