@@ -2532,7 +2532,7 @@ assert_no_private_diagnostics 'a failed partial-login cleanup'
 zsh "$ensure_ready" ||
   fail 'readiness must recover behind a login marker left by a failed cleanup'
 [[ $(<"$FAKE_PASS_LOG") == $'info\nlogout --force\nlogin\ninfo' ]] ||
-  fail "a login marker must skip the unlocked check and force a local reset: $(<"$FAKE_PASS_LOG")"
+  fail "a login marker must skip the shared first check and force a local reset: $(<"$FAKE_PASS_LOG")"
 grep -Fqx 'reason=repaired' "$status_file" ||
   fail 'the call behind a login marker must record a repair'
 [[ ! -e $login_marker ]] ||

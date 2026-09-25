@@ -1113,8 +1113,8 @@ main() {
     fail_readiness invalid-bootstrap-value \
       'the native bootstrap item must contain one non-empty line' unrecorded
 
-  # The marker covers the forced logout as well as the login: unlocked
-  # readers stay off local state that is being replaced.
+  # The marker covers the forced logout as well as the login, so the first
+  # check and the next exclusive holder know a repair left this state unfinished.
   record_login_marker "$state_dir" "$login_marker"
   # Stored local authentication blocks login, so remove it only after a
   # positive classification and a validated bootstrap value. Whatever an
