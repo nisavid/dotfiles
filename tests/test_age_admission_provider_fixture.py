@@ -1886,7 +1886,8 @@ class AgeAdmissionProviderFixtureTests(unittest.TestCase):
         ssh_keygen = resolved_non_provider_support("ssh-keygen")
         temporary, inputs = self.make_inputs(
             real_launcher=True,
-            temporary_parent=ROOT.parent,
+            # Executable staging must not inherit a shared /tmp checkout parent.
+            temporary_parent=Path.home(),
         )
         self.addCleanup(temporary.cleanup)
         if not self.trusted_path_ancestors_supported(inputs.root):

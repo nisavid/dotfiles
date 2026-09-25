@@ -5311,7 +5311,8 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(inputs.archive.stat().st_mode), 0o600)
         self.assertEqual(sha256(inputs.archive.read_bytes()), inputs.archive_sha256)
         support_temporary = TemporaryDirectory(
-            prefix=".age-admission-secure-support.", dir=ROOT.parent
+            # Executable staging needs trusted ancestors even for /tmp checkouts.
+            prefix=".age-admission-secure-support.", dir=Path.home()
         )
         self.addCleanup(support_temporary.cleanup)
         secure_support = Path(support_temporary.name).resolve(strict=True)

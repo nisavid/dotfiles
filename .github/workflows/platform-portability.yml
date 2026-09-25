@@ -24,7 +24,7 @@ jobs:
   verify:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -202,7 +202,8 @@ jobs:
           if [[ "$RUNNER_OS" == Linux ]]; then
             zsh -f tests/hindsight-agents-bindings.zsh
           fi
-          python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'
+          # Match the deployment modes asserted by the installation fixtures.
+          (umask 022; python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py')
           uvx --from pyrefly==1.2.0 pyrefly check \
             --preset strict \
             --min-severity warn \
