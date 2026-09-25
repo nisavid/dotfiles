@@ -265,8 +265,8 @@ def _require_bounded_count(value: object, name: str, maximum: int) -> int:
 
 
 def _required_checks(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list) or len(value) != 5:
-        raise PreimageError("required checks must contain exactly five records")
+    if not isinstance(value, list) or len(value) != 4:
+        raise PreimageError("required checks must contain exactly four records")
     checks: list[dict[str, object]] = []
     contexts: set[str] = set()
     for record in value:
