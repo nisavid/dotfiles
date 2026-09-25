@@ -73,6 +73,28 @@ if chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data"
 fi
 rm -- "$deployed_git_config"
 
+chezmoi_bin=$(command -v chezmoi)
+helper_bin=$test_dir/helper-bin
+mkdir -p -- "$helper_bin" "$test_dir/no-helper-bin"
+for helper in glab git-credential-oauth; do
+  print -r -- '#!/bin/sh' > "$helper_bin/$helper"
+  chmod 755 "$helper_bin/$helper"
+done
+PATH=$helper_bin "$chezmoi_bin" -S "$repo_root/home" execute-template \
+  --override-data "$fixture_data" < home/dot_config/git/config.tmpl > "$git_config"
+[[ $(git config --file "$git_config" --get-all credential.https://gitlab.com.helper) == \
+  $'\n!'"$helper_bin/glab auth git-credential" ]] ||
+  fail 'Git config does not route gitlab.com credentials through glab'
+[[ $(git config --file "$git_config" --get-all credential.https://codeberg.org.helper) == \
+  $'\ncache --timeout 21600\noauth' ]] ||
+  fail 'Git config does not route codeberg.org credentials through git-credential-oauth'
+PATH=$test_dir/no-helper-bin "$chezmoi_bin" -S "$repo_root/home" execute-template \
+  --override-data "$fixture_data" < home/dot_config/git/config.tmpl > "$git_config"
+[[ -z $(git config --file "$git_config" --get-all credential.https://gitlab.com.helper) ]] ||
+  fail 'Git config configured a gitlab.com helper without glab'
+[[ -z $(git config --file "$git_config" --get-all credential.https://codeberg.org.helper) ]] ||
+  fail 'Git config configured a codeberg.org helper without git-credential-oauth'
+
 personal_include=$test_dir/personal-include
 chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
   < home/dot_config/git/personal.inc.tmpl > "$personal_include"

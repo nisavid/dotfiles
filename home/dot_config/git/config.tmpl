@@ -276,6 +276,12 @@
 	helper =
 	helper = !{{ lookPath "glab" }} auth git-credential
 {{- end }}
+{{- if lookPath "git-credential-oauth" }}
+[credential "https://codeberg.org"]
+	helper =
+	helper = cache --timeout 21600
+	helper = oauth
+{{- end }}
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
