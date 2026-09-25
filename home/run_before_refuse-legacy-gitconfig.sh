@@ -27,8 +27,8 @@ EOF
 
 It holds CodeRabbit's machine ID, which CodeRabbit can't read from
 config.local. Copy it into the managed file before removing $legacy.
-The next apply then reports that the managed file changed since chezmoi
-wrote it; overwrite it, since the template carries the ID forward:
+If chezmoi has written that file before, the next apply reports that it
+changed since then; overwrite it, since the template carries the ID forward:
 
   mkdir -p "${managed%/*}" && git config --file "$managed" coderabbit.machineId "\$(git config --file "$legacy" coderabbit.machineId)"
 EOF
