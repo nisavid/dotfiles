@@ -13,8 +13,25 @@ assert_contains() {
   local text="$2"
   local message="$3"
 
-  rg -F -q -- "$text" "$file" || fail "$message"
+  rg --no-config -F -q -- "$text" "$file" || fail "$message"
 }
+
+test_pins_ignore_ripgrep_config() {
+  emulate -L zsh
+  setopt err_return
+
+  print -r -- '--smart-case' > "$tmpdir/rg.conf"
+  print -r -- 'RESOLVE-LIBRARY-ID' > "$tmpdir/wrong-case"
+
+  if (RIPGREP_CONFIG_PATH="$tmpdir/rg.conf" assert_contains \
+    "$tmpdir/wrong-case" 'resolve-library-id' 'wrong-case pin matched' 2>/dev/null); then
+    fail 'wrong-case pin must fail with a smart-case ripgrep config'
+  fi
+}
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf -- "$tmpdir"' EXIT
+test_pins_ignore_ripgrep_config
 
 assert_skill_frontmatter() {
   local file="$1"
@@ -66,8 +83,8 @@ test_context7() {
   assert_skill_frontmatter "$skill" context7-mcp
   assert_contains "$skill" 'resolve-library-id' 'Context7 must resolve the library ID first'
   assert_contains "$skill" 'query-docs' 'Context7 must query current docs after resolution'
-  resolve_line="$(rg -n -m1 'resolve-library-id' "$skill" | cut -d: -f1)"
-  query_line="$(rg -n -m1 'query-docs' "$skill" | cut -d: -f1)"
+  resolve_line="$(rg --no-config -n -m1 'resolve-library-id' "$skill" | cut -d: -f1)"
+  query_line="$(rg --no-config -n -m1 'query-docs' "$skill" | cut -d: -f1)"
   (( resolve_line < query_line )) || fail 'resolve-library-id must precede query-docs'
 
   assert_contains "$skill" 'minimum public technical question' 'Context7 queries must be minimized'
@@ -161,10 +178,10 @@ test_git_publication() {
   assert_contains "$skill" 'Never use a deletion refspec such as `:<full-ref>`' 'Git publication skill must reject deletion refspecs'
   assert_contains "$skill" 'exact existing or absent lease' 'Git publication skill must require an exact CAS lease'
   assert_contains "$skill" 'submodule mode `check`' 'Git publication skill must require submodule check mode'
-  workflow_start="$(rg -n -m1 '^## Follow The Checkpoint Workflow$' "$skill" | cut -d: -f1)"
-  push_line="$(rg -n -m1 '^8\. Execute the exact CAS push\.$' "$skill" | cut -d: -f1)"
-  verify_line="$(rg -n -m1 '^9\. ' "$skill" | cut -d: -f1)"
-  plan_publish_line="$(rg -n -m1 '^## Plan And Publish$' "$skill" | cut -d: -f1)"
+  workflow_start="$(rg --no-config -n -m1 '^## Follow The Checkpoint Workflow$' "$skill" | cut -d: -f1)"
+  push_line="$(rg --no-config -n -m1 '^8\. Execute the exact CAS push\.$' "$skill" | cut -d: -f1)"
+  verify_line="$(rg --no-config -n -m1 '^9\. ' "$skill" | cut -d: -f1)"
+  plan_publish_line="$(rg --no-config -n -m1 '^## Plan And Publish$' "$skill" | cut -d: -f1)"
   step_nine="$(sed -n "${verify_line}p" "$skill")"
   [[ "$step_nine" == *'Post-verify'* && "$step_nine" == *'exact push endpoint'* &&
     "$step_nine" == *'full destination ref'* && "$step_nine" == *'terminal `verified` plan'* ]] ||
@@ -366,13 +383,13 @@ test_model_selection() {
   assert_contains "$delegation_skill" \
     'Route-metadata inspection does not make that task eligible or authorize executing with its model or under its account, entitlement, permissions, or context.' \
     'delegation policy must mirror the unrelated-task execution boundary'
-  ! rg -F -q -- 'reuse an unrelated task to obtain' "$skill" "$delegation_skill" || \
+  ! rg --no-config -F -q -- 'reuse an unrelated task to obtain' "$skill" "$delegation_skill" || \
     fail 'unrelated-task policy must not use the ambiguous obtain wording'
-  ! rg -F -q -- '.codex/.auth/' "$skill" || \
+  ! rg --no-config -F -q -- '.codex/.auth/' "$skill" || \
     fail 'public model-selection policy must not expose account-home locations'
-  ! rg -F -q -- 'CODEX_HOME=' "$skill" || \
+  ! rg --no-config -F -q -- 'CODEX_HOME=' "$skill" || \
     fail 'public model-selection policy must not expose exact Codex account bindings'
-  ! rg -F -q -- 'acct-synthetic-' "$skill" || \
+  ! rg --no-config -F -q -- 'acct-synthetic-' "$skill" || \
     fail 'public model-selection policy must not expose synthetic account identifiers'
 
   [[ -f "$evals" ]] || fail 'model-selection behavior evals are missing'
@@ -421,9 +438,9 @@ test_model_selection() {
   assert_contains "$evidence_fixture" \
     'local account ID, account-home identifier, and stable private label' \
     'route-evidence fixture must classify local account identifiers without printing them'
-  ! rg -F -q -- 'acct-synthetic-' "$evidence_fixture" || \
+  ! rg --no-config -F -q -- 'acct-synthetic-' "$evidence_fixture" || \
     fail 'public route-evidence fixture must not print account identifier forms'
-  ! rg -F -q -- '/private/' "$evidence_fixture" || \
+  ! rg --no-config -F -q -- '/private/' "$evidence_fixture" || \
     fail 'public route-evidence fixture must not print account-home path forms'
   assert_contains "$evidence_fixture" 'stable private label' \
     'route-evidence fixture must classify the local label without printing it'
@@ -592,8 +609,6 @@ case "${1:-all}" in
     ;;
 esac
 
-tmpdir="$(mktemp -d)"
-trap 'rm -rf -- "$tmpdir"' EXIT
 isolated_source="$tmpdir/source"
 isolated_home="$tmpdir/home"
 mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/skills" "$isolated_home"
