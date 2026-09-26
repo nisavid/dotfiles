@@ -61,7 +61,34 @@ RESOURCE_LIMIT_DIAGNOSTIC = "privacy scan failed: scan resource limits exceeded"
 AGE_NATIVE_MAGIC = b"age-encryption.org/v1\n"
 AGE_ARMORED_MAGIC = b"-----BEGIN AGE ENCRYPTED FILE-----"
 
-EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b")
+EMAIL = re.compile(
+    r"(?i)\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})(?=$|[^A-Z0-9])"
+)
+HOMEBREW_FORMULA_NAME_VERSION_PATTERN = (
+    r"[a-z0-9][a-z0-9+._-]*@[0-9]+(?:\.[0-9]+)*"
+)
+HOMEBREW_VERSIONED_ARTIFACT = re.compile(
+    HOMEBREW_FORMULA_NAME_VERSION_PATTERN + r"(?:\.rb|\.bottle\.json)\Z"
+)
+HOMEBREW_FORMULA_ASSIGNMENT = re.compile(
+    r'(?:\A(?:\ufeff|\udcff\udcfe|\udcfe\udcff)?|(?<=[\r\n]))[ \t]*'
+    r'(?:"(?:[a-z][a-z0-9]*_)*formula(?:_(?:path|url))?"'
+    r"|(?:[a-z][a-z0-9]*_)*formula(?:_(?:path|url))?)"
+    r"[ \t]*(?::|=)[ \t]*(?P<quote>[\"']?)"
+    r"(?P<value>[^\s\"',;]*)(?P=quote)"
+)
+HOMEBREW_FORMULA_PATH_ARTIFACT = re.compile(
+    rf"/(?P<artifact>{HOMEBREW_FORMULA_NAME_VERSION_PATTERN}\.rb)"
+)
+HOMEBREW_BOTTLE_OUTPUT_ARTIFACT = re.compile(
+    r"(?:\A|(?<=[\r\n]))[ \t]*"
+    r"(?:[A-Za-z0-9_./+-]+[ \t]+)?"
+    rf">[ \t]*(?P<quote>[\"']?)"
+    rf"(?P<artifact>{HOMEBREW_FORMULA_NAME_VERSION_PATTERN}\.bottle\.json)"
+    r"(?P=quote)"
+)
+HOMEBREW_FORMULA_ARTIFACT_TERMINATORS = frozenset({",", ";", ")", "]", "}"})
+HOMEBREW_BOTTLE_OUTPUT_TERMINATORS = frozenset({";"})
 HOME_PATH = re.compile(
     r"(?<![A-Za-z0-9_.$:-])(?:/Users|/home)/"
     r"([A-Za-z0-9._-]+)(?:/[^\s\"'<>]*)?"
@@ -435,6 +462,71 @@ def exact_terms(source: str | None) -> tuple[str, ...]:
     return tuple(sorted(terms, key=len, reverse=True))
 
 
+def is_homebrew_formula_filename_match(
+    value: str,
+    match: re.Match[str],
+) -> bool:
+    """Return whether one match is the final basename of a Homebrew formula."""
+
+    artifact = match.group(0)
+    parent, separator, basename = value.rpartition("/")
+    basename_start = len(value) - len(basename)
+    return bool(
+        separator
+        and artifact.endswith(".rb")
+        and HOMEBREW_VERSIONED_ARTIFACT.fullmatch(artifact)
+        and match.span() == (basename_start, len(value))
+        and parent.rpartition("/")[2] == "Formula"
+    )
+
+
+def has_homebrew_artifact_terminator(
+    value: str,
+    end: int,
+    terminators: frozenset[str],
+) -> bool:
+    """Return whether an artifact span ends at an allowed token boundary."""
+
+    if end == len(value):
+        return True
+    following = value[end]
+    return following.isspace() or following in terminators
+
+
+def homebrew_file_content_spans(value: str) -> frozenset[tuple[int, int]]:
+    """Return exact Homebrew artifact spans using linear recognizer passes."""
+
+    spans: set[tuple[int, int]] = set()
+    for assignment in HOMEBREW_FORMULA_ASSIGNMENT.finditer(value):
+        value_start, value_end = assignment.span("value")
+        for artifact in HOMEBREW_FORMULA_PATH_ARTIFACT.finditer(
+            value,
+            value_start,
+            value_end,
+        ):
+            span = artifact.span("artifact")
+            boundary_end = span[1]
+            if assignment.group("quote"):
+                if span[1] != value_end:
+                    continue
+                boundary_end = assignment.end()
+            if has_homebrew_artifact_terminator(
+                value,
+                boundary_end,
+                HOMEBREW_FORMULA_ARTIFACT_TERMINATORS,
+            ):
+                spans.add(span)
+    for artifact in HOMEBREW_BOTTLE_OUTPUT_ARTIFACT.finditer(value):
+        span = artifact.span("artifact")
+        if has_homebrew_artifact_terminator(
+            value,
+            artifact.end(),
+            HOMEBREW_BOTTLE_OUTPUT_TERMINATORS,
+        ):
+            spans.add(span)
+    return frozenset(spans)
+
+
 def public_path_label(
     relative: str,
     denylist: ExactSubstringMatcher,
@@ -454,6 +546,7 @@ def public_path_label(
     elif any(
         match.group(0).casefold() not in ALLOWED_EMAILS
         and match.group(1).casefold() not in ALLOWED_EMAIL_DOMAINS
+        and not is_homebrew_formula_filename_match(relative, match)
         for match in EMAIL.finditer(relative)
     ):
         rule = "email-filename"
@@ -482,11 +575,17 @@ def sensitive_text_rules(
     denylist: ExactSubstringMatcher,
     *,
     syntax: str | None = None,
+    allow_homebrew_artifacts: bool = False,
 ) -> tuple[str, ...]:
     """Return privacy rules matched by one value without retaining the value."""
 
     rules: list[str] = []
     folded = value.casefold()
+    homebrew_spans = (
+        homebrew_file_content_spans(value)
+        if allow_homebrew_artifacts
+        else frozenset()
+    )
     if denylist.matches(value):
         rules.append("exact-denylist")
     if string_looks_like_private_key(value):
@@ -499,6 +598,7 @@ def sensitive_text_rules(
         not (match.group(0).casefold().startswith("git@") and "ssh://git@" in folded)
         and match.group(0).casefold() not in ALLOWED_EMAILS
         and match.group(1).casefold() not in ALLOWED_EMAIL_DOMAINS
+        and match.span() not in homebrew_spans
         for match in EMAIL.finditer(value)
     ):
         rules.append("email")
@@ -542,7 +642,12 @@ def sensitive_file_text_rules(
 
     if age_shaped:
         return sensitive_age_text_rules(value, denylist)
-    rules = sensitive_text_rules(value, denylist, syntax=syntax)
+    rules = sensitive_text_rules(
+        value,
+        denylist,
+        syntax=syntax,
+        allow_homebrew_artifacts=True,
+    )
     if relative == ".git" and GITDIR_POINTER.fullmatch(value):
         return tuple(
             rule for rule in rules if rule not in {"exact-denylist", "user-home"}
