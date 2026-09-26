@@ -32,6 +32,7 @@ prepare_case() {
   /bin/mkdir -p \
     "$fake_home/.cache" \
     "$fake_home/.config/hindsight-control-plane" \
+    "$fake_home/.local" \
     "$fake_home/.fixture/bin" \
     "$helpers"
   /bin/chmod 700 \
