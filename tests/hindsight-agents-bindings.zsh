@@ -7,6 +7,13 @@ fixture=$repo_root/tests/fixtures/hindsight-public.toml
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/hindsight-bindings.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ${#funcstack} > 1 )); then
+    rm -rf -- "$test_root"
+  fi
+}
+
 # exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "FAIL: $*"

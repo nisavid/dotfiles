@@ -14,6 +14,13 @@ command -v rg >/dev/null || fail 'rg is required to validate the client boundary
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/mlxctl-client-boundary.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
+
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ${#funcstack} > 1 )); then
+    rm -rf -- "$test_dir"
+  fi
+}
 rendered=$test_dir/modify-codex-config
 fixture_home=$test_dir/home
 mkdir -p -- "$fixture_home"

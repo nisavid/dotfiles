@@ -6,6 +6,13 @@ source_root=${PROTON_PASS_AGENT_READINESS_SOURCE_ROOT:-$repo_root}
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/proton-pass-agent-readiness.XXXXXX")
 trap '/bin/rm -rf -- "$test_dir"' EXIT
 
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ${#funcstack} > 1 )); then
+    /bin/rm -rf -- "$test_dir"
+  fi
+}
+
 # exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"

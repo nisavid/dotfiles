@@ -6,6 +6,13 @@ repo_root=${0:A:h:h}
 identity=${HOME}/.config/age/key.txt
 phase=$(mktemp -d "${TMPDIR:-/tmp}/private-skills-test.XXXXXX")
 trap 'rm -rf -- "$phase"' EXIT HUP INT TERM
+
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ${#funcstack} > 1 )); then
+    rm -rf -- "$phase"
+  fi
+}
 chmod 700 "$phase"
 
 # exit, not return: errexit inside a function skips zsh's EXIT trap.
