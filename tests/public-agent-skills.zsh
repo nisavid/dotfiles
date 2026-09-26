@@ -529,106 +529,70 @@ test_review_output() {
   ' "$trigger_evals" >/dev/null || fail 'reviewing-others-prs trigger evals need positive and negative coverage'
 }
 
-typeset -a projection_targets
+test_git_publication_mode() {
+  test_skill_creator_adapter
+  test_git_publication
+}
 
-case "${1:-all}" in
-  context7)
-    test_context7
-    projection_targets=(
-      "$HOME/.agents/skills/context7-mcp"
-      "$HOME/.claude/skills/context7-mcp"
-    )
-    ;;
-  developing-shell-scripts)
-    test_developing_shell_scripts
-    projection_targets=(
-      "$HOME/.agents/skills/developing-shell-scripts"
-      "$HOME/.claude/skills/developing-shell-scripts"
-    )
-    ;;
-  git-publication)
-    test_skill_creator_adapter
-    test_git_publication
-    projection_targets=(
-      "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
-      "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
-    )
-    ;;
-  pr-publication)
-    test_pr_publication
-    projection_targets=(
-      "$HOME/.agents/skills/graphite"
-      "$HOME/.agents/skills/publishing-reviewable-prs"
-      "$HOME/.agents/skills/writing-reviewable-pr-descriptions"
-      "$HOME/.claude/skills/publishing-reviewable-prs"
-      "$HOME/.claude/skills/writing-reviewable-pr-descriptions"
-      "$HOME/.claude/skills/graphite"
-    )
-    ;;
-  model-selection)
-    test_model_selection
-    projection_targets=(
-      "$HOME/.agents/skills/choosing-agent-models"
-      "$HOME/.claude/skills/choosing-agent-models"
-    )
-    ;;
-  review-output)
-    test_review_output
-    projection_targets=(
-      "$HOME/.agents/skills/reviewing-others-prs"
-    )
-    ;;
-  all)
-    test_context7
-    test_developing_shell_scripts
-    test_skill_creator_adapter
-    test_git_publication
-    test_pr_publication
-    test_model_selection
-    test_review_output
-    projection_targets=(
-      "$HOME/.agents/skills/context7-mcp"
-      "$HOME/.claude/skills/context7-mcp"
-      "$HOME/.agents/skills/developing-shell-scripts"
-      "$HOME/.claude/skills/developing-shell-scripts"
-      "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
-      "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
-      "$HOME/.agents/skills/graphite"
-      "$HOME/.agents/skills/publishing-reviewable-prs"
-      "$HOME/.agents/skills/writing-reviewable-pr-descriptions"
-      "$HOME/.claude/skills/publishing-reviewable-prs"
-      "$HOME/.claude/skills/writing-reviewable-pr-descriptions"
-      "$HOME/.claude/skills/graphite"
-      "$HOME/.agents/skills/choosing-agent-models"
-      "$HOME/.claude/skills/choosing-agent-models"
-      "$HOME/.agents/skills/reviewing-others-prs"
-    )
-    ;;
-  *)
-    fail 'usage: public-agent-skills.zsh [context7|developing-shell-scripts|git-publication|pr-publication|model-selection|review-output|all]'
-    ;;
-esac
+# mode:skill:assertions:Claude projection (yes/no)
+typeset -a skill_registrations=(
+  'context7:context7-mcp:test_context7:yes'
+  'developing-shell-scripts:developing-shell-scripts:test_developing_shell_scripts:yes'
+  'git-publication:checkpointing-and-publishing-git-work:test_git_publication_mode:yes'
+  'pr-publication:graphite:test_pr_publication:yes'
+  'pr-publication:publishing-reviewable-prs:test_pr_publication:yes'
+  'pr-publication:writing-reviewable-pr-descriptions:test_pr_publication:yes'
+  'model-selection:choosing-agent-models:test_model_selection:yes'
+  'review-output:reviewing-others-prs:test_review_output:no'
+)
+
+selected_mode="${1:-all}"
+typeset -a modes projection_targets fields selected_assertions
+for registration in $skill_registrations; do
+  fields=( "${(@s/:/)registration}" )
+  [[ "$fields[4]" == yes || "$fields[4]" == no ]] || fail "invalid Claude projection flag: $registration"
+  mode=$fields[1]
+  if (( ${modes[(Ie)$mode]} == 0 )); then
+    modes+=("$mode")
+  fi
+done
+if [[ "$selected_mode" != all ]] && (( ${modes[(Ie)$selected_mode]} == 0 )); then
+  fail "usage: public-agent-skills.zsh [${(j<|>)modes}|all]"
+fi
+
+for registration in $skill_registrations; do
+  fields=( "${(@s/:/)registration}" )
+  mode=$fields[1]
+  skill=$fields[2]
+  assertions=$fields[3]
+  claude_projection=$fields[4]
+  if [[ "$selected_mode" == all || "$selected_mode" == "$mode" ]]; then
+    selected_assertions+=( "$assertions" )
+    projection_targets+=("$HOME/.agents/skills/$skill")
+    if [[ "$claude_projection" != no ]]; then
+      projection_targets+=("$HOME/.claude/skills/$skill")
+    fi
+  fi
+done
+for assertions in ${(u)selected_assertions}; do
+  "$assertions"
+done
 
 isolated_source="$tmpdir/source"
 isolated_home="$tmpdir/home"
 mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/skills" "$isolated_home"
 
-for skill in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
-  publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models reviewing-others-prs developing-shell-scripts; do
+for registration in $skill_registrations; do
+  fields=( "${(@s/:/)registration}" )
+  skill=$fields[2]
   cp -R -- \
     "$repo_dir/home/dot_agents/skills/$skill" \
     "$isolated_source/dot_agents/skills/$skill"
-done
-
-for link in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
-  publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models developing-shell-scripts; do
-  cp -- \
-    "$repo_dir/home/dot_claude/skills/symlink_$link" \
-    "$isolated_source/dot_claude/skills/symlink_$link"
+  if [[ "$fields[4]" != no ]]; then
+    cp -- \
+      "$repo_dir/home/dot_claude/skills/symlink_$skill" \
+      "$isolated_source/dot_claude/skills/symlink_$skill"
+  fi
 done
 
 typeset -a isolated_targets
@@ -648,10 +612,10 @@ for target in $isolated_targets; do
   [[ -e "$target" || -L "$target" ]] || fail "isolated projection did not create $target"
 done
 
-for skill in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
-  publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models developing-shell-scripts; do
+for registration in $skill_registrations; do
+  fields=( "${(@s/:/)registration}" )
+  skill=$fields[2]
+  [[ "$fields[4]" != no ]] || continue
   canonical="$isolated_home/.agents/skills/$skill"
   link="$isolated_home/.claude/skills/$skill"
   if [[ -e "$canonical" || -e "$link" || -L "$link" ]]; then
