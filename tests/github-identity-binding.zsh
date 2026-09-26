@@ -12,6 +12,9 @@ export FAKE_GH_CONFIG_LOG=$test_dir/gh-config.log
 caller_gh_config=$test_dir/caller-gh-config
 launch_tmpdir=$test_dir/tmp
 mkdir -p -- "$caller_gh_config" "$launch_tmpdir"
+# Reach TMPDIR through a symbolic link, as macOS does through /var.
+launch_tmpdir_link=$test_dir/tmp-link
+ln -s -- tmp "$launch_tmpdir_link"
 print -r -- 'http_unix_socket: /nonexistent/secret-exec-test.sock' > "$caller_gh_config/config.yml"
 export FAKE_CALLER_GH_CONFIG_DIR=$caller_gh_config
 # The caller's own GH_TOKEN must reach the consumer untouched.
@@ -98,7 +101,7 @@ launch() {
     HTTP_PROXY=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 \
     ALL_PROXY=http://127.0.0.1:9 all_proxy=http://127.0.0.1:9 \
     SSL_CERT_FILE=/nonexistent/ca.pem SSL_CERT_DIR=/nonexistent \
-    TMPDIR=$launch_tmpdir \
+    TMPDIR=$launch_tmpdir_link \
     FAKE_GITHUB_LOGIN=$login \
     "${caller_gh_environment[@]}" \
     "${launch_environment[@]}" \
@@ -130,7 +133,7 @@ expect_fail_closed() {
   { print -u2 -r -- 'matching GitHub identity must start the consumer'; exit 1; }
 # The check ran against its own empty configuration, which is gone afterwards.
 isolated_gh_config=$(<"$FAKE_GH_CONFIG_LOG")
-[[ $isolated_gh_config == $launch_tmpdir/* && ! -e $isolated_gh_config ]] ||
+[[ $isolated_gh_config == ${launch_tmpdir:P}/* && ! -e $isolated_gh_config ]] ||
   fail 'the identity check must use and then remove a private gh configuration'
 [[ -z $(print -rl -- $launch_tmpdir/*(ND)) ]] ||
   fail 'the identity check must not leave temporary files'
