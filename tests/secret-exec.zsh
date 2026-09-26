@@ -98,6 +98,14 @@ assert_invalid_profiles() {
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-exec.XXXXXX")
 test_process_fixture_init "$test_dir" || fail 'could not initialize process-fixture cleanup'
 trap test_process_fixture_cleanup EXIT
+
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  local failure_status=$?
+  if [[ -o errexit ]] && (( ${#funcstack} > 1 )); then
+    test_process_fixture_cleanup $failure_status
+  fi
+}
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM

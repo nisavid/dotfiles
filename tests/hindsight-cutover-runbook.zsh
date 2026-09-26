@@ -8,6 +8,13 @@ tmp_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/hindsight-cutover-test.XXXXXX")"
 /bin/chmod 700 "$tmp_dir"
 trap '/bin/rm -rf -- "$tmp_dir"' EXIT
 
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ${#funcstack} > 1 )); then
+    /bin/rm -rf -- "$tmp_dir"
+  fi
+}
+
 [[ -f "$agents_root/tooling/hindsight/bin/hindsight-memory" ]]
 
 write_fixture() {

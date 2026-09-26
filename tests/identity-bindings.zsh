@@ -12,6 +12,13 @@ fail() {
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/identity-bindings.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
+
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ${#funcstack} > 1 )); then
+    rm -rf -- "$test_dir"
+  fi
+}
 fixture_home=$test_dir/home
 mkdir -p -- "$fixture_home/.config/zsh/zshrc.d"
 fixture_home=${fixture_home:A}
