@@ -2615,6 +2615,11 @@ infer or broaden that authority.
 
 ## Activate the consumers and close the issue
 
+After recovery merges, rebase open PRs whose heads predate the new adapter onto
+the recovered `main` before expecting the privacy-age integrity check to pass.
+The active-boundary check requires the adapter in every head, even for PRs that
+change only unprotected files.
+
 PR [#285](https://github.com/nisavid/dotfiles/pull/285),
 PR [#287](https://github.com/nisavid/dotfiles/pull/287),
 PR [#302](https://github.com/nisavid/dotfiles/pull/302),
