@@ -64,6 +64,20 @@ the pre-bootstrap path.
 
 ### Owner admission receipts
 
+For unattended signing with the dedicated Proton Pass key and for
+post-bootstrap lost-key recovery, follow [Sign age admissions and recover a
+lost signer](secret-injection/PROTON_PASS_AGE_ADMISSION.md). That maintained
+procedure is the only current operating route. The initial bootstrap,
+direct-key commands, and dedicated admission App described below are retained
+only as historical evidence; they cannot authorize current work and must not
+be reinstated.
+
+#### Historical direct-key, bootstrap, and admission App route
+
+Everything under this heading records the completed bootstrap design and its
+retired follow-on route. Do not execute these commands for routine signing,
+lost-key recovery, or a new bootstrap.
+
 After the candidate commit is final, use an operator-owned wrapper copied to a
 location outside both the trusted and candidate checkouts. The wrapper reads the
 receipt creator as a raw blob from the trusted base commit, compares it with the
@@ -517,17 +531,16 @@ immediately before the protection API update; the earlier manifest result is
 not reusable after any state change. A failed or ambiguous restore is an
 incident gate: do not continue with another merge or live apply.
 
-The Actions job name is not a provenance boundary: GitHub keys a required
-check by its job name and the shared Actions app, without binding it to the
-trusted `pull_request_target` workflow. Before ordinary protected merges,
-install a repository-scoped GitHub App dedicated to this admission controller,
-have it publish a stable admission context, and pin that context to the App ID
-in branch protection. Verify the live API preserves every existing check,
-strictness, administrator enforcement, review requirement, and the new
-App-pinned context. Until that App-backed source is installed and verified,
-keep ordinary protected merges owner-controlled and treat the Actions check as
-advisory; do not claim that the bootstrap workflow alone closes the merge
-boundary.
+The retired design treated the Actions job name as insufficient provenance
+because GitHub keys a required check by job name and the shared Actions app,
+without binding it to the trusted `pull_request_target` workflow. It proposed a
+repository-scoped admission GitHub App with an App-pinned context. That App
+route was never the post-bootstrap recovery mechanism and is no longer an
+installation instruction. Current operators must use the maintained Proton
+Pass procedure above and must describe the actual live protection boundary
+without claiming that a missing App technically enforces admission.
+
+#### Current recipient policy
 
 The v1 repository policy authorizes exactly one post-quantum recipient stanza
 per ciphertext. Hosted scanning enforces that public structural invariant;

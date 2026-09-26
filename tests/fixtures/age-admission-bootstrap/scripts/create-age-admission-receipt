@@ -41,8 +41,6 @@ MAX_WORKTREE_BYTES = 16 * 1024 * 1024
 MAX_LAUNCHER_BYTES = 256 * 1024
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 _MACOS_SSH_KEYGEN = Path("/usr/bin/ssh-keygen")
-PREFLIGHT_NOT_REQUIRED = 10
-PREFLIGHT_INDETERMINATE = 11
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -1115,9 +1113,7 @@ def _write_output(path: Path, data: bytes, *, forbidden_roots: tuple[Path, ...])
                 pass
 
 
-def _validated_transition_checkouts(
-    arguments: argparse.Namespace,
-) -> tuple[Path, Path]:
+def create_receipt(arguments: argparse.Namespace) -> None:
     base = _validated_checkout(
         arguments.base_repository,
         arguments.base_commit,
@@ -1135,46 +1131,6 @@ def _validated_transition_checkouts(
             "receipt command must run from the exact trusted base checkout"
         )
     _validate_launcher_source(base, arguments.base_commit)
-    return base, head
-
-
-def preflight(arguments: argparse.Namespace) -> str:
-    """Classify the raw trusted-base transition without provider access."""
-
-    base, head = _validated_transition_checkouts(arguments)
-    trusted_temporary, trusted_tree = _materialize_commit_tree(
-        base,
-        arguments.base_commit,
-    )
-    modules: dict[str, types.ModuleType] = {}
-    sys_path_snapshot = list(sys.path)
-    try:
-        modules = _load_trusted_modules(trusted_tree)
-        try:
-            integrity_module = modules["privacy_age_integrity_gate"]
-        except (KeyError, AttributeError, TypeError) as error:
-            raise ReceiptRequestError("trusted admission modules are unavailable") from error
-        outcome = integrity_module.classify_admission_requirement(
-            base_repository=base,
-            base_commit=arguments.base_commit,
-            head_repository=head,
-            head_commit=arguments.head_commit,
-        )
-        if outcome not in {"required", "not-required", "indeterminate"}:
-            raise ReceiptRequestError("trusted admission preflight is unavailable")
-        return outcome
-    finally:
-        if modules:
-            package_name = next(iter(modules.values())).__name__.split(".", 1)[0]
-            for name in tuple(sys.modules):
-                if name == package_name or name.startswith(f"{package_name}."):
-                    sys.modules.pop(name, None)
-        sys.path[:] = sys_path_snapshot
-        trusted_temporary.cleanup()
-
-
-def create_receipt(arguments: argparse.Namespace) -> None:
-    base, head = _validated_transition_checkouts(arguments)
     forbidden_roots = (base, head)
     try:
         admitter = arguments.trusted_admitter.resolve(strict=True)
@@ -1279,59 +1235,22 @@ def create_receipt(arguments: argparse.Namespace) -> None:
         trusted_temporary.cleanup()
 
 
-def _parser() -> argparse.ArgumentParser:
-    operation_parser = argparse.ArgumentParser(add_help=False)
-    operation_parser.add_argument(
-        "--operation",
-        choices=("create-receipt", "preflight"),
-        default="create-receipt",
-    )
-    selected, _ = operation_parser.parse_known_args()
-
+def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--operation",
-        choices=("create-receipt", "preflight"),
-        default="create-receipt",
-    )
     parser.add_argument("--base-repository", type=Path, required=True)
     parser.add_argument("--base-commit", required=True)
     parser.add_argument("--head-repository", type=Path, required=True)
     parser.add_argument("--head-commit", required=True)
-    if selected.operation == "create-receipt":
-        parser.add_argument("--repository", required=True)
-        parser.add_argument("--identity", type=Path, required=True)
-        parser.add_argument("--signing-key", type=Path, required=True)
-        parser.add_argument("--trusted-admitter", type=Path, required=True)
-        parser.add_argument("--output", type=Path, required=True)
-        parser.add_argument(
-            "--lifetime-seconds",
-            type=int,
-        )
-    return parser
-
-
-def main() -> int:
-    arguments = _parser().parse_args()
-    if arguments.operation == "preflight":
-        try:
-            outcome = preflight(arguments)
-        except (
-            ReceiptRequestError,
-            ValueError,
-            RuntimeError,
-            OSError,
-            OverflowError,
-            AttributeError,
-            TypeError,
-        ):
-            outcome = "indeterminate"
-        print(outcome)
-        if outcome == "required":
-            return 0
-        if outcome == "not-required":
-            return PREFLIGHT_NOT_REQUIRED
-        return PREFLIGHT_INDETERMINATE
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--identity", type=Path, required=True)
+    parser.add_argument("--signing-key", type=Path, required=True)
+    parser.add_argument("--trusted-admitter", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--lifetime-seconds",
+        type=int,
+    )
+    arguments = parser.parse_args()
     try:
         create_receipt(arguments)
     except (

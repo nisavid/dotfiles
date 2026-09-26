@@ -1,0 +1,7 @@
+revision 5c037de7462d9e4a52af4b95b69c37eae7b33343
+100755 blob a16b9da9c51b87556df85a2d6a5165aef16ecfe3	scripts/admit-age-envelopes
+100755 blob ee1eccff9d1747a207c3349ec4306847e3537fa1	scripts/create-age-admission-receipt
+100755 blob 612a2ae9acde883d3f2b5e92ce8cefc4fcf0d1bf	scripts/privacy-scan
+100644 blob 28c87a5c184ab323e813148c168a0022d0642675	scripts/privacy_age_admission.py
+100644 blob b052cbfcff312a37e4ecf38a88f6fac77025cc3e	scripts/privacy_age_envelopes.py
+100755 blob fef9847973839e4dded51275761099a9cf2be728	scripts/run-trusted-age-admission

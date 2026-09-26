@@ -1,0 +1,1172 @@
+#!/usr/bin/env -S python3 -I -B -S
+"""Create an age-admission receipt with one Proton Pass signing-key field."""
+
+from __future__ import annotations
+
+import sys
+
+if not sys.flags.isolated or not sys.flags.dont_write_bytecode or not sys.flags.no_site:
+    print("proton-pass age admission requires isolated Python", file=sys.stderr)
+    raise SystemExit(1)
+
+import argparse
+import base64
+import binascii
+import hashlib
+import hmac
+import os
+import re
+import selectors
+import shutil
+import signal
+import stat
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+from types import FrameType
+
+_FIELD = "SSH.private_key"
+_PROVIDER_TIMEOUT_SECONDS = 30
+_READINESS_TIMEOUT_SECONDS = 45
+_PREFLIGHT_TIMEOUT_SECONDS = 60
+_KEY_VALIDATION_TIMEOUT_SECONDS = 15
+_DEFAULT_RECEIPT_TIMEOUT_SECONDS = 180
+_MAX_RECEIPT_TIMEOUT_SECONDS = 300
+_TERMINATION_GRACE_SECONDS = 1.0
+_MAX_SIGNING_KEY_BYTES = 64 * 1024
+_MAX_PUBLIC_KEY_BYTES = 1024
+_MAX_RECEIPT_BYTES = 256 * 1024
+_MAX_PREFLIGHT_OUTPUT_BYTES = 32
+# Proton IDs are 64-byte URL-safe base64 values; pass-cli's is_id requires 88
+# characters ending in "==". They may begin with "-", so argv attaches them.
+_IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{86}==\Z", re.ASCII)
+_COMMIT = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+_FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}\Z", re.ASCII)
+_BOOTSTRAP_TOKEN_NAME = "PROTON_PASS_PERSONAL_ACCESS_TOKEN"
+_ACTIVE_PROCESS: subprocess.Popen[bytes] | None = None
+_ACTIVE_PROCESS_GROUP: int | None = None
+_PROCESS_STATE = "unowned"
+_ACTIVE_PRIVATE_ROOT: Path | None = None
+_ACTIVE_PRIVATE_ROOT_IDENTITY: tuple[int, int] | None = None
+_PRIVATE_ROOT_STATE = "unowned"
+_FIRST_TERMINATION_SIGNAL: int | None = None
+_TERMINATION_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+
+
+class AdmissionAdapterError(RuntimeError):
+    """The file adapter could not complete without exposing key material."""
+
+
+class AdmissionAdapterInterrupted(BaseException):
+    """A catchable signal interrupted the adapter."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _signal_handler(signum: int, _frame: FrameType | None) -> None:
+    global _FIRST_TERMINATION_SIGNAL
+    if _FIRST_TERMINATION_SIGNAL is not None:
+        return
+    _FIRST_TERMINATION_SIGNAL = signum
+    process_group = _ACTIVE_PROCESS_GROUP
+    if process_group is not None:
+        try:
+            os.killpg(process_group, signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+
+
+def _raise_if_interrupted() -> None:
+    if _FIRST_TERMINATION_SIGNAL is not None:
+        raise AdmissionAdapterInterrupted(_FIRST_TERMINATION_SIGNAL)
+
+
+def _install_signal_handlers() -> None:
+    for signum in _TERMINATION_SIGNALS:
+        signal.signal(signum, _signal_handler)
+
+
+def _require_termination_signals_unblocked() -> None:
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        raise AdmissionAdapterError("safe child execution is unavailable")
+    try:
+        blocked = pthread_sigmask(signal.SIG_BLOCK, set())
+    except OSError as error:
+        raise AdmissionAdapterError("safe child execution is unavailable") from error
+    if any(signum in blocked for signum in _TERMINATION_SIGNALS):
+        raise AdmissionAdapterError("safe child execution is unavailable")
+
+
+def _unblock_termination_signals() -> None:
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        raise AdmissionAdapterError("safe child execution is unavailable")
+    try:
+        pthread_sigmask(signal.SIG_UNBLOCK, _TERMINATION_SIGNALS)
+    except OSError as error:
+        raise AdmissionAdapterError("safe child execution is unavailable") from error
+    _require_termination_signals_unblocked()
+
+
+def _block_termination_signals() -> set[signal.Signals]:
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        raise AdmissionAdapterError("safe receipt finalization is unavailable")
+    try:
+        return pthread_sigmask(signal.SIG_BLOCK, _TERMINATION_SIGNALS)
+    except OSError as error:
+        raise AdmissionAdapterError(
+            "safe receipt finalization is unavailable"
+        ) from error
+
+
+def _restore_signal_mask(mask: set[signal.Signals]) -> None:
+    try:
+        signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+    except OSError as error:
+        raise AdmissionAdapterError(
+            "safe receipt finalization is unavailable"
+        ) from error
+
+
+def _registered_process_group(process: subprocess.Popen[bytes]) -> int:
+    if _ACTIVE_PROCESS is not process or _ACTIVE_PROCESS_GROUP is None:
+        raise AdmissionAdapterError("child process ownership is unavailable")
+    return _ACTIVE_PROCESS_GROUP
+
+
+def _process_group_state(process_group: int) -> str:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return "absent"
+    except OSError:
+        return "unverified"
+    return "present"
+
+
+def _wait_for_known_group_state(
+    process: subprocess.Popen[bytes], *, process_group: int, deadline: float
+) -> str:
+    while True:
+        try:
+            process.poll()
+        except (OSError, subprocess.SubprocessError):
+            return "unverified"
+        group_state = _process_group_state(process_group)
+        if group_state != "unverified":
+            return group_state
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return "unverified"
+        time.sleep(min(0.01, remaining))
+
+
+def _send_group_signal(process_group: int, signum: int) -> bool:
+    try:
+        os.killpg(process_group, signum)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _process_and_group_retired(
+    process: subprocess.Popen[bytes], *, process_group: int, deadline: float
+) -> bool:
+    while True:
+        leader_reaped = process.poll() is not None
+        group_state = _process_group_state(process_group)
+        if leader_reaped and group_state == "absent":
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.01, remaining))
+
+
+def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+    global _PROCESS_STATE
+    if _PROCESS_STATE != "owned":
+        raise AdmissionAdapterError("child process cleanup could not be verified")
+    process_group = _registered_process_group(process)
+    _PROCESS_STATE = "finalizing"
+    try:
+        term_deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+        group_state = _wait_for_known_group_state(
+            process, process_group=process_group, deadline=term_deadline
+        )
+        if group_state == "unverified":
+            raise AdmissionAdapterError(
+                "child process cleanup could not be verified"
+            )
+        if group_state == "present" and not _send_group_signal(
+            process_group, signal.SIGTERM
+        ):
+            raise AdmissionAdapterError(
+                "child process cleanup could not be verified"
+            )
+        if _process_and_group_retired(
+            process,
+            process_group=process_group,
+            deadline=term_deadline,
+        ):
+            _release_process(process)
+            return
+        kill_deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+        group_state = _wait_for_known_group_state(
+            process, process_group=process_group, deadline=kill_deadline
+        )
+        if group_state == "unverified":
+            raise AdmissionAdapterError(
+                "child process cleanup could not be verified"
+            )
+        if group_state == "present" and not _send_group_signal(
+            process_group, signal.SIGKILL
+        ):
+            raise AdmissionAdapterError(
+                "child process cleanup could not be verified"
+            )
+        if not _process_and_group_retired(
+            process,
+            process_group=process_group,
+            deadline=kill_deadline,
+        ):
+            raise AdmissionAdapterError("child process cleanup could not be verified")
+    except (AdmissionAdapterError, OSError):
+        _PROCESS_STATE = "unverified"
+        raise
+    _release_process(process)
+
+
+def _release_process(process: subprocess.Popen[bytes]) -> None:
+    global _ACTIVE_PROCESS, _ACTIVE_PROCESS_GROUP, _PROCESS_STATE
+    if _ACTIVE_PROCESS is not process or _PROCESS_STATE not in {"owned", "finalizing"}:
+        raise AdmissionAdapterError("child process cleanup could not be verified")
+    _ACTIVE_PROCESS = None
+    _ACTIVE_PROCESS_GROUP = None
+    _PROCESS_STATE = "released"
+
+
+def _spawn(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    stdout: int,
+    stderr: int = subprocess.DEVNULL,
+) -> subprocess.Popen[bytes]:
+    global _ACTIVE_PROCESS, _ACTIVE_PROCESS_GROUP, _PROCESS_STATE
+    _raise_if_interrupted()
+    _require_termination_signals_unblocked()
+    if _PROCESS_STATE not in {"unowned", "released"}:
+        raise AdmissionAdapterError("child process ownership is unavailable")
+    _PROCESS_STATE = "acquiring"
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=stderr,
+            env=environment,
+            start_new_session=True,
+        )
+    except OSError as error:
+        _PROCESS_STATE = "unowned"
+        raise AdmissionAdapterError("required command is unavailable") from error
+    _ACTIVE_PROCESS = process
+    _ACTIVE_PROCESS_GROUP = process.pid
+    _PROCESS_STATE = "owned"
+    return process
+
+
+def _retire_process(process: subprocess.Popen[bytes]) -> None:
+    global _PROCESS_STATE
+    try:
+        process_group = _registered_process_group(process)
+    except AdmissionAdapterError:
+        _PROCESS_STATE = "unverified"
+        raise
+    group_state = _wait_for_known_group_state(
+        process,
+        process_group=process_group,
+        deadline=time.monotonic() + _TERMINATION_GRACE_SECONDS,
+    )
+    if group_state == "present":
+        _terminate_process_group(process)
+        raise AdmissionAdapterError("child process did not retire cleanly")
+    if group_state == "unverified":
+        _PROCESS_STATE = "unverified"
+        raise AdmissionAdapterError("child process cleanup could not be verified")
+    try:
+        process.wait()
+    except (OSError, subprocess.SubprocessError) as error:
+        _PROCESS_STATE = "unverified"
+        raise AdmissionAdapterError(
+            "child process cleanup could not be verified"
+        ) from error
+    _release_process(process)
+
+
+def _wait_for_process(
+    process: subprocess.Popen[bytes], *, deadline: float, failure: str
+) -> int:
+    while True:
+        _raise_if_interrupted()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AdmissionAdapterError(failure)
+        try:
+            return process.wait(timeout=min(0.05, remaining))
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _run_quiet(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    timeout: int,
+    failure: str,
+) -> None:
+    process = _spawn(
+        command,
+        environment=environment,
+        stdout=subprocess.DEVNULL,
+    )
+    try:
+        _raise_if_interrupted()
+        status = _wait_for_process(
+            process,
+            deadline=time.monotonic() + timeout,
+            failure=failure,
+        )
+        _raise_if_interrupted()
+        _retire_process(process)
+        if status != 0:
+            raise AdmissionAdapterError(failure)
+    except BaseException:
+        if _ACTIVE_PROCESS is process:
+            if _PROCESS_STATE == "owned":
+                _terminate_process_group(process)
+            elif _PROCESS_STATE != "released":
+                raise AdmissionAdapterError(
+                    "child process cleanup could not be verified"
+                )
+        raise
+
+
+def _write_all(descriptor: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            raise AdmissionAdapterError("private signing-key file could not be written")
+        remaining = remaining[written:]
+
+
+def _open_private_output(path: Path) -> int:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise AdmissionAdapterError("safe private-file creation is unavailable")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | no_follow
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+    except OSError as error:
+        raise AdmissionAdapterError(
+            "private signing-key file could not be created"
+        ) from error
+    try:
+        os.fchmod(descriptor, 0o600)
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+        ):
+            raise AdmissionAdapterError("private signing-key file is not authoritative")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _capture_private_output(
+    command: list[str],
+    path: Path,
+    *,
+    environment: dict[str, str],
+    timeout: int,
+) -> None:
+    descriptor = _open_private_output(path)
+    process: subprocess.Popen[bytes] | None = None
+    selector: selectors.BaseSelector | None = None
+    total = 0
+    try:
+        process = _spawn(
+            command,
+            environment=environment,
+            stdout=subprocess.PIPE,
+        )
+        _raise_if_interrupted()
+        if process.stdout is None:  # pragma: no cover - guaranteed by PIPE
+            raise AdmissionAdapterError("provider output is unavailable")
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        deadline = time.monotonic() + timeout
+        while True:
+            _raise_if_interrupted()
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                raise AdmissionAdapterError("provider retrieval timed out")
+            events = selector.select(min(0.05, remaining_time))
+            if not events:
+                continue
+            try:
+                chunk = os.read(
+                    process.stdout.fileno(),
+                    min(8192, _MAX_SIGNING_KEY_BYTES + 1 - total),
+                )
+            except BlockingIOError:
+                continue
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_SIGNING_KEY_BYTES:
+                raise AdmissionAdapterError(
+                    "provider returned oversized signing-key data"
+                )
+            _write_all(descriptor, chunk)
+        status = _wait_for_process(
+            process,
+            deadline=deadline,
+            failure="provider retrieval timed out",
+        )
+        _raise_if_interrupted()
+        _retire_process(process)
+        if status != 0:
+            raise AdmissionAdapterError("provider retrieval failed")
+        if total == 0:
+            raise AdmissionAdapterError("provider returned empty signing-key data")
+        os.fsync(descriptor)
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_size != total
+        ):
+            raise AdmissionAdapterError("private signing-key file is not authoritative")
+    except BaseException:
+        if process is not None and _ACTIVE_PROCESS is process:
+            if _PROCESS_STATE == "owned":
+                _terminate_process_group(process)
+            elif _PROCESS_STATE != "released":
+                raise AdmissionAdapterError(
+                    "child process cleanup could not be verified"
+                )
+        raise
+    finally:
+        if selector is not None:
+            selector.close()
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
+        os.close(descriptor)
+
+
+def _capture_bounded_result(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    timeout: int,
+    maximum: int,
+    failure: str,
+) -> tuple[int, bytes, bytes]:
+    process: subprocess.Popen[bytes] | None = None
+    selector: selectors.BaseSelector | None = None
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    totals = {"stdout": 0, "stderr": 0}
+    try:
+        process = _spawn(
+            command,
+            environment=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        _raise_if_interrupted()
+        if process.stdout is None or process.stderr is None:  # pragma: no cover
+            raise AdmissionAdapterError(failure)
+        selector = selectors.DefaultSelector()
+        selector.register(
+            process.stdout,
+            selectors.EVENT_READ,
+            ("stdout", stdout_chunks),
+        )
+        selector.register(
+            process.stderr,
+            selectors.EVENT_READ,
+            ("stderr", stderr_chunks),
+        )
+        deadline = time.monotonic() + timeout
+        while selector.get_map():
+            _raise_if_interrupted()
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                raise AdmissionAdapterError(failure)
+            events = selector.select(min(0.05, remaining_time))
+            if not events:
+                continue
+            for key, _mask in events:
+                channel, chunks = key.data
+                chunk = os.read(
+                    key.fileobj.fileno(),
+                    min(8192, maximum + 1 - totals[channel]),
+                )
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                totals[channel] += len(chunk)
+                if totals[channel] > maximum:
+                    raise AdmissionAdapterError(failure)
+                chunks.append(chunk)
+        status = _wait_for_process(process, deadline=deadline, failure=failure)
+        _raise_if_interrupted()
+        _retire_process(process)
+        return status, b"".join(stdout_chunks), b"".join(stderr_chunks)
+    except BaseException:
+        if process is not None and _ACTIVE_PROCESS is process:
+            if _PROCESS_STATE == "owned":
+                _terminate_process_group(process)
+            elif _PROCESS_STATE != "released":
+                raise AdmissionAdapterError(
+                    "child process cleanup could not be verified"
+                )
+        raise
+    finally:
+        if selector is not None:
+            selector.close()
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
+        if process is not None and process.stderr is not None:
+            process.stderr.close()
+
+
+def _capture_bounded_output(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    timeout: int,
+    maximum: int,
+    failure: str,
+) -> bytes:
+    status, output, _diagnostic = _capture_bounded_result(
+        command,
+        environment=environment,
+        timeout=timeout,
+        maximum=maximum,
+        failure=failure,
+    )
+    if status != 0:
+        raise AdmissionAdapterError(failure)
+    return output
+
+
+def _base_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop(_BOOTSTRAP_TOKEN_NAME, None)
+    environment.pop("PROTON_PASS_AGENT_REASON", None)
+    environment["LC_ALL"] = "C"
+    return environment
+
+
+def _provider_environment() -> dict[str, str]:
+    environment = _base_environment()
+    if sys.platform.startswith("linux"):
+        environment["PROTON_PASS_LINUX_KEYRING"] = "dbus"
+    elif sys.platform == "darwin":
+        environment.pop("PROTON_PASS_LINUX_KEYRING", None)
+    else:
+        raise AdmissionAdapterError("only macOS and Linux are supported")
+    environment["PROTON_PASS_NO_UPDATE_CHECK"] = "1"
+    return environment
+
+
+def _validated_readiness_command() -> Path:
+    script_directory = Path(__file__).resolve().parent
+    for name in ("proton-pass-ensure-ready", "executable_proton-pass-ensure-ready"):
+        candidate = script_directory / name
+        try:
+            info = candidate.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        if (
+            stat.S_ISREG(info.st_mode)
+            and info.st_uid in {0, os.geteuid()}
+            and info.st_mode & 0o111
+            and not info.st_mode & 0o022
+        ):
+            return candidate
+    raise AdmissionAdapterError("proton-pass-ensure-ready is required")
+
+
+def _public_key_fingerprint(public_key: bytes) -> str:
+    if len(public_key) > _MAX_PUBLIC_KEY_BYTES:
+        raise AdmissionAdapterError("signing key is not an SSH Ed25519 key")
+    line = public_key.rstrip(b"\n")
+    if not line or b"\n" in line or b"\r" in line:
+        raise AdmissionAdapterError("signing key is not an SSH Ed25519 key")
+    fields = line.split(maxsplit=2)
+    if len(fields) < 2 or fields[0] != b"ssh-ed25519":
+        raise AdmissionAdapterError("signing key is not an SSH Ed25519 key")
+    try:
+        blob = base64.b64decode(fields[1], validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise AdmissionAdapterError("signing key is not an SSH Ed25519 key") from error
+    if len(blob) != 51:
+        raise AdmissionAdapterError("signing key is not an SSH Ed25519 key")
+    key_type_length = int.from_bytes(blob[:4], "big")
+    key_type_end = 4 + key_type_length
+    if blob[4:key_type_end] != b"ssh-ed25519" or key_type_end + 4 > len(blob):
+        raise AdmissionAdapterError("signing key is not an SSH Ed25519 key")
+    key_length = int.from_bytes(blob[key_type_end : key_type_end + 4], "big")
+    if key_length != 32 or key_type_end + 4 + key_length != len(blob):
+        raise AdmissionAdapterError("signing key is not an SSH Ed25519 key")
+    digest = base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii").rstrip("=")
+    return f"SHA256:{digest}"
+
+
+def _derive_public_key(signing_key: Path, *, environment: dict[str, str]) -> bytes:
+    raw_tool = (
+        "/usr/bin/ssh-keygen"
+        if sys.platform == "darwin"
+        else shutil.which("ssh-keygen")
+    )
+    if raw_tool is None:
+        raise AdmissionAdapterError("ssh-keygen is required")
+    tool = Path(raw_tool).resolve(strict=True)
+    validation_environment = environment.copy()
+    validation_environment.update(
+        {
+            "DISPLAY": "",
+            "SSH_ASKPASS": os.devnull,
+            "SSH_ASKPASS_REQUIRE": "never",
+        }
+    )
+    public_key = _capture_bounded_output(
+        [
+            os.fspath(tool),
+            "-y",
+            "-P",
+            "",
+            "-f",
+            os.fspath(signing_key),
+        ],
+        environment=validation_environment,
+        timeout=_KEY_VALIDATION_TIMEOUT_SECONDS,
+        maximum=_MAX_PUBLIC_KEY_BYTES,
+        failure="signing key validation failed",
+    )
+    if not public_key:
+        raise AdmissionAdapterError(
+            "signing key is malformed, encrypted, or unavailable"
+        )
+    return public_key
+
+
+def _validated_directory(raw: Path, *, label: str) -> Path:
+    try:
+        path = raw.resolve(strict=True)
+    except OSError as error:
+        raise AdmissionAdapterError(f"{label} is unavailable") from error
+    if not path.is_dir():
+        raise AdmissionAdapterError(f"{label} is unavailable")
+    return path
+
+
+def _validate_arguments(arguments: argparse.Namespace) -> tuple[Path, Path]:
+    if _IDENTIFIER.fullmatch(arguments.share_id) is None:
+        raise AdmissionAdapterError("share ID is invalid")
+    if _IDENTIFIER.fullmatch(arguments.item_id) is None:
+        raise AdmissionAdapterError("item ID is invalid")
+    if _FINGERPRINT.fullmatch(arguments.expected_fingerprint) is None:
+        raise AdmissionAdapterError("expected signing-key fingerprint is invalid")
+    if _COMMIT.fullmatch(arguments.base_commit) is None:
+        raise AdmissionAdapterError("trusted base commit is invalid")
+    if _COMMIT.fullmatch(arguments.head_commit) is None:
+        raise AdmissionAdapterError("candidate commit is invalid")
+    if not 1 <= arguments.receipt_timeout_seconds <= _MAX_RECEIPT_TIMEOUT_SECONDS:
+        raise AdmissionAdapterError("receipt timeout is invalid")
+    base = _validated_directory(
+        arguments.base_repository, label="trusted base checkout"
+    )
+    head = _validated_directory(arguments.head_repository, label="candidate checkout")
+    output = Path(os.path.abspath(arguments.output))
+    if output.exists() or output.is_symlink():
+        raise AdmissionAdapterError("receipt output already exists")
+    try:
+        output_parent = output.parent.resolve(strict=True)
+    except OSError as error:
+        raise AdmissionAdapterError(
+            "receipt output directory is unavailable"
+        ) from error
+    if any(
+        _within(output, root) or _within(output_parent, root) for root in (base, head)
+    ):
+        raise AdmissionAdapterError("receipt output must be outside the checkouts")
+    return base, head
+
+
+def _wrapper_command(
+    arguments: argparse.Namespace,
+    signing_key: Path,
+    output: Path,
+) -> list[str]:
+    command = [
+        sys.executable,
+        "-I",
+        "-B",
+        "-S",
+        os.fspath(arguments.trusted_launcher),
+        "--base-repository",
+        os.fspath(arguments.base_repository),
+        "--base-commit",
+        arguments.base_commit,
+        "--",
+        "--base-repository",
+        os.fspath(arguments.base_repository),
+        "--base-commit",
+        arguments.base_commit,
+        "--head-repository",
+        os.fspath(arguments.head_repository),
+        "--head-commit",
+        arguments.head_commit,
+        "--repository",
+        arguments.repository,
+        "--identity",
+        os.fspath(arguments.identity),
+        "--signing-key",
+        os.fspath(signing_key),
+        "--trusted-admitter",
+        os.fspath(arguments.trusted_admitter),
+        "--output",
+        os.fspath(output),
+    ]
+    if arguments.lifetime_seconds is not None:
+        command.extend(("--lifetime-seconds", str(arguments.lifetime_seconds)))
+    return command
+
+
+def _preflight_command(arguments: argparse.Namespace) -> list[str]:
+    return [
+        sys.executable,
+        "-I",
+        "-B",
+        "-S",
+        os.fspath(arguments.trusted_launcher),
+        "--base-repository",
+        os.fspath(arguments.base_repository),
+        "--base-commit",
+        arguments.base_commit,
+        "--",
+        "--operation",
+        "preflight",
+        "--base-repository",
+        os.fspath(arguments.base_repository),
+        "--base-commit",
+        arguments.base_commit,
+        "--head-repository",
+        os.fspath(arguments.head_repository),
+        "--head-commit",
+        arguments.head_commit,
+    ]
+
+
+def _require_admission_preflight(
+    arguments: argparse.Namespace, *, environment: dict[str, str]
+) -> None:
+    status, output, diagnostic = _capture_bounded_result(
+        _preflight_command(arguments),
+        environment=environment,
+        timeout=_PREFLIGHT_TIMEOUT_SECONDS,
+        maximum=_MAX_PREFLIGHT_OUTPUT_BYTES,
+        failure="trusted admission preflight failed",
+    )
+    if (status, output, diagnostic) == (0, b"required\n", b""):
+        return
+    if (status, output, diagnostic) == (10, b"not-required\n", b""):
+        raise AdmissionAdapterError("candidate does not require age admission")
+    raise AdmissionAdapterError("trusted admission preflight is indeterminate")
+
+
+def _remove_owned_output(path: Path, expected: os.stat_result) -> None:
+    lexical = Path(os.path.abspath(path))
+    try:
+        info = lexical.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise AdmissionAdapterError(
+            "failed receipt output could not be inspected"
+        ) from error
+    if (info.st_dev, info.st_ino) != (expected.st_dev, expected.st_ino):
+        return
+    try:
+        lexical.unlink()
+    except OSError as error:
+        raise AdmissionAdapterError(
+            "failed receipt output could not be removed"
+        ) from error
+
+
+def _read_receipt_output(path: Path) -> bytes:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    no_block = getattr(os, "O_NONBLOCK", None)
+    if no_follow is None or no_block is None:
+        raise AdmissionAdapterError("safe receipt validation is unavailable")
+    try:
+        descriptor = os.open(
+            Path(os.path.abspath(path)),
+            os.O_RDONLY | no_follow | no_block | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as error:
+        raise AdmissionAdapterError("trusted receipt output is unavailable") from error
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_nlink != 1
+            or not 0 < info.st_size <= _MAX_RECEIPT_BYTES
+        ):
+            raise AdmissionAdapterError("trusted receipt output is not authoritative")
+        chunks: list[bytes] = []
+        remaining = _MAX_RECEIPT_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        receipt = b"".join(chunks)
+        final_info = os.fstat(descriptor)
+        if len(receipt) != info.st_size or (
+            final_info.st_dev,
+            final_info.st_ino,
+            final_info.st_size,
+        ) != (info.st_dev, info.st_ino, info.st_size):
+            raise AdmissionAdapterError("trusted receipt output is not authoritative")
+        return receipt
+    except OSError as error:
+        raise AdmissionAdapterError("trusted receipt output is unavailable") from error
+    finally:
+        os.close(descriptor)
+
+
+def _cleanup_private_tree(private_root: Path) -> None:
+    global _ACTIVE_PRIVATE_ROOT, _ACTIVE_PRIVATE_ROOT_IDENTITY, _PRIVATE_ROOT_STATE
+    identity = _ACTIVE_PRIVATE_ROOT_IDENTITY
+    if _ACTIVE_PRIVATE_ROOT != private_root or identity is None:
+        raise AdmissionAdapterError(
+            "private temporary directory ownership is unavailable"
+        )
+    if _PRIVATE_ROOT_STATE != "owned":
+        raise AdmissionAdapterError("private temporary directory cleanup is unverified")
+    _PRIVATE_ROOT_STATE = "finalizing"
+    cleanup_error: OSError | None = None
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    while True:
+        try:
+            info = private_root.lstat()
+        except FileNotFoundError:
+            _ACTIVE_PRIVATE_ROOT = None
+            _ACTIVE_PRIVATE_ROOT_IDENTITY = None
+            _PRIVATE_ROOT_STATE = "released"
+            return
+        except OSError as error:
+            cleanup_error = error
+        else:
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or stat.S_ISLNK(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o700
+                or (info.st_dev, info.st_ino) != identity
+            ):
+                _PRIVATE_ROOT_STATE = "unverified"
+                raise AdmissionAdapterError(
+                    "private temporary directory cleanup is unverified"
+                )
+            try:
+                shutil.rmtree(private_root)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                cleanup_error = error
+        try:
+            private_root.lstat()
+        except FileNotFoundError:
+            _ACTIVE_PRIVATE_ROOT = None
+            _ACTIVE_PRIVATE_ROOT_IDENTITY = None
+            _PRIVATE_ROOT_STATE = "released"
+            return
+        except OSError as error:
+            cleanup_error = error
+        if time.monotonic() >= deadline:
+            _PRIVATE_ROOT_STATE = "unverified"
+            raise AdmissionAdapterError(
+                "private temporary directory could not be removed"
+            ) from cleanup_error
+        time.sleep(0.01)
+
+
+def _cleanup_after_failure() -> bool:
+    private_root = _ACTIVE_PRIVATE_ROOT
+    if private_root is None:
+        return _PRIVATE_ROOT_STATE in {"unowned", "released"}
+    if _PRIVATE_ROOT_STATE != "owned":
+        return False
+    try:
+        _cleanup_private_tree(private_root)
+    except (AdmissionAdapterError, OSError):
+        return False
+    return True
+
+
+def _publish_receipt_output(path: Path, receipt: bytes) -> None:
+    _raise_if_interrupted()
+    previous_mask = _block_termination_signals()
+    lexical = Path(os.path.abspath(path))
+    descriptor: int | None = None
+    created_info: os.stat_result | None = None
+    try:
+        _raise_if_interrupted()
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        if no_follow is None:
+            raise AdmissionAdapterError("safe receipt installation is unavailable")
+        descriptor = os.open(
+            lexical,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | no_follow
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        os.fchmod(descriptor, 0o600)
+        created_info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(created_info.st_mode)
+            or created_info.st_uid != os.geteuid()
+            or stat.S_IMODE(created_info.st_mode) != 0o600
+            or created_info.st_nlink != 1
+        ):
+            raise AdmissionAdapterError("receipt output could not be installed")
+        _write_all(descriptor, receipt)
+        os.fsync(descriptor)
+        final_info = os.fstat(descriptor)
+        if final_info.st_size != len(receipt) or (
+            final_info.st_dev,
+            final_info.st_ino,
+        ) != (created_info.st_dev, created_info.st_ino):
+            raise AdmissionAdapterError("receipt output could not be installed")
+        os.close(descriptor)
+        descriptor = None
+    except BaseException:
+        if descriptor is not None:
+            if created_info is None:
+                try:
+                    created_info = os.fstat(descriptor)
+                except OSError:
+                    pass
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        removal_error: AdmissionAdapterError | OSError | None = None
+        if created_info is not None:
+            try:
+                _remove_owned_output(lexical, created_info)
+            except (AdmissionAdapterError, OSError) as error:
+                removal_error = error
+        try:
+            _restore_signal_mask(previous_mask)
+        except (AdmissionAdapterError, OSError) as error:
+            if removal_error is None:
+                removal_error = error
+        if removal_error is not None:
+            raise removal_error
+        raise
+    # Receipt publication is the commit point. Catchable termination signals
+    # remain blocked for the few instructions until this process exits zero;
+    # every earlier signal is delivered before publication when private-tree
+    # cleanup restores its mask.
+
+
+def create_receipt(arguments: argparse.Namespace) -> None:
+    global _ACTIVE_PRIVATE_ROOT, _ACTIVE_PRIVATE_ROOT_IDENTITY, _PRIVATE_ROOT_STATE
+    base, head = _validate_arguments(arguments)
+    provider_environment = _provider_environment()
+    readiness = _validated_readiness_command()
+    _raise_if_interrupted()
+    _PRIVATE_ROOT_STATE = "acquiring"
+    try:
+        name = tempfile.mkdtemp(prefix="proton-pass-age-admission.")
+    except OSError:
+        _PRIVATE_ROOT_STATE = "unowned"
+        raise
+    _ACTIVE_PRIVATE_ROOT = Path(name)
+    try:
+        private_root = _ACTIVE_PRIVATE_ROOT.resolve(strict=True)
+        root_info = private_root.stat(follow_symlinks=False)
+    except OSError:
+        _PRIVATE_ROOT_STATE = "unverified"
+        raise
+    receipt: bytes | None = None
+    _ACTIVE_PRIVATE_ROOT = private_root
+    _ACTIVE_PRIVATE_ROOT_IDENTITY = (root_info.st_dev, root_info.st_ino)
+    _PRIVATE_ROOT_STATE = "owned"
+    if (
+        not stat.S_ISDIR(root_info.st_mode)
+        or stat.S_ISLNK(root_info.st_mode)
+        or root_info.st_uid != os.geteuid()
+        or stat.S_IMODE(root_info.st_mode) != 0o700
+        or any(_within(private_root, root) for root in (base, head))
+    ):
+        raise AdmissionAdapterError("private temporary directory is not authoritative")
+    _raise_if_interrupted()
+    try:
+        launcher_environment = _base_environment()
+        launcher_environment.update(
+            {
+                "TMPDIR": os.fspath(private_root),
+                "TMP": os.fspath(private_root),
+                "TEMP": os.fspath(private_root),
+            }
+        )
+        _require_admission_preflight(arguments, environment=launcher_environment)
+        _run_quiet(
+            [os.fspath(readiness)],
+            environment=provider_environment,
+            timeout=_READINESS_TIMEOUT_SECONDS,
+            failure="provider readiness failed",
+        )
+        signing_key = private_root / "signing-key"
+        retrieval_environment = provider_environment.copy()
+        retrieval_environment["PROTON_PASS_AGENT_REASON"] = (
+            "age-admission signing-key retrieval"
+        )
+        _capture_private_output(
+            [
+                "pass-cli",
+                "item",
+                "view",
+                f"--share-id={arguments.share_id}",
+                f"--item-id={arguments.item_id}",
+                "--field",
+                _FIELD,
+                "--output",
+                "human",
+            ],
+            signing_key,
+            environment=retrieval_environment,
+            timeout=_PROVIDER_TIMEOUT_SECONDS,
+        )
+        public_key = _derive_public_key(signing_key, environment=provider_environment)
+        actual_fingerprint = _public_key_fingerprint(public_key)
+        if not hmac.compare_digest(actual_fingerprint, arguments.expected_fingerprint):
+            raise AdmissionAdapterError("signing-key fingerprint does not match")
+        staged_receipt = private_root / "receipt"
+        _run_quiet(
+            _wrapper_command(arguments, signing_key, staged_receipt),
+            environment=launcher_environment,
+            timeout=arguments.receipt_timeout_seconds,
+            failure="trusted receipt creation failed",
+        )
+        receipt = _read_receipt_output(staged_receipt)
+    finally:
+        _cleanup_private_tree(private_root)
+    _raise_if_interrupted()
+    if receipt is None:  # pragma: no cover - successful flow always assigns it
+        raise AdmissionAdapterError("trusted receipt output is unavailable")
+    _publish_receipt_output(arguments.output, receipt)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--share-id", required=True)
+    parser.add_argument("--item-id", required=True)
+    parser.add_argument("--expected-fingerprint", required=True)
+    parser.add_argument("--trusted-launcher", type=Path, required=True)
+    parser.add_argument("--base-repository", type=Path, required=True)
+    parser.add_argument("--base-commit", required=True)
+    parser.add_argument("--head-repository", type=Path, required=True)
+    parser.add_argument("--head-commit", required=True)
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--identity", type=Path, required=True)
+    parser.add_argument("--trusted-admitter", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--lifetime-seconds", type=int)
+    parser.add_argument(
+        "--receipt-timeout-seconds",
+        type=int,
+        default=_DEFAULT_RECEIPT_TIMEOUT_SECONDS,
+    )
+    return parser
+
+
+def main() -> int:
+    _install_signal_handlers()
+    try:
+        _unblock_termination_signals()
+        create_receipt(_parser().parse_args())
+    except AdmissionAdapterInterrupted as error:
+        finalization_verified = True
+        process = _ACTIVE_PROCESS
+        if process is not None:
+            try:
+                _terminate_process_group(process)
+            except (AdmissionAdapterError, OSError):
+                finalization_verified = False
+        if not _cleanup_after_failure():
+            finalization_verified = False
+        if not finalization_verified:
+            print("proton-pass age admission failed", file=sys.stderr)
+            return 1
+        print("proton-pass age admission interrupted", file=sys.stderr)
+        return 128 + error.signum
+    except (AdmissionAdapterError, OSError, ValueError, TypeError):
+        process = _ACTIVE_PROCESS
+        if process is not None:
+            try:
+                _terminate_process_group(process)
+            except (AdmissionAdapterError, OSError):
+                pass
+        _cleanup_after_failure()
+        print("proton-pass age admission failed", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

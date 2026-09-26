@@ -182,6 +182,12 @@ cleanup_outside_canary=$cleanup_outside_root/canary
 cleanup_recheck_error=$test_dir/cleanup-recheck.err
 mkdir -p -- "$cleanup_registered_root" "$cleanup_outside_root"
 : > "$cleanup_outside_canary"
+if TMPDIR=$cleanup_temp_root /bin/zsh -f -c '
+  source "$1"
+  test_process_fixture_init "$2"
+' -- "$process_fixture_helper" "$cleanup_outside_root"; then
+  fail 'the process-fixture helper must reject recursive cleanup outside the temporary root'
+fi
 set +e
 TMPDIR=$cleanup_temp_root /bin/zsh -f -c '
   source "$1"

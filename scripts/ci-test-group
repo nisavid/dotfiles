@@ -26,6 +26,10 @@ groups=(shell-bindings proton-pass discover python-checks zsh-deployment)
 
 group_shell_bindings() {
   zsh -f tests/ci-test-group.zsh
+  # Deployment fixtures assert modes created with these public defaults.
+  umask 022
+  # A runner's checkout umask can leave this reviewed source group-writable.
+  chmod 0755 scripts/provision-age-admission-signer
   bash -n \
     home/run_after_restore-acl.sh \
     home/run_before_save-acl.sh \
@@ -97,6 +101,17 @@ group_python_checks() {
   REQUIRE_AGE_TOOLING=1 \
     python3 -m unittest tests/test_agent_equipment_public_data.py
   python3 -m unittest tests/test_privacy_age_integrity_gate.py
+  python3 -m unittest tests/test_proton_pass_age_admission.py
+  AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
+  AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
+  REQUIRE_AGE_TOOLING=1 \
+    python3 -B -m unittest -v tests.test_age_admission_provider_fixture
+  AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
+  AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
+  REQUIRE_AGE_TOOLING=1 \
+    python3 -B -m unittest -v tests.test_age_admission_provisioning
+  python3 -B -m unittest -v tests.test_age_admission_recovery_preimage
+  python3 -B -m unittest -v tests.test_age_admission_procedure
   REQUIRE_AGE_TOOLING=1 \
     python3 -m unittest tests/test_privacy_age_admission.py
   REQUIRE_AGE_TOOLING=1 \

@@ -24,7 +24,7 @@ jobs:
   verify:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +50,11 @@ jobs:
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         shell: bash
+        # Reuse runner tooling without upgrading unrelated installed packages.
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_UPGRADE: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: |
           set -euo pipefail
           brew install bat flock jq ripgrep
@@ -83,6 +88,10 @@ jobs:
             --output "$age_package" \
             "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/$age_archive"
           printf '%s  %s\n' "$age_digest" "$age_package" | shasum -a 256 --check
+          {
+            printf 'AGE_TOOLING_ARCHIVE=%s\n' "$age_package"
+            printf 'AGE_TOOLING_ARCHIVE_SHA256=%s\n' "$age_digest"
+          } >>"$GITHUB_ENV"
           tar -xzf "$age_package" -C "$RUNNER_TEMP"
           install -m 0755 \
             "$RUNNER_TEMP/age/age" \
@@ -110,13 +119,18 @@ jobs:
           mkdir -p "$RUNNER_TEMP/chezmoi-bin"
           tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
           age_archive=age-v${AGE_VERSION}-linux-amd64.tar.gz
+          age_digest=bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377
           age_package="$RUNNER_TEMP/$age_archive"
           curl --fail --location --silent --show-error \
             --output "$age_package" \
             "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/$age_archive"
           printf '%s  %s\n' \
-            bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377 \
+            "$age_digest" \
             "$age_package" | sha256sum --check
+          {
+            printf 'AGE_TOOLING_ARCHIVE=%s\n' "$age_package"
+            printf 'AGE_TOOLING_ARCHIVE_SHA256=%s\n' "$age_digest"
+          } >>"$GITHUB_ENV"
           tar -xzf "$age_package" -C "$RUNNER_TEMP"
           install -m 0755 \
             "$RUNNER_TEMP/age/age" \
@@ -170,6 +184,10 @@ jobs:
           AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin
         run: |
           set -euo pipefail
+          # Deployment fixtures assert modes created with these public defaults.
+          umask 022
+          # A runner's checkout umask can leave this reviewed source group-writable.
+          chmod 0755 scripts/provision-age-admission-signer
           zsh -f tests/claude-skill-sync.zsh
           zsh -f tests/platform-portability.zsh
           zsh -f tests/container-runtime-bindings.zsh
@@ -208,6 +226,17 @@ jobs:
           REQUIRE_AGE_TOOLING=1 \
             python3 -m unittest tests/test_agent_equipment_public_data.py
           python3 -m unittest tests/test_privacy_age_integrity_gate.py
+          python3 -m unittest tests/test_proton_pass_age_admission.py
+          AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
+          AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
+          REQUIRE_AGE_TOOLING=1 \
+            python3 -B -m unittest -v tests.test_age_admission_provider_fixture
+          AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
+          AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
+          REQUIRE_AGE_TOOLING=1 \
+            python3 -B -m unittest -v tests.test_age_admission_provisioning
+          python3 -B -m unittest -v tests.test_age_admission_recovery_preimage
+          python3 -B -m unittest -v tests.test_age_admission_procedure
           REQUIRE_AGE_TOOLING=1 \
             python3 -m unittest tests/test_privacy_age_admission.py
           REQUIRE_AGE_TOOLING=1 \

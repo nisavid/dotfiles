@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -38,6 +39,9 @@ ROOT = Path(__file__).resolve().parents[1]
 ADMITTER = ROOT / "scripts/admit-age-envelopes"
 TRUSTED_LAUNCHER = ROOT / "scripts/run-trusted-age-admission"
 RECEIPT_CREATOR = ROOT / "scripts/create-age-admission-receipt"
+PROTON_PASS_ADAPTER = (
+    ROOT / "home/private_dot_local/bin/executable_proton-pass-age-admission"
+)
 
 
 def _run(*command: str, cwd: Path, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -122,7 +126,7 @@ class PrivacyAgeAdmissionCreatorTests(unittest.TestCase):
         raw_tool = shutil.which("ssh-keygen")
         self.assertIsNotNone(raw_tool)
         canonical_tool = Path(raw_tool).resolve(strict=True)
-        with TemporaryDirectory(dir=ROOT.parent) as temporary:
+        with TemporaryDirectory(dir=Path.home()) as temporary:
             symlink = Path(temporary) / "ssh-keygen"
             symlink.symlink_to(canonical_tool)
 
@@ -149,7 +153,7 @@ class PrivacyAgeAdmissionCreatorTests(unittest.TestCase):
     def test_verifier_rejects_a_symlink_to_a_writable_target_parent(self) -> None:
         raw_tool = shutil.which("ssh-keygen")
         self.assertIsNotNone(raw_tool)
-        with TemporaryDirectory(dir=ROOT.parent) as temporary:
+        with TemporaryDirectory(dir=Path.home()) as temporary:
             root = Path(temporary)
             writable_target_parent = root / "writable-tools"
             writable_target_parent.mkdir(mode=0o775)
@@ -580,6 +584,9 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 ".privacy-age-envelopes.json": b"",
                 "docs/ENCRYPTION.md": b"encryption\n",
                 "home/.chezmoi.toml.tmpl": b"recipient\n",
+                "home/private_dot_local/bin/executable_proton-pass-age-admission": (
+                    PROTON_PASS_ADAPTER.read_bytes()
+                ),
                 "home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py": b"secrets\n",
                 "home/private.age": ciphertext,
                 "scripts/admit-age-envelopes": b"admit\n",
@@ -602,6 +609,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             (base / "AGENTS.md").write_text("trusted fixture guidance\n", encoding="ascii")
             (base / "CLAUDE.md").symlink_to("AGENTS.md")
             shutil.copy2(ADMITTER, base / "scripts/admit-age-envelopes")
+            shutil.copy2(TRUSTED_LAUNCHER, base / "scripts/run-trusted-age-admission")
             for script_name in (
                 "create-age-admission-receipt",
                 "privacy-scan",
@@ -752,6 +760,165 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 head_repository=head,
                 head_commit=head_commit,
                 admission_body=receipt,
+                allowed_signers=base / ".github/age-admission/allowed_signers",
+                repository="nisavid/dotfiles",
+            )
+
+            adapter_tools = root / "adapter-tools"
+            adapter_tools.mkdir(mode=0o700)
+            adapter = adapter_tools / "proton-pass-age-admission"
+            shutil.copy2(PROTON_PASS_ADAPTER, adapter)
+            adapter.chmod(0o755)
+            readiness = adapter_tools / "proton-pass-ensure-ready"
+            readiness.write_text(
+                "#!/bin/sh\n"
+                "[ -z \"${PROTON_PASS_PERSONAL_ACCESS_TOKEN+x}\" ] || exit 91\n"
+                "exit 0\n",
+                encoding="ascii",
+            )
+            readiness.chmod(0o700)
+            # Proton IDs are 88-character URL-safe base64 and may lead with "-".
+            share_id = base64.urlsafe_b64encode(
+                bytes([0xF8]) + hashlib.sha512(b"fixture share").digest()[1:]
+            ).decode("ascii")
+            item_id = base64.urlsafe_b64encode(
+                bytes([0xFC]) + hashlib.sha512(b"fixture item").digest()[1:]
+            ).decode("ascii")
+            provider_options = {
+                "--field": "SSH.private_key",
+                "--item-id": item_id,
+                "--output": "human",
+                "--share-id": share_id,
+            }
+            provider = adapter_tools / "pass-cli"
+            provider.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "import sys\n"
+                f"expected = {provider_options!r}\n"
+                f"key = open({os.fspath(signing_key)!r}, 'rb').read()\n"
+                "arguments = sys.argv[1:]\n"
+                "if arguments[:2] != ['item', 'view']:\n"
+                "    raise SystemExit(92)\n"
+                "options = {}\n"
+                "index = 2\n"
+                "while index < len(arguments):\n"
+                "    name, attached, value = arguments[index].partition('=')\n"
+                "    index += 1\n"
+                "    if name not in expected or name in options:\n"
+                "        raise SystemExit(2)\n"
+                "    if not attached:\n"
+                "        # clap reads a separate '-...' token as a flag.\n"
+                "        if index == len(arguments) or arguments[index].startswith('-'):\n"
+                "            raise SystemExit(2)\n"
+                "        value = arguments[index]\n"
+                "        index += 1\n"
+                "    options[name] = value\n"
+                "for name in ('--item-id', '--share-id'):\n"
+                "    value = options.get(name, '')\n"
+                "    if len(value) != 88 or not value.endswith('=='):\n"
+                "        raise SystemExit(1)\n"
+                "if options != expected:\n"
+                "    raise SystemExit(92)\n"
+                "if 'PROTON_PASS_PERSONAL_ACCESS_TOKEN' in os.environ:\n"
+                "    raise SystemExit(93)\n"
+                "if os.environ.get('PROTON_PASS_AGENT_REASON') != "
+                "'age-admission signing-key retrieval':\n"
+                "    raise SystemExit(94)\n"
+                "if os.environ.get('PROTON_PASS_NO_UPDATE_CHECK') != '1':\n"
+                "    raise SystemExit(95)\n"
+                "if sys.platform.startswith('linux') and "
+                "os.environ.get('PROTON_PASS_LINUX_KEYRING') != 'dbus':\n"
+                "    raise SystemExit(96)\n"
+                "visible = [value.encode('utf-8', 'surrogateescape') "
+                "for value in [*sys.argv, *os.environ.values()]]\n"
+                "if any(key in value for value in visible):\n"
+                "    raise SystemExit(97)\n"
+                "sys.stdout.buffer.write(key)\n",
+                encoding="ascii",
+            )
+            provider.chmod(0o700)
+            trusted_launcher = root / "trusted-run-trusted-age-admission"
+            shutil.copy2(TRUSTED_LAUNCHER, trusted_launcher)
+            trusted_launcher.chmod(0o755)
+            fingerprint = _run(
+                "ssh-keygen",
+                "-lf",
+                os.fspath(signing_key) + ".pub",
+                "-E",
+                "sha256",
+                cwd=root,
+                capture_output=True,
+            ).stdout.decode("ascii").split()[1]
+            adapter_temp = root / "adapter-temp"
+            adapter_temp.mkdir(mode=0o700)
+            provider_receipt = root / "provider-receipt.txt"
+            adapter_environment = environment.copy()
+            adapter_environment.update(
+                {
+                    "PATH": os.pathsep.join(
+                        (os.fspath(adapter_tools), adapter_environment.get("PATH", ""))
+                    ),
+                    "TMPDIR": os.fspath(adapter_temp),
+                }
+            )
+            bootstrap_field = "PROTON_PASS_PERSONAL_ACCESS"
+            bootstrap_field += "_TOKEN"
+            adapter_environment[bootstrap_field] = "fixture"
+            adapter_result = subprocess.run(
+                [
+                    os.fspath(adapter),
+                    f"--share-id={share_id}",
+                    f"--item-id={item_id}",
+                    "--expected-fingerprint",
+                    fingerprint,
+                    "--trusted-launcher",
+                    os.fspath(trusted_launcher),
+                    "--base-repository",
+                    os.fspath(base),
+                    "--base-commit",
+                    base_commit,
+                    "--head-repository",
+                    os.fspath(head),
+                    "--head-commit",
+                    head_commit,
+                    "--repository",
+                    "nisavid/dotfiles",
+                    "--identity",
+                    os.fspath(identity),
+                    "--trusted-admitter",
+                    os.fspath(base / "scripts/admit-age-envelopes"),
+                    "--output",
+                    os.fspath(provider_receipt),
+                    "--receipt-timeout-seconds",
+                    "30",
+                ],
+                check=False,
+                capture_output=True,
+                env=adapter_environment,
+                timeout=40,
+            )
+            self.assertEqual(
+                adapter_result.returncode,
+                0,
+                (adapter_result.stdout + adapter_result.stderr).decode(
+                    "utf-8", "backslashreplace"
+                ),
+            )
+            self.assertEqual(adapter_result.stdout, b"")
+            self.assertEqual(adapter_result.stderr, b"")
+            signing_key_bytes = signing_key.read_bytes()
+            self.assertNotIn(signing_key_bytes, adapter_result.stdout)
+            self.assertNotIn(signing_key_bytes, adapter_result.stderr)
+            self.assertEqual(provider_receipt.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(adapter_temp.iterdir()), [])
+            provider_receipt_bytes = provider_receipt.read_bytes()
+            verify_integrity_boundary(
+                base_repository=base,
+                base_commit=base_commit,
+                head_repository=head,
+                head_commit=head_commit,
+                admission_body=provider_receipt_bytes,
                 allowed_signers=base / ".github/age-admission/allowed_signers",
                 repository="nisavid/dotfiles",
             )
