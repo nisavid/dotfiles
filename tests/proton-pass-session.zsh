@@ -11,9 +11,10 @@ native_store_adapter_source=$repo_root/home/private_dot_local/bin/executable_sec
 proton_bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
 proton_bootstrap_field+=_TOKEN
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
-  return 1
+  exit 1
 }
 
 process_fixture_helper=$repo_root/tests/helpers/process-fixture.zsh
