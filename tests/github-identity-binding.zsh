@@ -128,6 +128,14 @@ isolated_gh_config=$(<"$FAKE_GH_CONFIG_LOG")
   fail 'the identity check must use and then remove a private gh configuration'
 [[ -z $(print -rl -- $launch_tmpdir/*(ND)) ]] ||
   fail 'the identity check must not leave temporary files'
+# The private configuration must sit where no other user can swap it.
+chmod 777 "$launch_tmpdir"
+expect_fail_closed 'GitHub identity self-check failed' \
+  'a world-writable temporary directory' fixture-personal github -- target
+chmod 1777 "$launch_tmpdir"
+[[ $(run_launcher) == target-ran ]] ||
+  fail 'a sticky temporary directory must still start the consumer'
+chmod 700 "$launch_tmpdir"
 
 set +e
 wrong_output=$(run_launcher fixture-other 2>&1)
