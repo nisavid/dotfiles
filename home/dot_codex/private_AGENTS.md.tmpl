@@ -12,7 +12,7 @@ When planning, executing, reviewing, or completing work that establishes a reusa
 
 Treat commits and pushes as normal completion steps for task-owned changes.
 
-For every Git-backed task, use `checkpointing-and-publishing-git-work` at task start, at every clean checkpoint, and before a stopping-point response.
+{{ includeTemplate "git-checkpointing.tmpl" . | trim }}
 
 For every pull-request creation, title edit, body edit, or draft/ready-state change, use `publishing-reviewable-prs`. It must use `writing-reviewable-pr-descriptions` for reviewer-facing text.
 Never use `gh pr create --fill`, `--fill-first`, or `--fill-verbose`.
@@ -24,6 +24,10 @@ Ask about unrelated dirt while Ivan is available. When he is away, commit safely
 Unresolved ownership, destination, identity, permission, conflicts, failed required checks or reviews, repository or release requirements, or inability to preserve remote work are gates.
 
 Direct default-branch pushes and task-owned exact-lease rewrites with `--force-with-lease` are authorized when repository policy permits and remote work is preserved.
+
+## Git Identity
+
+{{ includeTemplate "git-identity-defaults.tmpl" . | trim }}
 
 ## Writing
 
