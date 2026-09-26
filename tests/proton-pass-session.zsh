@@ -22,6 +22,7 @@ process_fixture_helper=$repo_root/tests/helpers/process-fixture.zsh
   fail 'the shared process-fixture helper is required'
 source "$process_fixture_helper"
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/proton-pass-session.XXXXXX")
+test_dir=${test_dir:A}
 test_process_fixture_init "$test_dir" || fail 'could not initialize process-fixture cleanup'
 trap test_process_fixture_cleanup EXIT
 

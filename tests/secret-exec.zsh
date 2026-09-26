@@ -96,6 +96,7 @@ assert_invalid_profiles() {
 }
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-exec.XXXXXX")
+test_dir=${test_dir:A}
 test_process_fixture_init "$test_dir" || fail 'could not initialize process-fixture cleanup'
 trap test_process_fixture_cleanup EXIT
 
