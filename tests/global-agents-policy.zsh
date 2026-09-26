@@ -83,6 +83,11 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$identity_partial" "$render_fixture/.chezmoitemplates/$identity_partial_name"
   cp -p -- "$checkpoint_partial" "$render_fixture/.chezmoitemplates/$checkpoint_partial_name"
   cp -p -- "$source_root/.chezmoiignore" "$render_fixture/.chezmoiignore"
+  mkdir -m 700 "$render_fixture/.chezmoidata"
+  sed 's/^publicFixture = false$/publicFixture = true/' \
+    "$source_root/.chezmoidata/git-identity.toml" > "$render_fixture/.chezmoidata/git-identity.toml"
+  grep -Fxq 'publicFixture = true' "$render_fixture/.chezmoidata/git-identity.toml" ||
+    fail "public fixture did not enable the synthetic Git identity"
   render_claude_rule_template="$render_fixture/dot_claude/rules/${claude_rule_template:t}"
   cp -p -- "$claude_rule_template" "$render_claude_rule_template"
   render_claude_git_rule_template="$render_fixture/dot_claude/rules/${claude_git_rule_template:t}"
@@ -308,21 +313,30 @@ for shared_text in "$identity" "$checkpoint"; do
 done
 
 identity_required=(
-  "Ivan's default Git identity is \`Ivan D Vasin <ivan@nisavid.io>\`, his GitHub account is \`nisavid\`, and his default branch prefix is \`nisavid/\`."
-  'prefix new branches with `nisavid/`'
+  'commit with the identity the host'"'"'s Git configuration provides (don'"'"'t override it)'
 )
+if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
+  identity_required+=(
+    "Ivan's default Git identity is \`Ivan D Vasin <ivan@nisavid.io>\`, his GitHub account is \`nisavid\`, and his default branch prefix is \`nisavid/\`."
+    'make GitHub mutations through `nisavid`, and prefix new branches with `nisavid/`.'
+  )
+fi
 for ((i = 1; i <= ${#identity_required}; i++)); do
   grep -Fq -- "$identity_required[$i]" "$identity_policy" || fail "identity defaults are missing required clause $i"
 done
 
 repo_agents_forbidden=(
   'ivan@nisavid.io'
-  'Prefix branches with'
-  'GitHub account for repository mutations'
+  'Ivan D Vasin'
+  '`ivan/`'
+  '`nisavid/`'
+  'branch prefix'
+  'prefix branches'
+  'GitHub account'
   'checkpointing-and-publishing-git-work'
 )
 for phrase in $repo_agents_forbidden; do
-  ! grep -Fq -- "$phrase" "$repo_root/AGENTS.md" || fail "repository AGENTS.md carries personal Git policy"
+  ! grep -Fiq -- "$phrase" "$repo_root/AGENTS.md" || fail "repository AGENTS.md carries personal Git policy"
 done
 
 development_line=$(grep -n '^## Development Work$' "$rendered" | cut -d: -f1)
