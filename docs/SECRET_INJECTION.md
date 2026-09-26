@@ -19,7 +19,7 @@ credential names must be unique and syntactically valid.
 The GitHub consumer is selected from an encrypted host binding. Each supported
 host renders its selected profile and expected GitHub.com login.
 There is no fallback `github` profile: an unknown or incomplete hostname
-binding fails during rendering.
+binding, or one that names a missing profile, fails during rendering.
 
 The rendered `github.env` file carries only the selected profile name and
 expected login as comments alongside the process-scoped token locator. Before
