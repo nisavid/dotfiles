@@ -1,0 +1,42 @@
+# Memory-capped slice for builds.
+#
+# ~/.local/bin/cmake, ~/.local/bin/makepkg, and ~/.local/bin/ninja run each
+# build that finds them through PATH in a transient scope under this slice, so
+# all concurrent builds share one MemoryMax. The script those symlinks run,
+# ~/.local/lib/builds-slice/builds-slice-command, explains the details. Builds
+# started without these tools, such as a bare make, cargo, or npm build, are not
+# capped. A build that outgrows MemoryMax is OOM-killed here instead of pushing
+# the host into a global OOM, which on 2026-09-23 killed the Claude Desktop
+# renderer and, through the app scope's OOMPolicy, every Claude thread.
+#
+# The cap leaves headroom for GPU (GTT) memory held by local inference servers,
+# which no cgroup accounts for.
+#
+# No MemoryHigh: with swap disabled, throttling at MemoryHigh slows a build to a
+# crawl instead of failing it.
+#
+# Inspect:        systemctl --user status builds.slice
+# Cap kills:      journalctl --user -g 'OOM killer'
+# Temporary cap:  systemctl --user set-property --runtime builds.slice MemoryMax=16G
+# Undo that:      systemctl --user revert builds.slice
+#
+# chezmoi manages this unit, the three symlinks, the script they run,
+# ~/.config/pacman/makepkg.conf, and the Claude app-scope drop-in
+# app-com.anthropic.Claude-.scope.d/50-oom-continue.conf. A file deleted only
+# from $HOME comes back on the next apply. To disable one for good, delete its
+# chezmoi source file or add its target to home/.chezmoiignore, then delete the
+# live file and run:
+#   systemctl --user daemon-reload
+#
+# To turn off only the cap, remove this unit alone. The build tools then warn
+# and run uncapped, and build trees keep working. Removing ~/.local/bin/ninja
+# instead breaks `cmake --build`, and even a plain reconfigure, in every tree
+# configured while it existed, because CMake stores that path. Re-point each
+# such tree with: cmake -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja <builddir>
+
+[Unit]
+Description=Memory-capped slice for builds
+
+[Slice]
+MemoryMax=32G
+MemorySwapMax=0

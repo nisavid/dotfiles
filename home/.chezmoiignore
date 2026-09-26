@@ -23,9 +23,16 @@ Library
 {{ end }}
 
 {{ if ne .chezmoi.os "linux" }}
-# The provider selector and readiness unit are Linux session integrations.
+# The provider selector, the systemd user units, and the build-tool shims that
+# run builds in builds.slice, with the makepkg setting that goes with them, are
+# Linux session integrations.
 .config/environment.d/98-proton-pass.conf
+.config/pacman/makepkg.conf
 .config/systemd
+.local/bin/cmake
+.local/bin/makepkg
+.local/bin/ninja
+.local/lib/builds-slice
 
 # Only Linux desktops read freedesktop desktop entries; this tree currently
 # holds only the protonpass:// scheme handler. The inventory test requires an

@@ -1,0 +1,180 @@
+#!/bin/sh
+# Run a build tool inside the memory-capped builds.slice.
+#
+# ~/.local/bin/cmake, ~/.local/bin/makepkg, and ~/.local/bin/ninja are symlinks
+# to this script, which runs the /usr/bin tool that the symlink names. Every run
+# whose PATH lookup reaches one of these symlinks gets its own transient systemd
+# user scope under builds.slice (~/.config/systemd/user/builds.slice). That
+# covers interactive, agent, Meson, and makepkg builds, and CMake configure runs
+# with their try_compile checks, and all of them share the slice's one
+# MemoryMax. A cmake or ninja found earlier in PATH, such as a virtualenv's, a
+# pip build environment's, or an IDE's bundled copy, is not capped. A build that
+# outgrows the cap is OOM-killed there instead of starting a host-wide OOM.
+# choom raises the build's OOM score to at least 500, so a host-wide OOM favors
+# compilers over desktop app processes with lower scores, such as Electron
+# renderers (300).
+#
+# A tool that already runs inside builds.slice, such as the Ninja that
+# `cmake --build` starts or the CMake that a PKGBUILD's build() runs, runs
+# directly and stays in the outer build's scope.
+#
+# CMake stores the Ninja path when it first configures a build tree, so a tree
+# configured before ~/.local/bin/ninja existed keeps running /usr/bin/ninja.
+# `cmake --build` through ~/.local/bin/cmake still runs that Ninja inside the
+# slice. To re-point such a tree for other callers:
+#   cmake -DCMAKE_MAKE_PROGRAM="$HOME/.local/bin/ninja" <builddir>
+#
+# A cap kill fails the command it hits, such as one compiler run, and the build
+# stops as it does for any failed step. To confirm that the cap was the cause:
+#   journalctl --user -g 'OOM killer'
+#   journalctl -k -g 'Memory cgroup out of memory'
+#
+# Every path ends in exec, so the tool keeps this process's PID, stdio, signals,
+# exit status, and environment. When systemd-run, systemctl, or choom is
+# missing, systemd-run does not report systemd 254 or newer, the systemd user
+# manager does not answer, or builds.slice has no unit file, this script warns
+# once and runs the tool without the cap. When the tool itself is missing, it fails with
+# status 127, like a missing command.
+#
+# choom raises everything the tool starts, including the `sudo pacman` that
+# makepkg -s, -r, and -i run, and pacman's hooks. ~/.config/pacman/makepkg.conf
+# sets that pacman's score back to 0, so a host-wide OOM no longer favors it in
+# the middle of a transaction.
+#
+# To skip the cap for one run, put /usr/bin first in PATH, for example
+# `PATH=/usr/bin:$PATH makepkg ...`, so the cmake and ninja that the build
+# starts through PATH skip it too. That also puts /usr/bin ahead of any other
+# PATH entry that precedes it. Running /usr/bin/<tool> directly skips the cap
+# only for that one process. A Ninja tree configured while ~/.local/bin preceded
+# /usr/bin in PATH, through either cmake, stores ~/.local/bin/ninja, so an
+# uncapped CMake build also needs a tree configured with
+# -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja.
+# builds.slice says how to disable the cap.
+
+set -eu
+
+usr_bin=/usr/bin
+systemd_run=$usr_bin/systemd-run
+systemctl=$usr_bin/systemctl
+choom=$usr_bin/choom
+env=$usr_bin/env
+slice=builds.slice
+min_oom_score_adj=500
+self_cgroup=/proc/self/cgroup
+self_oom_score_adj=/proc/self/oom_score_adj
+
+in_slice() {
+  [ -r "$self_cgroup" ] || return 1
+  while IFS= read -r line; do
+    case $line in
+      0::*/"$slice"/*) return 0 ;;
+    esac
+  done <"$self_cgroup"
+  return 1
+}
+
+user_manager_reachable() {
+  # test -O keeps real root away from another user's manager. POSIX leaves it
+  # undefined, but the Linux sh implementations (bash, dash, BusyBox) have it.
+  # shellcheck disable=SC3067
+  [ -n "${XDG_RUNTIME_DIR-}" ] && [ -O "$XDG_RUNTIME_DIR" ] || return 1
+  [ -S "$XDG_RUNTIME_DIR/systemd/private" ] || [ -S "$XDG_RUNTIME_DIR/bus" ]
+}
+
+# Print the slice's unit file path, or nothing when it has none, or fail when
+# the user manager does not answer. The sockets can exist while the manager
+# refuses the caller, as inside a PID namespace (bwrap --unshare-pid), and
+# systemd-run would then fail after the exec, too late to fall back. A slice
+# without a unit file would run the build in an uncapped stub slice. The query
+# drops LD_PRELOAD for the reason given at the systemd-run call.
+query_slice_fragment() (
+  unset LD_PRELOAD
+  "$systemctl" --user show -P FragmentPath "$slice" 2>/dev/null
+)
+
+# systemd-run before systemd 254 rejects --expand-environment=no, and it would
+# do so after the exec, too late to fall back. Output that names no version
+# counts as too old. SYSTEMD_COLORS would colour the version line even through
+# a pipe and hide the version, so the query runs without it.
+systemd_run_supported() (
+  unset SYSTEMD_COLORS
+  version=$("$systemd_run" --version 2>/dev/null) || exit 1
+  version=${version#systemd }
+  version=${version%%[!0-9]*}
+  [ -n "$version" ] && [ "$version" -ge 254 ]
+)
+
+main() {
+  # The kernel hands the shell the path the caller ran, not the symlink's
+  # target, so $0 ends in the tool's name.
+  name=${0##*/}
+  case $name in
+    cmake | makepkg | ninja) ;;
+    *)
+      printf '%s: run this through a cmake, makepkg, or ninja symlink\n' \
+        "$name" >&2
+      exit 2
+      ;;
+  esac
+  tool=$usr_bin/$name
+  if [ ! -x "$tool" ]; then
+    printf '%s: %s is not installed\n' "$name" "$tool" >&2
+    exit 127
+  fi
+
+  if in_slice; then
+    exec "$tool" "$@"
+  fi
+
+  reason=
+  if [ ! -x "$systemd_run" ]; then
+    reason="$systemd_run is unavailable"
+  elif [ ! -x "$systemctl" ]; then
+    reason="$systemctl is unavailable"
+  elif [ ! -x "$choom" ]; then
+    reason="$choom is unavailable"
+  elif ! systemd_run_supported; then
+    reason="$systemd_run does not report systemd 254 or newer"
+  elif ! user_manager_reachable; then
+    reason='the systemd user manager is unreachable'
+  elif ! fragment=$(query_slice_fragment); then
+    reason='the systemd user manager is unreachable'
+  elif [ -z "$fragment" ]; then
+    reason="$slice has no unit file"
+  fi
+  if [ -n "$reason" ]; then
+    # The warning is best-effort: a closed or full stderr must not stop the
+    # tool from running.
+    printf '%s: warning: %s; running %s without the %s memory cap\n' \
+      "$name" "$reason" "$tool" "$slice" >&2 || :
+    exec "$tool" "$@"
+  fi
+
+  # Raise the OOM score, never lower it: the caller may already have marked
+  # this process as more expendable.
+  oom_score_adj=$min_oom_score_adj
+  current=
+  read -r current 2>/dev/null <"$self_oom_score_adj" || :
+  case ${current#-} in
+    '' | *[!0-9]*) ;;
+    *) [ "$current" -le "$oom_score_adj" ] || oom_score_adj=$current ;;
+  esac
+
+  set -- "$choom" -n "$oom_score_adj" -- "$tool" "$@"
+  if [ -n "${LD_PRELOAD+set}" ]; then
+    # Preloaded libraries such as fakeroot's fake the caller's UID, and the
+    # user manager then refuses systemd-run. Start the scope without them and
+    # restore LD_PRELOAD for choom and the tool.
+    set -- "$env" "LD_PRELOAD=$LD_PRELOAD" "$@"
+    unset LD_PRELOAD
+  fi
+  # Without --expand-environment=no, systemd-run expands "$VAR" and "$$" in the
+  # tool's arguments. With the default OOMPolicy=stop, one cap kill makes
+  # systemd stop the whole scope, and Ninja misreports that as "interrupted by
+  # user" with exit 130. With OOMPolicy=continue, only the killed process dies,
+  # and Ninja reports its step as FAILED, with its output and status.
+  exec "$systemd_run" --user --scope --quiet --collect --expand-environment=no \
+    --property=OOMPolicy=continue --slice="$slice" -- "$@"
+}
+
+main "$@"
