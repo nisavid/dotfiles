@@ -6,9 +6,10 @@ test_dir=$(mktemp -d "${TMPDIR:-/tmp}/proton-pass-startup-bindings.XXXXXX")
 test_dir=${test_dir:A}
 trap 'rm -rf -- "$test_dir"' EXIT HUP INT TERM
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -ru2 -- "FAIL: $*"
-  return 1
+  exit 1
 }
 
 assert_line() {

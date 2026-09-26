@@ -6,9 +6,10 @@ launcher_source=$repo_root/home/private_dot_local/bin/executable_secret-exec
 readiness_source=$repo_root/home/private_dot_local/bin/executable_proton-pass-ensure-ready
 dispatcher_source=$repo_root/home/private_dot_local/lib/secret-exec/executable_secret-exec-command
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
-  return 1
+  exit 1
 }
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-command-shims.XXXXXX")

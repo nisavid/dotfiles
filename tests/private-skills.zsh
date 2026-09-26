@@ -8,9 +8,10 @@ phase=$(mktemp -d "${TMPDIR:-/tmp}/private-skills-test.XXXXXX")
 trap 'rm -rf -- "$phase"' EXIT HUP INT TERM
 chmod 700 "$phase"
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "FAIL: $*"
-  return 1
+  exit 1
 }
 
 mode_of() {

@@ -8,9 +8,10 @@ repo_root=${0:A:h:h}
 launcher_source=$repo_root/home/private_dot_local/bin/executable_secret-exec
 readiness_source=$repo_root/home/private_dot_local/bin/executable_proton-pass-ensure-ready
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
-  return 1
+  exit 1
 }
 
 classify_login_outcome() {

@@ -7,9 +7,10 @@ startup_source=$repo_root/home/private_dot_local/bin/executable_proton-pass-star
 # format startup reads cannot drift from the one the helper writes.
 export FAKE_STARTUP_HELPER_SOURCE=$repo_root/home/private_dot_local/bin/executable_proton-pass-ensure-ready
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
-  return 1
+  exit 1
 }
 
 process_fixture_helper=$repo_root/tests/helpers/process-fixture.zsh

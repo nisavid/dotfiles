@@ -5,9 +5,10 @@ setopt extended_glob
 repo_root=${0:A:h:h}
 cd "$repo_root"
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
-  return 1
+  exit 1
 }
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-injection-bindings.XXXXXX")

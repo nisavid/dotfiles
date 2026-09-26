@@ -5,9 +5,10 @@ repo_root=${0:A:h:h}
 migrator=$repo_root/home/private_dot_local/bin/executable_secret-exec-migrate
 zsh_command=${commands[zsh]}
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
-  return 1
+  exit 1
 }
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-exec-migrate.XXXXXX")

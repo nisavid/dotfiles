@@ -4,9 +4,10 @@ set -euo pipefail
 repo_root=${0:A:h:h}
 cd "$repo_root"
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
-  return 1
+  exit 1
 }
 
 command -v rg >/dev/null || fail 'rg is required to validate the client boundary'
