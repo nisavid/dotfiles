@@ -41,6 +41,15 @@ or untrusted `gh`, a `gh` failure or timeout, or an unreachable API.
 Best-effort covers only the credential provider, before the check; an
 unverified credential never starts the consumer.
 
+The checker is the first `gh` on `PATH`, resolved through symbolic links. It
+must belong to root or the current user and must not be group- or
+world-writable. Every directory above it must also belong to root or the
+current user, so no other user can rename the checker away after these checks;
+a world-writable directory must be sticky, with the next path component owned
+by root or the current user. Group-writable directories stay trusted, because
+their writers are the user's own group or an administrator group, as with
+Homebrew's prefix.
+
 Codex's configured `github` MCP launches GitHub's remote server through
 `secret-exec` and `mcp-remote`. A separately enabled GitHub app has its own
 authentication; its plugin label does not establish which route a tool uses.

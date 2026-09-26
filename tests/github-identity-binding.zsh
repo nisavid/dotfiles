@@ -203,6 +203,21 @@ ln -s -- ../homebrew/Cellar/gh/1.0.0/bin/gh "$bin_dir/gh"
 [[ $(run_launcher) == target-ran ]] ||
   { print -u2 -r -- 'a trusted Homebrew GitHub checker must start the consumer'; exit 1; }
 
+# No other user may swap the checker after its own checks: every directory
+# above it must resist renames. Group-writable stays trusted, as Homebrew's
+# prefix is; world-writable must be sticky.
+checker_ancestor=$test_dir/homebrew/Cellar
+chmod 775 "$checker_ancestor"
+[[ $(run_launcher) == target-ran ]] ||
+  fail 'a group-writable checker ancestor must stay trusted'
+chmod 777 "$checker_ancestor"
+expect_fail_closed 'a trusted GitHub identity checker is required' \
+  'a world-writable checker ancestor' fixture-personal github -- target
+chmod 1777 "$checker_ancestor"
+[[ $(run_launcher) == target-ran ]] ||
+  fail 'a sticky world-writable checker ancestor must stay trusted'
+chmod 755 "$checker_ancestor"
+
 chmod 720 "$homebrew_bin/gh"
 set +e
 untrusted_output=$(run_launcher 2>&1)
