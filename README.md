@@ -34,3 +34,9 @@ chezmoi apply
 
 - [Hindsight](docs/HINDSIGHT.md): pin the reusable release and render an
   encrypted Darwin-only consumer binding.
+
+## Qualification procedures
+
+- [PQ Sequoia on GitHub-hosted macOS](docs/crypto/pq-sequoia-macos/PROCEDURE.md):
+  validate, build, and exercise the pinned public RFC 9980 candidate and its
+  live bidirectional Hatchery fixture protocol.
