@@ -7,6 +7,13 @@ test_dir=$(mktemp -d "${TMPDIR:-/tmp}/github-identity-binding.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
 unset SECRET_EXEC_INJECTED_PROFILES GITHUB_PERSONAL_ACCESS_TOKEN GH_TOKEN
 export FAKE_CALLS_LOG=$test_dir/calls.log
+export FAKE_GH_CONFIG_LOG=$test_dir/gh-config.log
+# A caller-controlled gh configuration that would reroute the check's request.
+caller_gh_config=$test_dir/caller-gh-config
+launch_tmpdir=$test_dir/tmp
+mkdir -p -- "$caller_gh_config" "$launch_tmpdir"
+print -r -- 'http_unix_socket: /nonexistent/secret-exec-test.sock' > "$caller_gh_config/config.yml"
+export FAKE_CALLER_GH_CONFIG_DIR=$caller_gh_config
 
 fail() {
   print -u2 -r -- "$1"
@@ -35,6 +42,9 @@ EOF
 cat > "$bin_dir/gh" <<'EOF'
 #!/bin/zsh -f
 print -r -- gh >> "$FAKE_CALLS_LOG"
+print -r -- "${GH_CONFIG_DIR-}" >> "$FAKE_GH_CONFIG_LOG"
+[[ -n ${GH_CONFIG_DIR-} && $GH_CONFIG_DIR != $FAKE_CALLER_GH_CONFIG_DIR &&
+  -d $GH_CONFIG_DIR && -z $(print -rl -- $GH_CONFIG_DIR/*(ND)) ]] || exit 74
 [[ -z ${FAKE_GH_EXIT:-} ]] || exit $FAKE_GH_EXIT
 [[ $GH_TOKEN == fixture-token ]] || exit 71
 [[ $* == 'api --hostname github.com user --jq .login' ]] || exit 73
@@ -43,6 +53,7 @@ EOF
 cat > "$bin_dir/target" <<'EOF'
 #!/bin/zsh -f
 print -r -- target >> "$FAKE_CALLS_LOG"
+[[ ${GH_CONFIG_DIR-} == $FAKE_CALLER_GH_CONFIG_DIR ]] || exit 75
 [[ $GITHUB_PERSONAL_ACCESS_TOKEN == fixture-token ]] || exit 72
 print -r -- target-ran
 EOF
@@ -72,6 +83,8 @@ launch() {
     XDG_STATE_HOME=$test_dir/state \
     PATH=$bin_dir:/usr/bin:/bin \
     GH_HOST=enterprise.invalid \
+    GH_CONFIG_DIR=$caller_gh_config \
+    TMPDIR=$launch_tmpdir \
     FAKE_GITHUB_LOGIN=$login \
     "${launch_environment[@]}" \
     "$launcher" "$@"
@@ -100,6 +113,12 @@ expect_fail_closed() {
 
 [[ $(run_launcher) == target-ran ]] ||
   { print -u2 -r -- 'matching GitHub identity must start the consumer'; exit 1; }
+# The check ran against its own empty configuration, which is gone afterwards.
+isolated_gh_config=$(<"$FAKE_GH_CONFIG_LOG")
+[[ $isolated_gh_config == $launch_tmpdir/* && ! -e $isolated_gh_config ]] ||
+  fail 'the identity check must use and then remove a private gh configuration'
+[[ -z $(print -rl -- $launch_tmpdir/*(ND)) ]] ||
+  fail 'the identity check must not leave temporary files'
 
 set +e
 wrong_output=$(run_launcher fixture-other 2>&1)
@@ -182,5 +201,8 @@ untrusted_status=$?
 set -e
 (( untrusted_status != 0 )) && [[ $untrusted_output != *target-ran* ]] ||
   { print -u2 -r -- 'an untrusted GitHub checker must not start the consumer'; exit 1; }
+
+[[ -z $(print -rl -- $launch_tmpdir/*(ND)) ]] ||
+  fail 'failed identity checks must not leave temporary files'
 
 print -r -- 'github identity binding checks passed'
