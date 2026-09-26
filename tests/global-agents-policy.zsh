@@ -12,7 +12,7 @@ identity_partial_name=git-identity-defaults.tmpl
 identity_partial="$source_root/.chezmoitemplates/$identity_partial_name"
 checkpoint_partial_name=git-checkpointing.tmpl
 checkpoint_partial="$source_root/.chezmoitemplates/$checkpoint_partial_name"
-claude_git_rule_template="$source_root/dot_claude/rules/git-defaults.md.tmpl"
+claude_git_rule_template="$source_root/dot_claude/rules/private_git-defaults.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
@@ -65,7 +65,7 @@ for partial in "$identity_partial" "$checkpoint_partial"; do
   [[ $(mode_of "$partial") == 644 ]] || fail "${partial:t} partial mode must be 0644"
 done
 [[ -f "$claude_git_rule_template" ]] || fail "Claude Git defaults rule template is missing"
-[[ $(mode_of "$claude_git_rule_template") == 644 ]] || fail "Claude Git defaults rule template mode must be 0644"
+[[ $(mode_of "$claude_git_rule_template") == 644 ]] || fail "Claude Git defaults rule source template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$claude_git_rule_template") == "$HOME/.claude/rules/git-defaults.md" ]] ||
   fail "Claude Git defaults rule template targets the wrong file"
 
@@ -276,8 +276,8 @@ for ((i = 1; i <= ${#preflight_required}; i++)); do
 done
 
 chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/git-defaults.md" > "$claude_state"
-[[ $(jq -r '.[".claude/rules/git-defaults.md"].perm' "$claude_state") == 420 ]] ||
-  fail "Claude Git defaults rule target mode is not 0644"
+[[ $(jq -r '.[".claude/rules/git-defaults.md"].perm' "$claude_state") == 384 ]] ||
+  fail "Claude Git defaults rule target mode is not 0600"
 
 (
   cd "$render_source_root"
