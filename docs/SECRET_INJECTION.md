@@ -14,6 +14,69 @@ Chezmoi keeps the profile catalog encrypted. Apply renders individual profile
 files into a mode-`0700` directory with mode-`0600` files. Profile names and
 credential names must be unique and syntactically valid.
 
+### Host-bound GitHub profiles
+
+The GitHub consumer is selected from an encrypted host binding. Each supported
+host renders its selected profile and expected GitHub.com login.
+There is no fallback `github` profile: an unknown or incomplete hostname
+binding, or one that names a missing profile, fails during rendering.
+
+The rendered `github.env` file carries only the selected profile name and
+expected login as comments alongside the process-scoped token locator. Before
+the consumer starts, `secret-exec github` runs a bounded
+`gh api --hostname github.com user` check
+with the resolved token held in the child environment. The check gets an empty
+private `GH_CONFIG_DIR`, created under `TMPDIR` only where no other user can
+swap it (the directory rule below), and runs without the caller's proxy and CA
+variables (`HTTPS_PROXY`, `SSL_CERT_FILE`, and their relatives), so caller `gh`
+settings such as `http_unix_socket` or a chosen proxy cannot reroute the
+request. The configured consumer, `mcp-remote` without `--enable-proxy`,
+ignores those variables too; it keeps the caller's environment. The resolved
+token reaches `gh` as `GH_TOKEN` only inside the check, so a `GH_TOKEN` the
+caller set reaches the consumer unchanged. The check compares the login with
+the rendered expectation and reports only a generic failure, so a stale or
+cross-host credential cannot silently start the MCP process.
+
+The check runs on every `github` launch. An inherited provenance marker never
+lets the launcher reuse injected GitHub values. Every check failure stops the
+launch, even with `--best-effort`: a login mismatch, missing metadata, a missing
+or untrusted `gh`, a `gh` failure or timeout, or an unreachable API.
+Best-effort covers only the credential provider, before the check; an
+unverified credential never starts the consumer.
+
+The checker is the first `gh` on `PATH`, resolved through symbolic links. It
+must belong to root or the current user and must not be group- or
+world-writable. Every directory above it must also belong to root or the
+current user, so no other user can rename the checker away after these checks;
+a world-writable directory must be sticky, with the next path component owned
+by root or the current user. Group-writable directories stay trusted, because
+their writers are the user's own group or an administrator group, as with
+Homebrew's prefix.
+
+Codex's configured `github` MCP launches GitHub's remote server through
+`secret-exec` and `mcp-remote`. A separately enabled GitHub app has its own
+authentication; its plugin label does not establish which route a tool uses.
+
+After updating a credential or profile, verify both a fresh configured MCP
+connection and the active harness's `get_me` tool. An existing process can retain
+the credential injected at startup. If necessary, reinitialize that connection
+and repeat the identity query; configuration inspection alone is not acceptance.
+
+For a launcher-only check, run `secret-exec github -- /usr/bin/true`: the launcher's
+own guard verifies the injected token. Running an unqualified `gh api user` as
+the child is not proof of that token's identity, because `gh` does not consume
+`GITHUB_PERSONAL_ACCESS_TOKEN` and may use its separately stored credentials.
+Keep credential values out of output and inspect only the returned login or
+success status. Compare the installed launcher's bytes with the managed source
+before attributing a failed check to configuration or the stored credential.
+
+If startup fails, distinguish the readiness helper's diagnostic from MCP
+initialization or provider errors. Verify failures under the intended host
+permissions before diagnosing a read-only home directory or inaccessible
+desktop keyring; a restricted tool sandbox can produce those symptoms. Once
+readiness passes, retry the actual MCP connection and query its identity before
+requesting another application restart.
+
 Each assignment uses one of these locators:
 
 - `pass://...` resolves a single field through the Proton Pass CLI.
@@ -48,7 +111,9 @@ resolution, still removes every other managed name, including names the profile
 unsets with `!`, and then execs the target with the marker set to that profile.
 A marker that merely contains the name, such as `typesafe-extra` for
 `typesafe`, does not match. If any value is missing, the launcher resolves the
-profile normally. `aws-credential-process` always resolves.
+profile normally. `aws-credential-process` and the `github` profile always
+resolve; `github` must repeat its identity check (see
+[Host-bound GitHub profiles](#host-bound-github-profiles)).
 
 The marker is not authenticated, and reuse trusts the inherited value. A
 process that sets the marker next to its own value for a mapped name gets that
@@ -87,8 +152,9 @@ managed name is gone, a later resolution failure falls back. That includes a
 missing or failing readiness helper (a locked native store, for example), a
 missing or untrusted provider command, a provider timeout or failure, including
 one whose process group became unmanageable, and a resolved value that is empty
-or spans lines. Two post-scrub failures still stop the launch: signals, and a
-failure to close the launcher's diagnostic channel after every value resolved.
+or spans lines. Three post-scrub failures still stop the launch: signals, a
+failed GitHub identity check, and a failure to close the launcher's diagnostic
+channel after every value resolved.
 
 On fallback, the launcher unsets every value it had already exported and the
 provider request variables, and it does not export the provenance marker.
@@ -508,12 +574,15 @@ command name it dispatches on.
 Every shim goes through the launcher. Inside a process tree that already
 carries the mapped profile, the launcher reuses the injected values instead of
 repeating the provider lookup (see [Profile contract](#profile-contract)), so a
-shimmed command still receives only its profile's credentials.
+shimmed command still receives only its profile's credentials. A `github`
+mapping is the exception: it always resolves and repeats its identity check
+(see [Host-bound GitHub profiles](#host-bound-github-profiles)).
 
 A mapping ends with `?`, as in `name=profile?`, to make it best-effort. Its
 shim launches through `secret-exec --best-effort`, so an unavailable provider
 starts the command without that profile's credentials and sends a
-notification (see [Best-effort launches](#best-effort-launches)). A mapping
+notification (see [Best-effort launches](#best-effort-launches)). A failed
+GitHub identity check still stops a best-effort `github` shim. A mapping
 without the suffix keeps failing closed. The suffix follows the profile name
 exactly once: `name=profile??`, `name=?`, and `name=?profile` are malformed.
 A command may appear only once, with or without the suffix.
