@@ -547,10 +547,10 @@ typeset -a skill_registrations=(
 )
 
 selected_mode="${1:-all}"
-typeset -a modes projection_targets fields
-typeset -A tested_modes
+typeset -a modes projection_targets fields selected_assertions
 for registration in $skill_registrations; do
-  fields=( ${(s<:>)registration} )
+  fields=( "${(@s/:/)registration}" )
+  [[ "$fields[4]" == yes || "$fields[4]" == no ]] || fail "invalid Claude projection flag: $registration"
   mode=$fields[1]
   if (( ${modes[(Ie)$mode]} == 0 )); then
     modes+=("$mode")
@@ -561,21 +561,21 @@ if [[ "$selected_mode" != all ]] && (( ${modes[(Ie)$selected_mode]} == 0 )); the
 fi
 
 for registration in $skill_registrations; do
-  fields=( ${(s<:>)registration} )
+  fields=( "${(@s/:/)registration}" )
   mode=$fields[1]
   skill=$fields[2]
   assertions=$fields[3]
   claude_projection=$fields[4]
   if [[ "$selected_mode" == all || "$selected_mode" == "$mode" ]]; then
-    if (( ! ${+tested_modes[$mode]} )); then
-      "$assertions"
-      tested_modes[$mode]=1
-    fi
+    selected_assertions+=( "$assertions" )
     projection_targets+=("$HOME/.agents/skills/$skill")
-    if [[ "$claude_projection" == yes ]]; then
+    if [[ "$claude_projection" != no ]]; then
       projection_targets+=("$HOME/.claude/skills/$skill")
     fi
   fi
+done
+for assertions in ${(u)selected_assertions}; do
+  "$assertions"
 done
 
 isolated_source="$tmpdir/source"
@@ -583,12 +583,12 @@ isolated_home="$tmpdir/home"
 mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/skills" "$isolated_home"
 
 for registration in $skill_registrations; do
-  fields=( ${(s<:>)registration} )
+  fields=( "${(@s/:/)registration}" )
   skill=$fields[2]
   cp -R -- \
     "$repo_dir/home/dot_agents/skills/$skill" \
     "$isolated_source/dot_agents/skills/$skill"
-  if [[ "$fields[4]" == yes ]]; then
+  if [[ "$fields[4]" != no ]]; then
     cp -- \
       "$repo_dir/home/dot_claude/skills/symlink_$skill" \
       "$isolated_source/dot_claude/skills/symlink_$skill"
@@ -613,9 +613,9 @@ for target in $isolated_targets; do
 done
 
 for registration in $skill_registrations; do
-  fields=( ${(s<:>)registration} )
+  fields=( "${(@s/:/)registration}" )
   skill=$fields[2]
-  [[ "$fields[4]" == yes ]] || continue
+  [[ "$fields[4]" != no ]] || continue
   canonical="$isolated_home/.agents/skills/$skill"
   link="$isolated_home/.claude/skills/$skill"
   if [[ -e "$canonical" || -e "$link" || -L "$link" ]]; then
