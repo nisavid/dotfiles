@@ -25,9 +25,12 @@ The rendered `github.env` file carries only the selected profile name and
 expected login as comments alongside the process-scoped token locator. Before
 the consumer starts, `secret-exec github` runs a bounded
 `gh api --hostname github.com user` check
-with the resolved token held in the child environment. It compares the login
-with the rendered expectation and reports only a generic failure, so a stale
-or cross-host credential cannot silently start the MCP process.
+with the resolved token held in the child environment. The check gets an empty
+private `GH_CONFIG_DIR`, so caller `gh` settings such as `http_unix_socket`
+cannot reroute the request; the consumer keeps the caller's configuration. The
+check compares the login with the rendered expectation and reports only a
+generic failure, so a stale or cross-host credential cannot silently start the
+MCP process.
 
 The check runs on every `github` launch. An inherited provenance marker never
 lets the launcher reuse injected GitHub values. Every check failure stops the
