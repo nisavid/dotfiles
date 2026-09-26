@@ -1,0 +1,981 @@
+#!/usr/bin/env python3
+"""Observe or reconcile a selected clean Provingkit installation."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import platform
+import re
+import shutil
+import stat
+import subprocess
+import tempfile
+from pathlib import Path, PurePosixPath
+
+TARGETS = {"codex": "agent-plugins", "claude": "claude", "cursor": "cursor"}
+CATALOGS = {
+    "agent-plugins": ".agents/plugins/marketplace.json",
+    "claude": ".claude-plugin/marketplace.json",
+    "cursor": ".cursor-plugin/marketplace.json",
+}
+MEMBERS = {
+    "rolecasting",
+    "tricritical",
+    "versionkeeping",
+    "mergecraft",
+    "artifact-customs",
+    "proseweaving",
+}
+REPOSITORY = "https://github.com/nisavid/provingkit"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)
+
+
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def is_digest(value: object, length: int = 64) -> bool:
+    return (
+        isinstance(value, str)
+        and re.fullmatch(f"[0-9a-f]{{{length}}}", value) is not None
+    )
+
+
+def relative(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    path = PurePosixPath(value)
+    return (
+        value == path.as_posix()
+        and not path.is_absolute()
+        and value not in ("", ".")
+        and ".." not in path.parts
+    )
+
+
+def validate(selection: dict) -> dict | None:
+    require(
+        selection["schema"] == "provingkit-installations-v1",
+        "unsupported projection schema",
+    )
+    profile = selection["profile"]
+    if profile is None:
+        require(selection["profile_name"] is None, "inactive profile must have no name")
+        return None
+    require(
+        isinstance(selection["profile_name"], str) and bool(selection["profile_name"]),
+        "profile name is missing",
+    )
+    require(
+        profile["schema"] == "provingkit-installation-selection-v1",
+        "unsupported selection schema",
+    )
+    require(
+        profile["source"]["repository"] == REPOSITORY, "unexpected source repository"
+    )
+    require(
+        is_digest(profile["source"]["commit"], 40),
+        "source commit must be a full lowercase Git SHA",
+    )
+    require(
+        profile["adoption"]["stage"] in ("ad_hoc", "preview", "release"),
+        "unsupported adoption stage",
+    )
+    require(
+        all(
+            isinstance(profile["adoption"][key], str) and profile["adoption"][key]
+            for key in ("identity", "record")
+        ),
+        "adoption identity and record are required",
+    )
+    members = profile["artifact_slate"]
+    require(
+        isinstance(members, list)
+        and bool(members)
+        and all(m in MEMBERS for m in members)
+        and len(members) == len(set(members)),
+        "invalid member slate",
+    )
+    for platform_spec in (profile["platform"], selection["host_platform"]):
+        require(
+            set(platform_spec) == {"os", "arch"}
+            and all(isinstance(v, str) for v in platform_spec.values()),
+            "invalid platform",
+        )
+    require(
+        isinstance(profile["clients"], dict) and bool(profile["clients"]),
+        "no selected clients",
+    )
+    targets = set()
+    for client, choice in profile["clients"].items():
+        require(client in TARGETS, "unsupported client")
+        target = TARGETS[client]
+        targets.add(target)
+        require(choice["artifact"] == target, "client artifact target differs")
+        require(
+            choice["route"]
+            == ("user_local_directory" if client == "cursor" else "native_marketplace"),
+            "unsupported client route",
+        )
+        require(
+            choice["scope"] == ("implicit_user" if client == "codex" else "user"),
+            "unsupported client scope",
+        )
+        require(
+            bool(choice["members"]) and set(choice["members"]) <= set(members),
+            "client members differ from slate",
+        )
+        require(
+            all(
+                set(value) == {"enabled"} and isinstance(value["enabled"], bool)
+                for value in choice["members"].values()
+            ),
+            "member enablement must be boolean",
+        )
+    require(
+        set(profile["artifacts"]) == targets,
+        "artifacts differ from selected client targets",
+    )
+    for target, artifact in profile["artifacts"].items():
+        require(artifact["catalog"] == CATALOGS[target], "unexpected catalog path")
+        require(is_digest(artifact["artifact_sha256"]), "invalid artifact digest")
+        require(
+            relative(artifact["archive"]["root"])
+            and "/" not in artifact["archive"]["root"],
+            "invalid archive root",
+        )
+        for kind in ("archive", "receipt", "modes"):
+            require(is_digest(artifact[kind]["sha256"]), f"invalid {kind} digest")
+            require(
+                isinstance(artifact[kind]["url"], str)
+                and artifact[kind]["url"].startswith(("https://", "file:///")),
+                f"invalid {kind} URL",
+            )
+    require(
+        profile["retirements"] == [],
+        "retirement operations are not supported by this producer",
+    )
+    return profile
+
+
+def files(root: Path) -> dict[str, list]:
+    """Read regular file bytes and modes, following the projector verification recipe."""
+    require(stat.S_ISDIR(root.lstat().st_mode), f"not a directory: {root}")
+    result = {}
+    for path in sorted(root.rglob("*")):
+        mode = path.lstat().st_mode
+        if stat.S_ISDIR(mode):
+            continue
+        require(stat.S_ISREG(mode), f"non-regular artifact file: {path}")
+        result[path.relative_to(root).as_posix()] = [
+            digest(path.read_bytes()),
+            stat.S_IMODE(mode),
+        ]
+    return result
+
+
+def artifact_root(home: Path, target: str, artifact: dict) -> Path:
+    return (
+        home
+        / ".local/share/provingkit/artifacts"
+        / target
+        / artifact["artifact_sha256"]
+    )
+
+
+def verify_artifact(home: Path, profile: dict, target: str) -> Path:
+    artifact = profile["artifacts"][target]
+    root = artifact_root(home, target, artifact)
+    evidence = (
+        home / ".local/share/provingkit/evidence" / target / artifact["artifact_sha256"]
+    )
+    actual = files(root)
+    raw = (root / "RECEIPT.json").read_bytes()
+    require(
+        raw == (evidence / "RECEIPT.json").read_bytes(),
+        "extracted and separate receipt bytes differ",
+    )
+    require(digest(raw) == artifact["receipt"]["sha256"], "receipt digest differs")
+    receipt = json.loads(raw)
+    require(
+        set(receipt)
+        == {
+            "artifact_sha256",
+            "builder",
+            "files",
+            "plugin_slate",
+            "policy_sha256",
+            "schema",
+            "source",
+            "target",
+        },
+        "receipt field set differs",
+    )
+    require(
+        receipt["schema"] == "provingkit-artifact-receipt-v1", "receipt schema differs"
+    )
+    commit = profile["source"]["commit"]
+    require(
+        receipt["builder"]
+        == {"name": "provingkit-artifact-projector-v1", "revision": commit},
+        "receipt builder differs",
+    )
+    source = receipt["source"]
+    require(
+        source
+        == dict(
+            profile["source"],
+            channel=source["channel"],
+            preview_label="preview-" + commit[:12],
+        )
+        and source["channel"] in ("preview", "main", "release"),
+        "receipt source differs",
+    )
+    require(
+        receipt["target"] == target
+        and receipt["plugin_slate"] == profile["artifact_slate"],
+        "receipt target or slate differs",
+    )
+    require(is_digest(receipt["policy_sha256"]), "invalid receipt policy digest")
+    inventory = []
+    framed = hashlib.sha256(b"provingkit-tree-v1\0")
+    for name in sorted(set(actual) - {"RECEIPT.json"}):
+        data = (root / name).read_bytes()
+        inventory.append({"path": name, "sha256": digest(data)})
+        encoded = name.encode()
+        framed.update(
+            len(encoded).to_bytes(8, "big")
+            + encoded
+            + len(data).to_bytes(8, "big")
+            + data
+        )
+    require(
+        receipt["files"] == inventory, "receipt inventory differs from artifact bytes"
+    )
+    require(
+        framed.hexdigest() == receipt["artifact_sha256"] == artifact["artifact_sha256"],
+        "artifact tree digest differs",
+    )
+    mode_bytes = (evidence / "modes.tsv").read_bytes()
+    require(
+        digest(mode_bytes) == artifact["modes"]["sha256"],
+        "mode manifest digest differs",
+    )
+    lines = mode_bytes.decode().splitlines()
+    require(
+        bool(lines) and lines[0] == "path\tmode\torigin", "mode manifest header differs"
+    )
+    modes = {}
+    for line in lines[1:]:
+        name, mode, _origin = line.split("\t", 2)
+        require(
+            relative(name)
+            and name not in modes
+            and re.fullmatch(r"0[0-7]{3}", mode) is not None,
+            "invalid mode manifest row",
+        )
+        modes[name] = int(mode, 8)
+    require(
+        set(modes) == set(actual) - {"RECEIPT.json"}, "mode manifest inventory differs"
+    )
+    require(
+        all(actual[name][1] == mode for name, mode in modes.items()),
+        "artifact modes differ",
+    )
+    catalog = json.loads((root / artifact["catalog"]).read_text())
+    require(catalog["name"] == "provingkit", "marketplace name differs")
+    require(
+        [item["name"] for item in catalog["plugins"]] == profile["artifact_slate"],
+        "catalog differs from the artifact slate",
+    )
+    return root
+
+
+class Unavailable(Exception):
+    """A supported, observed operation cannot establish the selected state."""
+
+
+def native_require(condition: bool, message: str) -> None:
+    if not condition:
+        raise Unavailable(message)
+
+
+class NativeClient:
+    def __init__(self, name: str, home: Path):
+        self.name = name
+        self.home = home
+        self.sentinels = {}
+        self.receipt = {}
+        self.executable = shutil.which(name)
+        native_require(self.executable is not None, f"{name} executable is unavailable")
+        self.actions = []
+        self.install_paths = {}
+        self.config = Path(
+            os.environ.get(
+                "CODEX_HOME" if name == "codex" else "CLAUDE_CONFIG_DIR",
+                str(home / (".codex" if name == "codex" else ".claude")),
+            )
+        )
+        self.version = self.call("--version", structured=False).strip()
+        pattern = (
+            r"codex-cli [0-9]+\.[0-9]+\.[0-9]+(?:[+.-].*)?"
+            if name == "codex"
+            else r"[0-9]+\.[0-9]+\.[0-9]+ \(Claude Code\)"
+        )
+        native_require(
+            re.fullmatch(pattern, self.version) is not None,
+            f"unrecognized native version response: {self.version}",
+        )
+
+    def call(self, *arguments: str, structured: bool = True, action: bool = False):
+        argv = [self.executable, *arguments]
+        result = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if action:
+            self.actions.append({"argv": argv, "returncode": result.returncode})
+        native_require(
+            result.returncode == 0,
+            f"native command failed ({result.returncode}): {result.stderr.strip() or result.stdout.strip()}",
+        )
+        if action and self.sentinels:
+            _, rows = self.observe()
+            native_require(
+                self.snapshot(rows, set(self.sentinels)) == self.sentinels,
+                "unselected native state changed; stop and inspect the retained observation",
+            )
+        return json.loads(result.stdout) if structured else result.stdout
+
+    def observe(self) -> tuple[dict | None, dict]:
+        marketplaces = self.call("plugin", "marketplace", "list", "--json")
+        plugins = self.call(
+            "plugin",
+            "list",
+            *(
+                ("--marketplace", "provingkit", "--json")
+                if self.name == "codex"
+                else ("--json",)
+            ),
+        )
+        if self.name == "codex":
+            marketplaces, plugins = marketplaces["marketplaces"], plugins["installed"]
+        native_require(
+            isinstance(marketplaces, list) and isinstance(plugins, list),
+            "unrecognized native list shape",
+        )
+        sources = [row for row in marketplaces if row["name"] == "provingkit"]
+        native_require(len(sources) <= 1, "ambiguous provingkit marketplace")
+        rows = {}
+        for row in plugins:
+            identifier = row["pluginId" if self.name == "codex" else "id"]
+            if not identifier.endswith("@provingkit"):
+                continue
+            name = identifier.removesuffix("@provingkit")
+            native_require(
+                relative(name) and "/" not in name,
+                "unrecognized native member identifier",
+            )
+            if self.name == "codex":
+                native_require(
+                    row["installed"] is True
+                    and row["name"] == name
+                    and row["marketplaceName"] == "provingkit",
+                    "unrecognized Codex installed row",
+                )
+            native_require(
+                not row.get("errors") and not row.get("errorDetails"),
+                f"native member reports errors: {identifier}",
+            )
+            native_require(
+                name not in rows and isinstance(row["enabled"], bool),
+                "ambiguous installed member state",
+            )
+            native_require(
+                self.name == "codex" or row["scope"] == "user",
+                "provingkit member has another or ambiguous scope",
+            )
+            rows[name] = row
+        return sources[0] if sources else None, rows
+
+    def source_path(self, marketplace: dict | None) -> str | None:
+        if marketplace is None:
+            return None
+        if self.name == "codex":
+            native_require(
+                marketplace["marketplaceSource"]["sourceType"] == "local",
+                "marketplace is not an observed local source",
+            )
+            native_require(
+                marketplace["root"] == marketplace["marketplaceSource"]["source"],
+                "marketplace source differs from root",
+            )
+            return marketplace["root"]
+        native_require(
+            marketplace["source"] == "directory",
+            "marketplace is not an observed directory source",
+        )
+        return marketplace["path"]
+
+    def snapshot(self, rows: dict, members: set) -> dict:
+        native_require(members <= set(rows), "unselected registration disappeared")
+        return {
+            member: {
+                "registration": rows[member],
+                "files": files(self.installed_path(member, rows[member], self.receipt)),
+            }
+            for member in sorted(members)
+        }
+
+    def automatic_updates(self) -> str:
+        if self.name != "claude":
+            return "not_observed"
+        values = []
+        for relative, section in (
+            ("settings.json", "extraKnownMarketplaces"),
+            ("plugins/known_marketplaces.json", None),
+        ):
+            path = self.config / relative
+            if not path.exists():
+                continue
+            data = json.loads(path.read_text())
+            entry = (data.get(section, {}) if section else data).get("provingkit", {})
+            if "autoUpdate" in entry:
+                native_require(
+                    isinstance(entry["autoUpdate"], bool),
+                    "unrecognized automatic update setting",
+                )
+                values.append(entry["autoUpdate"])
+        return "enabled" if any(values) else "disabled" if values else "unspecified"
+
+    def installed_path(self, member: str, row: dict | None, receipt: dict) -> Path:
+        if self.name == "codex":
+            version = row["version"] if row else "local"
+            native_require(
+                isinstance(version, str)
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", version) is not None,
+                "unrecognized Codex cache version",
+            )
+            expected = self.config / "plugins/cache/provingkit" / member / version
+            observed = self.install_paths.get(member) or receipt.get(
+                "native_paths", {}
+            ).get(member)
+            # list omits installPath; use its version within the measured cache layout.
+            if observed is not None and Path(observed).name == version:
+                native_require(
+                    Path(observed) == expected,
+                    "unexpected native Codex installation path",
+                )
+                return Path(observed)
+            return expected
+        if row is None:
+            return self.config / "plugins/cache/provingkit" / member / "absent"
+        path = Path(row["installPath"])
+        expected_parent = self.config / "plugins/cache/provingkit" / member
+        native_require(
+            path.is_absolute() and path.parent == expected_parent,
+            "unexpected native installation path",
+        )
+        return path
+
+    def install(self, member: str) -> None:
+        result = self.call(
+            "plugin",
+            "add" if self.name == "codex" else "install",
+            member + "@provingkit",
+            *(("--json",) if self.name == "codex" else ("--scope", "user", "--json")),
+            action=True,
+        )
+        native_require(
+            result["pluginId"] == member + "@provingkit",
+            "unrecognized native install result",
+        )
+        if self.name == "codex":
+            path = Path(result["installedPath"])
+            native_require(
+                path.parent == self.config / "plugins/cache/provingkit" / member,
+                "unexpected native install result path",
+            )
+            self.install_paths[member] = str(path)
+
+    def uninstall(self, member: str) -> None:
+        self.call(
+            "plugin",
+            "remove" if self.name == "codex" else "uninstall",
+            member + "@provingkit",
+            *(
+                ("--json",)
+                if self.name == "codex"
+                else ("--scope", "user", "--keep-data", "--json")
+            ),
+            action=True,
+        )
+
+    def enable(self, member: str, enabled: bool) -> None:
+        native_require(
+            self.name == "claude", "Codex persistent enablement control is unavailable"
+        )
+        self.call(
+            "plugin",
+            "enable" if enabled else "disable",
+            member + "@provingkit",
+            "--scope",
+            "user",
+            "--json",
+            action=True,
+        )
+
+
+def native_status(
+    native: NativeClient,
+    choice: dict,
+    root: Path,
+    marketplace: dict | None,
+    rows: dict,
+    receipt: dict,
+) -> dict:
+    members = {}
+    for member in choice["members"]:
+        row = rows.get(member)
+        installed = native.installed_path(member, row, receipt)
+        content, additions = "absent", {}
+        if installed.exists() or installed.is_symlink():
+            expected, actual = files(root / "plugins" / member), files(installed)
+            extra = set(actual) - set(expected)
+            allowed = {".codex-plugin/plugin.json"} if native.name == "codex" else set()
+            native_require(
+                extra <= allowed,
+                f"unknown installed files for {member}: {sorted(extra - allowed)}",
+            )
+            additions = {name: actual[name] for name in extra}
+            if additions:
+                adapter = json.loads(
+                    (installed / ".codex-plugin/plugin.json").read_text()
+                )
+                native_require(
+                    adapter.get("name") == member, "unrecognized native Codex adapter"
+                )
+            if native.name == "codex":
+                previous = receipt["native_additions"].get(member)
+                native_require(
+                    previous is None or previous == additions,
+                    f"native adapter drift for {member}",
+                )
+            content = (
+                "match"
+                if all(actual.get(name) == value for name, value in expected.items())
+                else "different"
+            )
+        members[member] = {
+            "content": content,
+            "enabled": row["enabled"] if row else "unknown",
+            "scope": choice["scope"] if row else "unknown",
+            "path": str(installed),
+            "registered": row is not None,
+            "native_additions": additions,
+        }
+    stable = native.home / ".local/share/provingkit/marketplaces" / choice["artifact"]
+    source_matches = (
+        native.source_path(marketplace) == str(stable)
+        and stable.exists()
+        and files(stable) == files(root)
+    )
+    converged = source_matches and all(
+        item["content"] == "match"
+        and item["registered"]
+        and item["enabled"] == choice["members"][name]["enabled"]
+        for name, item in members.items()
+    )
+    return {
+        "artifact": "verified",
+        "route": choice["route"],
+        "native_version": native.version,
+        "marketplace": marketplace,
+        "source_binding": "match" if source_matches else "different",
+        "members": members,
+        "actions": native.actions,
+        "automatic_updates": native.automatic_updates(),
+        "outcome": "converged" if converged else "incomplete",
+        "runtime_acceptance": "not_observed",
+    }
+
+
+def native_reconcile(
+    native: NativeClient,
+    home: Path,
+    choice: dict,
+    root: Path,
+    marketplace: dict | None,
+    rows: dict,
+    receipt: dict,
+) -> tuple[dict, dict]:
+    stable = home / ".local/share/provingkit/marketplaces" / choice["artifact"]
+    source = native.source_path(marketplace)
+    rebind = source is not None and source != str(stable)
+    if native.name == "claude" and source is not None:
+        settings = json.loads((native.config / "settings.json").read_text())
+        declared = (
+            settings.get("extraKnownMarketplaces", {})
+            .get("provingkit", {})
+            .get("source")
+        )
+        native_require(
+            declared == {"source": "directory", "path": source},
+            "source_transition_unavailable: user marketplace scope is ambiguous",
+        )
+    native_require(
+        source is not None or not rows,
+        "source_transition_unavailable: installed members have no marketplace",
+    )
+    unselected = set(rows) - set(choice["members"])
+    if rebind and native.name == "codex":
+        native_require(
+            not unselected,
+            "source_transition_unavailable: marketplace removal would affect unselected members",
+        )
+    catalog = json.loads((root / CATALOGS[choice["artifact"]]).read_text())
+    entries = {item["name"] for item in catalog["plugins"]}
+    native_require(
+        unselected <= entries,
+        "source_transition_unavailable: clean catalog omits an installed unselected member",
+    )
+    native_require(
+        not unselected or native.automatic_updates() != "enabled",
+        "source_transition_unavailable: automatic updates are enabled for unselected members",
+    )
+    native.receipt = receipt
+    native.sentinels = native.snapshot(rows, unselected)
+    current = native_status(native, choice, root, marketplace, rows, receipt)
+    changed = project_directory(root, stable, home, receipt)
+    if rebind:
+        receipt.setdefault("source_transitions", []).append(
+            {
+                "client": native.name,
+                "previous_source": marketplace,
+                "next_source": str(stable),
+                "unselected": native.sentinels,
+            }
+        )
+        if native.name == "codex":
+            for member in rows:
+                native.uninstall(member)
+            native.call(
+                "plugin", "marketplace", "remove", "provingkit", "--json", action=True
+            )
+        marketplace = None
+    if marketplace is None:
+        native.call(
+            "plugin",
+            "marketplace",
+            "add",
+            str(stable),
+            *(("--json",) if native.name == "codex" else ("--scope", "user")),
+            structured=native.name == "codex",
+            action=True,
+        )
+    elif changed and native.name == "claude":
+        native.call(
+            "plugin",
+            "marketplace",
+            "update",
+            "provingkit",
+            structured=False,
+            action=True,
+        )
+    for member, observed in current["members"].items():
+        removed = rebind and native.name == "codex"
+        if removed or observed["content"] != "match" or not observed["registered"]:
+            if (
+                not removed
+                and observed["registered"]
+                and observed["content"] == "different"
+            ):
+                native.uninstall(member)
+            native.install(member)
+            if native.name == "codex":
+                receipt["native_additions"].pop(member, None)
+        _, updated = native.observe()
+        enabled = choice["members"][member]["enabled"]
+        if member in updated and updated[member]["enabled"] != enabled:
+            native.enable(member, enabled)
+    marketplace, final_rows = native.observe()
+    native_require(
+        native.snapshot(final_rows, set(native.sentinels)) == native.sentinels,
+        "unselected native state changed; inspect the retained observation",
+    )
+    return marketplace, final_rows
+
+
+def receipt_path(home: Path) -> Path:
+    return home / ".local/state/provingkit/installations.json"
+
+
+def load_receipt(home: Path) -> dict:
+    path = receipt_path(home)
+    if not path.exists():
+        return {
+            "schema": "provingkit-installation-observation-v1",
+            "directories": {},
+            "native_additions": {},
+        }
+    receipt = json.loads(path.read_text())
+    native_require(
+        receipt["schema"] == "provingkit-installation-observation-v1",
+        "unrecognized observation receipt",
+    )
+    native_require(
+        isinstance(receipt["directories"], dict)
+        and isinstance(receipt["native_additions"], dict),
+        "unrecognized observation inventory",
+    )
+    native_require(
+        isinstance(receipt.get("native_paths", {}), dict)
+        and isinstance(receipt.get("source_transitions", []), list),
+        "unrecognized observation history",
+    )
+    return receipt
+
+
+def save_receipt(home: Path, receipt: dict, selection: dict, clients: dict) -> None:
+    receipt["selection"] = {
+        key: selection[key] for key in ("source", "adoption", "artifacts")
+    }
+    receipt["clients"] = clients
+    path = receipt_path(home)
+    raw = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+    if path.exists() and path.read_text() == raw:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
+        stream.write(raw)
+        temporary = Path(stream.name)
+    os.replace(temporary, path)
+
+
+def project_directory(
+    source: Path, destination: Path, home: Path, receipt: dict
+) -> bool:
+    """Replace only a previously observed projection, retaining its previous tree."""
+    expected = files(source)
+    key = destination.relative_to(home).as_posix()
+    present = destination.exists() or destination.is_symlink()
+    if present:
+        actual = files(destination)
+        if actual == expected:
+            receipt["directories"][key] = expected
+            return False
+        native_require(
+            receipt["directories"].get(key) == actual,
+            f"projection has unrecognized contents: {destination}",
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".provingkit-", dir=destination.parent))
+    shutil.copytree(source, stage, dirs_exist_ok=True)
+    if present:
+        backup_parent = home / ".local/state/provingkit/backups"
+        backup_parent.mkdir(parents=True, exist_ok=True)
+        backup = (
+            Path(tempfile.mkdtemp(prefix=destination.name + "-", dir=backup_parent))
+            / "previous"
+        )
+        os.replace(destination, backup)
+        try:
+            os.replace(stage, destination)
+        except OSError:
+            os.replace(backup, destination)
+            raise
+    else:
+        os.replace(stage, destination)
+    receipt["directories"][key] = expected
+    return True
+
+
+def cursor_reconcile(home: Path, choice: dict, root: Path, receipt: dict) -> None:
+    for member in choice["members"]:
+        installed = home / ".cursor/plugins/local" / member
+        project_directory(root / "plugins" / member, installed, home, receipt)
+
+
+def cursor_status(home: Path, choice: dict, root: Path) -> dict:
+    members = {}
+    for member in choice["members"]:
+        installed = home / ".cursor/plugins/local" / member
+        content = "absent"
+        if installed.exists() or installed.is_symlink():
+            content = (
+                "match"
+                if files(installed) == files(root / "plugins" / member)
+                else "different"
+            )
+        members[member] = {
+            "content": content,
+            "enabled": "unknown",
+            "scope": "user",
+            "path": str(installed),
+        }
+    complete = all(item["content"] == "match" for item in members.values())
+    return {
+        "artifact": "verified",
+        "route": choice["route"],
+        "members": members,
+        "materialization": "verified" if complete else "incomplete",
+        "runtime_acceptance": "pending",
+        "outcome": "materialized" if complete else "incomplete",
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Procedure: docs/agent-equipment/provingkit-installations.md in nisavid/dotfiles.",
+    )
+    parser.add_argument("command", choices=("validate", "status", "reconcile"))
+    parser.add_argument(
+        "--selection",
+        type=Path,
+        default=Path.home() / ".config/provingkit/selection-v1.json",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="Emit the JSON result (the default)."
+    )
+    args = parser.parse_args()
+    try:
+        selection = json.loads(args.selection.read_text())
+        profile = validate(selection)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        print(
+            json.dumps(
+                {"outcome": "invalid_selection", "message": str(error), "clients": {}}
+            )
+        )
+        return 64
+    report = {"outcome": "inactive", "clients": {}}
+    code = 0
+    if profile is not None:
+        if (
+            selection["host_platform"] != profile["platform"]
+            or profile["platform"]["os"] != "linux"
+            or platform.system() != "Linux"
+            or profile["platform"]["arch"]
+            != {"x86_64": "amd64", "aarch64": "arm64"}.get(
+                platform.machine(), platform.machine()
+            )
+        ):
+            report["outcome"] = "unsupported_platform"
+        elif args.command == "validate":
+            report["outcome"] = "valid"
+        else:
+            home = Path.home()
+            try:
+                roots = {
+                    target: verify_artifact(home, profile, target)
+                    for target in profile["artifacts"]
+                }
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                report.update(outcome="artifact_invalid", message=str(error))
+                print(json.dumps(report, sort_keys=True))
+                return 1
+            try:
+                receipt = load_receipt(home)
+            except (
+                Unavailable,
+                OSError,
+                ValueError,
+                KeyError,
+                TypeError,
+                AttributeError,
+            ) as error:
+                print(
+                    json.dumps(
+                        {
+                            "outcome": "receipt_unavailable",
+                            "message": str(error),
+                            "clients": {},
+                        }
+                    )
+                )
+                return 2
+            for client, choice in profile["clients"].items():
+                native = None
+                try:
+                    native_require(
+                        client == "claude"
+                        or all(item["enabled"] for item in choice["members"].values()),
+                        f"{client} persistent disable control is unavailable",
+                    )
+                    root = roots[choice["artifact"]]
+                    if client == "cursor":
+                        if args.command == "reconcile":
+                            cursor_reconcile(home, choice, root, receipt)
+                        observation = cursor_status(home, choice, root)
+                    else:
+                        native = NativeClient(client, home)
+                        marketplace, rows = native.observe()
+                        if args.command == "reconcile":
+                            marketplace, rows = native_reconcile(
+                                native, home, choice, root, marketplace, rows, receipt
+                            )
+                        observation = native_status(
+                            native, choice, root, marketplace, rows, receipt
+                        )
+                    report["clients"][client] = observation
+                    if client == "codex" and args.command == "reconcile":
+                        for member, observed in observation["members"].items():
+                            if (
+                                observed["content"] == "match"
+                                and observed["registered"]
+                            ):
+                                receipt["native_additions"][member] = observed[
+                                    "native_additions"
+                                ]
+                                receipt.setdefault("native_paths", {})[member] = (
+                                    observed["path"]
+                                )
+                except (
+                    Unavailable,
+                    OSError,
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    AttributeError,
+                    subprocess.TimeoutExpired,
+                ) as error:
+                    report["clients"][client] = {
+                        "artifact": "verified",
+                        "outcome": "unavailable",
+                        "message": str(error),
+                        "actions": native.actions if native else [],
+                    }
+            if args.command == "reconcile":
+                try:
+                    save_receipt(home, receipt, profile, report["clients"])
+                except OSError as error:
+                    report.update(outcome="receipt_unavailable", message=str(error))
+                    print(json.dumps(report, sort_keys=True))
+                    return 2
+            complete = all(
+                item["outcome"] in ("converged", "materialized")
+                for item in report["clients"].values()
+            )
+            report["outcome"], code = (
+                (("materialized" if "cursor" in profile["clients"] else "converged"), 0)
+                if complete
+                else ("incomplete", 2)
+            )
+    print(json.dumps(report, sort_keys=True))
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
