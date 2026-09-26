@@ -8,6 +8,11 @@ template="$source_root/dot_codex/private_AGENTS.md.tmpl"
 preflight_partial_name=ticket-tracker-preflight.tmpl
 preflight_partial="$source_root/.chezmoitemplates/$preflight_partial_name"
 claude_rule_template="$source_root/dot_claude/rules/ticket-tracker-preflight.md.tmpl"
+identity_partial_name=git-identity-defaults.tmpl
+identity_partial="$source_root/.chezmoitemplates/$identity_partial_name"
+checkpoint_partial_name=git-checkpointing.tmpl
+checkpoint_partial="$source_root/.chezmoitemplates/$checkpoint_partial_name"
+claude_git_rule_template="$source_root/dot_claude/rules/git-defaults.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
@@ -15,15 +20,18 @@ git_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-git-policy.XXXXXX")
 pr_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-pr-policy.XXXXXX")
 claude_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-rule.XXXXXX")
 claude_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-state.XXXXXX")
+claude_git_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-git-rule.XXXXXX")
+identity_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-identity-policy.XXXXXX")
 render_source_root=$source_root
 render_template=$template
 render_claude_rule_template=$claude_rule_template
+render_claude_git_rule_template=$claude_git_rule_template
 render_fixture=
 chmod 600 "$rendered"
 chmod 600 "$target_state"
 chmod 600 "$git_policy"
 chmod 600 "$pr_policy"
-trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
+trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -52,6 +60,14 @@ source_git_mode=$(git -C "$repo_root" ls-files --stage -- home/dot_codex/private
 [[ $(mode_of "$claude_rule_template") == 644 ]] || fail "Claude rule template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$claude_rule_template") == "$HOME/.claude/rules/ticket-tracker-preflight.md" ]] ||
   fail "Claude rule template targets the wrong file"
+for partial in "$identity_partial" "$checkpoint_partial"; do
+  [[ -f "$partial" ]] || fail "${partial:t} partial is missing"
+  [[ $(mode_of "$partial") == 644 ]] || fail "${partial:t} partial mode must be 0644"
+done
+[[ -f "$claude_git_rule_template" ]] || fail "Claude Git defaults rule template is missing"
+[[ $(mode_of "$claude_git_rule_template") == 644 ]] || fail "Claude Git defaults rule template mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_git_rule_template") == "$HOME/.claude/rules/git-defaults.md" ]] ||
+  fail "Claude Git defaults rule template targets the wrong file"
 
 if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   render_fixture=$(mktemp -d "${TMPDIR:-/tmp}/global-agents-source.XXXXXX")
@@ -64,9 +80,13 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   chmod 644 "$render_template"
   mkdir -m 700 "$render_fixture/.chezmoitemplates" "$render_fixture/dot_claude" "$render_fixture/dot_claude/rules"
   cp -p -- "$preflight_partial" "$render_fixture/.chezmoitemplates/$preflight_partial_name"
+  cp -p -- "$identity_partial" "$render_fixture/.chezmoitemplates/$identity_partial_name"
+  cp -p -- "$checkpoint_partial" "$render_fixture/.chezmoitemplates/$checkpoint_partial_name"
   cp -p -- "$source_root/.chezmoiignore" "$render_fixture/.chezmoiignore"
   render_claude_rule_template="$render_fixture/dot_claude/rules/${claude_rule_template:t}"
   cp -p -- "$claude_rule_template" "$render_claude_rule_template"
+  render_claude_git_rule_template="$render_fixture/dot_claude/rules/${claude_git_rule_template:t}"
+  cp -p -- "$claude_git_rule_template" "$render_claude_git_rule_template"
   render_source_root=$render_fixture
 fi
 
@@ -248,6 +268,61 @@ preflight_required=(
 
 for ((i = 1; i <= ${#preflight_required}; i++)); do
   grep -Fq -- "$preflight_required[$i]" "$pr_policy" || fail "preflight is missing required clause $i"
+done
+
+chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/git-defaults.md" > "$claude_state"
+[[ $(jq -r '.[".claude/rules/git-defaults.md"].perm' "$claude_state") == 420 ]] ||
+  fail "Claude Git defaults rule target mode is not 0644"
+
+(
+  cd "$render_source_root"
+  chezmoi -S "$render_source_root" execute-template < "$render_claude_git_rule_template" > "$claude_git_rule"
+)
+render_partial() {
+  (
+    cd "$render_source_root"
+    chezmoi -S "$render_source_root" execute-template "{{ includeTemplate \"$1\" . | trim }}"
+  )
+}
+identity=$(render_partial "$identity_partial_name")
+checkpoint=$(render_partial "$checkpoint_partial_name")
+[[ -n $identity && -n $checkpoint ]] || fail "Git defaults partials render empty"
+[[ $(<"$claude_git_rule") == "# Git Defaults"$'\n\n'"$identity"$'\n\n'"$checkpoint" ]] ||
+  fail "Claude Git defaults rule is not the heading plus the shared identity and checkpoint partials"
+
+awk '
+  $0 == "## Git Identity" { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+' "$rendered" > "$identity_policy"
+[[ $(<"$identity_policy") == *"$identity"* ]] || fail "Codex policy does not carry the identity defaults in Git Identity"
+[[ $(<"$git_policy") == *"$checkpoint"* ]] || fail "Codex policy does not carry the checkpoint rule in Git Checkpoints And Publication"
+
+for shared_text in "$identity" "$checkpoint"; do
+  [[ $(grep -Fo -- "$shared_text" "$rendered" | wc -l | tr -d ' ') == 1 ]] ||
+    fail "Codex policy must carry each Git defaults partial exactly once"
+  for source_template in "$template" "$claude_git_rule_template" "$repo_root/AGENTS.md"; do
+    ! grep -Fq -- "$shared_text" "$source_template" ||
+      fail "${source_template:t} duplicates Git defaults text instead of including the partial"
+  done
+done
+
+identity_required=(
+  "Ivan's default Git identity is \`Ivan D Vasin <ivan@nisavid.io>\`, his GitHub account is \`nisavid\`, and his default branch prefix is \`nisavid/\`."
+  'prefix new branches with `nisavid/`'
+)
+for ((i = 1; i <= ${#identity_required}; i++)); do
+  grep -Fq -- "$identity_required[$i]" "$identity_policy" || fail "identity defaults are missing required clause $i"
+done
+
+repo_agents_forbidden=(
+  'ivan@nisavid.io'
+  'Prefix branches with'
+  'GitHub account for repository mutations'
+  'checkpointing-and-publishing-git-work'
+)
+for phrase in $repo_agents_forbidden; do
+  ! grep -Fq -- "$phrase" "$repo_root/AGENTS.md" || fail "repository AGENTS.md carries personal Git policy"
 done
 
 development_line=$(grep -n '^## Development Work$' "$rendered" | cut -d: -f1)
