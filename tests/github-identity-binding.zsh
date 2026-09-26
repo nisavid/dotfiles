@@ -14,6 +14,10 @@ launch_tmpdir=$test_dir/tmp
 mkdir -p -- "$caller_gh_config" "$launch_tmpdir"
 print -r -- 'http_unix_socket: /nonexistent/secret-exec-test.sock' > "$caller_gh_config/config.yml"
 export FAKE_CALLER_GH_CONFIG_DIR=$caller_gh_config
+# The caller's own GH_TOKEN must reach the consumer untouched.
+caller_gh_value=caller-gh-value
+typeset -a caller_gh_environment=(GH_TOKEN=$caller_gh_value
+  FAKE_EXPECTED_TARGET_GH_TOKEN=$caller_gh_value)
 
 fail() {
   print -u2 -r -- "$1"
@@ -59,6 +63,7 @@ cat > "$bin_dir/target" <<'EOF'
 print -r -- target >> "$FAKE_CALLS_LOG"
 [[ ${GH_CONFIG_DIR-} == $FAKE_CALLER_GH_CONFIG_DIR ]] || exit 75
 [[ ${HTTPS_PROXY-} == http://127.0.0.1:9 && ${SSL_CERT_FILE-} == /nonexistent/ca.pem ]] || exit 77
+[[ ${GH_TOKEN-unset} == ${FAKE_EXPECTED_TARGET_GH_TOKEN-unset} ]] || exit 78
 [[ $GITHUB_PERSONAL_ACCESS_TOKEN == fixture-token ]] || exit 72
 print -r -- target-ran
 EOF
@@ -95,6 +100,7 @@ launch() {
     SSL_CERT_FILE=/nonexistent/ca.pem SSL_CERT_DIR=/nonexistent \
     TMPDIR=$launch_tmpdir \
     FAKE_GITHUB_LOGIN=$login \
+    "${caller_gh_environment[@]}" \
     "${launch_environment[@]}" \
     "$launcher" "$@"
 }
@@ -128,6 +134,11 @@ isolated_gh_config=$(<"$FAKE_GH_CONFIG_LOG")
   fail 'the identity check must use and then remove a private gh configuration'
 [[ -z $(print -rl -- $launch_tmpdir/*(ND)) ]] ||
   fail 'the identity check must not leave temporary files'
+caller_gh_environment=()
+[[ $(run_launcher) == target-ran ]] ||
+  fail 'without a caller GH_TOKEN the consumer must not receive one'
+caller_gh_environment=(GH_TOKEN=$caller_gh_value
+  FAKE_EXPECTED_TARGET_GH_TOKEN=$caller_gh_value)
 # The private configuration must sit where no other user can swap it.
 chmod 777 "$launch_tmpdir"
 expect_fail_closed 'GitHub identity self-check failed' \
