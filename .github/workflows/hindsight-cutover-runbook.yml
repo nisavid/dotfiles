@@ -1,0 +1,83 @@
+name: Hindsight cutover runbook
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/hindsight-cutover-runbook.yml
+      - home/.chezmoidata/hindsight.toml
+      - scripts/hindsight-control-plane-cutover.zsh
+      - tests/hindsight-cutover-runbook.zsh
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: hindsight cutover runbook
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: Check out dotfiles
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: dotfiles
+          persist-credentials: false
+
+      - name: Read the Hindsight release pin
+        id: pin
+        shell: bash
+        working-directory: dotfiles
+        run: |
+          set -euo pipefail
+          release_commit=$(
+            sed -nE \
+              's/^releaseCommit[[:space:]]*=[[:space:]]*"([^"]*)"[[:space:]]*$/\1/p' \
+              home/.chezmoidata/hindsight.toml
+          )
+          if [[ ! "$release_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::releaseCommit in home/.chezmoidata/hindsight.toml is not one 40-character commit SHA"
+            exit 1
+          fi
+          echo "release-commit=$release_commit" >>"$GITHUB_OUTPUT"
+
+      - name: Check out the pinned agents release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: nisavid/agents
+          ref: ${{ steps.pin.outputs.release-commit }}
+          path: agents
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify the agents checkout matches the pin
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ steps.pin.outputs.release-commit }}
+        run: |
+          set -euo pipefail
+          head=$(git -C agents rev-parse HEAD)
+          if [[ "$head" != "$RELEASE_COMMIT" ]]; then
+            echo "::error::agents checkout is at $head, not the pinned $RELEASE_COMMIT"
+            exit 1
+          fi
+          changes=$(git -C agents status --porcelain)
+          if [[ -n "$changes" ]]; then
+            echo "::error::agents checkout at the pinned commit is not clean"
+            exit 1
+          fi
+
+      - name: Run the cutover runbook suite
+        working-directory: dotfiles
+        env:
+          HINDSIGHT_AGENTS_ROOT: ${{ github.workspace }}/agents
+          # The cutover script rejects helpers under any symlinked directory,
+          # and the macOS default TMPDIR sits under the /var symlink.
+          TMPDIR: ${{ runner.temp }}
+        run: zsh tests/hindsight-cutover-runbook.zsh

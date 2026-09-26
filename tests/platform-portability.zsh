@@ -27,13 +27,34 @@ assert_line() {
   grep -Fqx -- "$line" "$file" || fail "missing ignore entry: $line"
 }
 
-workflow_concurrency=$(
-  awk '
-    $0 == "concurrency:" { in_block = 1; next }
+# Print one top-level block of a workflow, without blank lines.
+workflow_block() {
+  awk -v block="$2:" '
+    $0 == block { in_block = 1; next }
     in_block && /^[^[:space:]]/ { exit }
-    in_block { print }
-  ' "$workflow"
-)
+    in_block && NF { print }
+  ' "$1"
+}
+
+# Print one step's `run: |` script with its YAML indentation removed.
+# run_block in tests/ci-test-group.zsh parses steps the same way.
+workflow_step_run() {
+  awk -v step="- name: $2" '
+    function indent(s) { match(s, /^ */); return RLENGTH }
+    !in_step && substr($0, indent($0) + 1) == step {
+      in_step = 1; step_indent = indent($0); next
+    }
+    in_step && !in_run && /^ *run: \|$/ { in_run = 1; run_indent = indent($0); next }
+    in_step && !in_run && /^ *- name: / && indent($0) == step_indent { exit }
+    in_run {
+      if ($0 ~ /^ *$/) next
+      if (indent($0) <= run_indent) exit
+      sub(/^ +/, ""); print
+    }
+  ' "$1"
+}
+
+workflow_concurrency=$(workflow_block "$workflow" concurrency)
 [[ $workflow_concurrency == *'group: ${{ github.workflow }}-${{ github.ref }}'* ]] ||
   fail 'platform workflow does not group superseded runs by workflow and ref'
 [[ $workflow_concurrency == *'cancel-in-progress: true'* ]] ||
@@ -203,6 +224,120 @@ print(
 grep -Eq -- "$admission_signer_pattern" \
   "$repo_root/.github/age-admission/allowed_signers" ||
   fail 'age admission allowed-signers configuration lacks the owner principal'
+
+runbook_workflow=$repo_root/.github/workflows/hindsight-cutover-runbook.yml
+expected_runbook_triggers=$(
+  print -rl -- \
+    '  pull_request:' \
+    '    paths:' \
+    '      - .github/workflows/hindsight-cutover-runbook.yml' \
+    '      - home/.chezmoidata/hindsight.toml' \
+    '      - scripts/hindsight-control-plane-cutover.zsh' \
+    '      - tests/hindsight-cutover-runbook.zsh' \
+    '  push:' \
+    '    branches:' \
+    '      - main'
+)
+[[ $(workflow_block "$runbook_workflow" on) == "$expected_runbook_triggers" ]] ||
+  fail 'runbook workflow does not run for its inputs on pull requests and on main'
+[[ $(workflow_block "$runbook_workflow" permissions) == '  contents: read' ]] ||
+  fail 'runbook workflow does not restrict its token to reading contents'
+grep -Fq 'runs-on: macos-14' "$runbook_workflow" ||
+  fail 'runbook workflow does not run on macos-14'
+grep -Fq 'repository: nisavid/agents' "$runbook_workflow" ||
+  fail 'runbook workflow does not check out the public agents repository'
+grep -Fq 'ref: ${{ steps.pin.outputs.release-commit }}' "$runbook_workflow" ||
+  fail 'runbook workflow does not check out agents at the validated pin'
+[[ $(grep -c 'uses: actions/checkout@' "$runbook_workflow") == \
+  $(grep -c 'persist-credentials: false' "$runbook_workflow") ]] ||
+  fail 'runbook workflow persists checkout credentials'
+grep -Fq 'HINDSIGHT_AGENTS_ROOT: ${{ github.workspace }}/agents' "$runbook_workflow" ||
+  fail 'runbook workflow does not point the suite at the pinned agents checkout'
+grep -Fq 'run: zsh tests/hindsight-cutover-runbook.zsh' "$runbook_workflow" ||
+  fail 'runbook workflow does not run the cutover runbook suite'
+
+runbook_pin_step=$test_root/runbook-pin-step.bash
+workflow_step_run "$runbook_workflow" 'Read the Hindsight release pin' \
+  >"$runbook_pin_step"
+grep -Fq 'home/.chezmoidata/hindsight.toml' "$runbook_pin_step" ||
+  fail 'runbook workflow does not read the Hindsight release pin'
+
+# Run the extracted pin step against a hindsight.toml with the given body.
+runbook_pin() {
+  local case_root=$test_root/runbook-pin/$1 body=$2
+  mkdir -p -- "$case_root/home/.chezmoidata"
+  print -r -- "$body" >"$case_root/home/.chezmoidata/hindsight.toml"
+  : >"$case_root/output"
+  (cd -- "$case_root" && GITHUB_OUTPUT=$case_root/output bash "$runbook_pin_step") \
+    >/dev/null 2>&1
+}
+
+fixture_pin=0123456789abcdef0123456789abcdef01234567
+runbook_pin valid $'[hindsight]\nreleaseCommit = "'$fixture_pin$'"' ||
+  fail 'runbook workflow rejected a 40-character release pin'
+[[ $(<"$test_root/runbook-pin/valid/output") == "release-commit=$fixture_pin" ]] ||
+  fail 'runbook workflow did not publish the validated release pin'
+typeset -A invalid_runbook_pins=(
+  short 'releaseCommit = "0123456789abcdef0123456789abcdef0123456"'
+  long 'releaseCommit = "0123456789abcdef0123456789abcdef012345678"'
+  uppercase 'releaseCommit = "0123456789ABCDEF0123456789abcdef01234567"'
+  branch 'releaseCommit = "main"'
+  missing 'releaseVersion = "2026.07.23+0123456"'
+  duplicate "releaseCommit = \"$fixture_pin\""$'\n'"releaseCommit = \"$fixture_pin\""
+)
+for invalid_name invalid_body in "${(@kv)invalid_runbook_pins}"; do
+  if runbook_pin "$invalid_name" "$invalid_body"; then
+    fail "runbook workflow accepted an invalid release pin: $invalid_name"
+  fi
+  [[ ! -s $test_root/runbook-pin/$invalid_name/output ]] ||
+    fail "runbook workflow published an invalid release pin: $invalid_name"
+done
+(cd -- "$repo_root" &&
+  GITHUB_OUTPUT=$test_root/runbook-pin/repository.output bash "$runbook_pin_step") \
+  >/dev/null 2>&1 ||
+  fail 'the Hindsight release pin is not a 40-character commit SHA'
+
+runbook_verify_step=$test_root/runbook-verify-step.bash
+workflow_step_run "$runbook_workflow" 'Verify the agents checkout matches the pin' \
+  >"$runbook_verify_step"
+runbook_verify_root=$test_root/runbook-verify
+mkdir -p -- "$runbook_verify_root/agents"
+
+# Keep the agents fixture independent of the caller's Git configuration.
+runbook_git() {
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+    git -C "$runbook_verify_root/agents" "$@"
+}
+
+# Run the extracted verification step against the fixture for one pin.
+runbook_verify() {
+  (cd -- "$runbook_verify_root" &&
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 RELEASE_COMMIT=$1 \
+      bash "$runbook_verify_step") >/dev/null 2>&1
+}
+
+runbook_git -c init.defaultBranch=main init -q
+print -r -- fixture >"$runbook_verify_root/agents/README"
+runbook_git add README
+runbook_git -c user.name=fixture -c user.email=fixture@example.invalid \
+  commit -q -m fixture
+runbook_head=$(runbook_git rev-parse HEAD)
+runbook_verify "$runbook_head" ||
+  fail 'runbook workflow rejected a clean agents checkout at the pin'
+if runbook_verify "${runbook_head//?/0}"; then
+  fail 'runbook workflow accepted an agents checkout away from the pin'
+fi
+print -r -- untracked >"$runbook_verify_root/agents/untracked"
+if runbook_verify "$runbook_head"; then
+  fail 'runbook workflow accepted a dirty agents checkout'
+fi
+rm -- "$runbook_verify_root/agents/untracked"
+print -r -- 'not an index' >"$runbook_verify_root/agents/.git/index"
+[[ $(runbook_git rev-parse HEAD) == "$runbook_head" ]] ||
+  fail 'agents fixture lost HEAD with a corrupt index'
+if runbook_verify "$runbook_head"; then
+  fail 'runbook workflow treated a failed status check as clean'
+fi
 
 daybreak_binding_template=$repo_root/home/dot_agents/private_daybreak-account-bindings.md.tmpl
 daybreak_encryption_doc=$repo_root/docs/ENCRYPTION.md
