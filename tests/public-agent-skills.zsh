@@ -84,6 +84,30 @@ test_context7() {
   assert_symlink_source "$link" '../../.agents/skills/context7-mcp'
 }
 
+test_developing_shell_scripts() {
+  local skill="$repo_dir/home/dot_agents/skills/developing-shell-scripts/SKILL.md"
+  local details="$repo_dir/home/dot_agents/skills/developing-shell-scripts/references/operational-details.md"
+  local link="$repo_dir/home/dot_claude/skills/symlink_developing-shell-scripts"
+
+  assert_skill_frontmatter "$skill" developing-shell-scripts
+  assert_contains "$skill" "In Zsh scripts, errexit inside a function skips zsh's EXIT trap" 'Shell skill must state the in-function errexit cleanup gap'
+  assert_contains "$skill" 'failure helpers should `exit`, not `return`' 'Shell skill must require exit in failure helpers'
+  assert_contains "$skill" 'other in-function command failures need errexit off and `err_return`, or an equivalent,' 'Shell skill must require errexit off plus err_return for other in-function failures'
+  assert_contains "$skill" 'in every function between the failure and top level' 'Shell skill must require the err_return path along the whole call chain'
+  assert_contains "$skill" '`emulate -L zsh` turns errexit off, so do not re-enable it in those functions' 'Shell skill must forbid re-enabling errexit on the err_return path'
+  assert_contains "$details" 'In Zsh scripts, make failure helpers `exit`, not `return`' 'Shell details must require exit in failure helpers in Zsh scripts'
+  assert_contains "$details" "skips the script's top-level \`trap ... EXIT\` or \`TRAPEXIT\` when \`errexit\` fires inside a function's scope" 'Shell details must state which EXIT handlers errexit skips'
+  assert_contains "$details" "including on the function's own \`return 1\`" 'Shell details must state that a helper return trips errexit'
+  assert_contains "$details" 'never runs `zshexit` on an `errexit` exit' 'Shell details must state that zshexit never runs on errexit'
+  assert_contains "$details" '`exit` from inside a function runs the EXIT trap and `zshexit`' 'Shell details must state that exit runs the EXIT handlers'
+  assert_contains "$details" 'turn `errexit` off with `emulate -L zsh` and set `err_return`' 'Shell details must explain the err_return cleanup path'
+  assert_contains "$details" 'every function between the failure and top level' 'Shell details must require err_return along the whole call chain'
+  assert_contains "$details" 'do not re-enable `errexit` in those functions, because `err_return` does not help while it is on' 'Shell details must warn that err_return does not help while errexit is on'
+  assert_contains "$details" '`emulate -L zsh` without `err_return` continues past the failure' 'Shell details must warn that emulate -L zsh alone ignores the failure'
+  assert_contains "$details" 'follow the [`errexit` rules](#zsh) so command failures inside functions do not skip the EXIT trap' 'Shell error handling must point to the errexit rules'
+  assert_symlink_source "$link" '../../.agents/skills/developing-shell-scripts'
+}
+
 test_skill_creator_adapter() {
   local adapter_dir="$repo_dir/home/dot_agents/skills/adapting-skill-creator-to-harnesses"
 
@@ -498,6 +522,13 @@ case "${1:-all}" in
       "$HOME/.claude/skills/context7-mcp"
     )
     ;;
+  developing-shell-scripts)
+    test_developing_shell_scripts
+    projection_targets=(
+      "$HOME/.agents/skills/developing-shell-scripts"
+      "$HOME/.claude/skills/developing-shell-scripts"
+    )
+    ;;
   git-publication)
     test_skill_creator_adapter
     test_git_publication
@@ -532,6 +563,7 @@ case "${1:-all}" in
     ;;
   all)
     test_context7
+    test_developing_shell_scripts
     test_skill_creator_adapter
     test_git_publication
     test_pr_publication
@@ -540,6 +572,8 @@ case "${1:-all}" in
     projection_targets=(
       "$HOME/.agents/skills/context7-mcp"
       "$HOME/.claude/skills/context7-mcp"
+      "$HOME/.agents/skills/developing-shell-scripts"
+      "$HOME/.claude/skills/developing-shell-scripts"
       "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
       "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
       "$HOME/.agents/skills/graphite"
@@ -554,7 +588,7 @@ case "${1:-all}" in
     )
     ;;
   *)
-    fail 'usage: public-agent-skills.zsh [context7|git-publication|pr-publication|model-selection|review-output|all]'
+    fail 'usage: public-agent-skills.zsh [context7|developing-shell-scripts|git-publication|pr-publication|model-selection|review-output|all]'
     ;;
 esac
 
@@ -567,7 +601,7 @@ mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/sk
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models reviewing-others-prs; do
+  choosing-agent-models reviewing-others-prs developing-shell-scripts; do
   cp -R -- \
     "$repo_dir/home/dot_agents/skills/$skill" \
     "$isolated_source/dot_agents/skills/$skill"
@@ -576,7 +610,7 @@ done
 for link in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models; do
+  choosing-agent-models developing-shell-scripts; do
   cp -- \
     "$repo_dir/home/dot_claude/skills/symlink_$link" \
     "$isolated_source/dot_claude/skills/symlink_$link"
@@ -602,7 +636,7 @@ done
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models; do
+  choosing-agent-models developing-shell-scripts; do
   canonical="$isolated_home/.agents/skills/$skill"
   link="$isolated_home/.claude/skills/$skill"
   if [[ -e "$canonical" || -e "$link" || -L "$link" ]]; then
