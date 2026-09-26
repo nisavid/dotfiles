@@ -554,4 +554,30 @@ EOF' >"$metadata_acl_bin/getfacl"
     fail 'ACL restoration did not disable symlink traversal'
 fi
 
+legacy_git_home=$test_root/legacy-git-home
+legacy_git_guard=$repo_root/home/run_before_refuse-legacy-gitconfig.sh
+mkdir -p "$legacy_git_home"
+CHEZMOI_DEST_DIR=$legacy_git_home /bin/sh "$legacy_git_guard" ||
+  fail 'Legacy Git config guard refused a home without ~/.gitconfig'
+touch "$legacy_git_home/.gitconfig"
+if CHEZMOI_DEST_DIR=$legacy_git_home /bin/sh "$legacy_git_guard" 2>/dev/null; then
+  fail 'Legacy Git config guard accepted ~/.gitconfig'
+fi
+print -r -- $'[coderabbit]\n\tmachineId = cli/fixture-id' > "$legacy_git_home/.gitconfig"
+if legacy_git_message=$(
+  CHEZMOI_DEST_DIR=$legacy_git_home /bin/sh "$legacy_git_guard" 2>&1
+); then
+  fail 'Legacy Git config guard accepted ~/.gitconfig with a CodeRabbit ID'
+fi
+[[ ${${(f)legacy_git_message}[-1]} == *'git config --file'*coderabbit.machineId* ]] ||
+  fail 'Legacy Git config guard did not print a CodeRabbit ID copy command'
+/bin/sh -c "${${(f)legacy_git_message}[-1]}"
+[[ $(git config --file "$legacy_git_home/.config/git/config" coderabbit.machineId) == cli/fixture-id ]] ||
+  fail 'Legacy Git config guard did not print a working CodeRabbit ID copy command'
+rm -- "$legacy_git_home/.gitconfig"
+ln -s missing "$legacy_git_home/.gitconfig"
+if CHEZMOI_DEST_DIR=$legacy_git_home /bin/sh "$legacy_git_guard" 2>/dev/null; then
+  fail 'Legacy Git config guard accepted a dangling ~/.gitconfig symlink'
+fi
+
 print -r -- 'platform portability: PASS'

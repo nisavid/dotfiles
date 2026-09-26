@@ -7,6 +7,17 @@
 {{- end -}}
 {{- $identityName := default $bindingData.selection.default (index $bindingData.selection.byHostname .chezmoi.hostname) -}}
 {{- $identity := index $bindingData.identities $identityName -}}
+{{- /* CodeRabbit reads and writes coderabbit.machineId with plain `git config --global`,
+       which skips include.path, so the ID must live in this file. Carry forward the one
+       it wrote into the deployed copy. */ -}}
+{{- $deployedConfig := joinPath .chezmoi.destDir ".config/git/config" -}}
+{{- $coderabbitMachineId := "" -}}
+{{- if stat $deployedConfig -}}
+{{-   $coderabbitMachineId = output "git" "config" "--file" $deployedConfig "--default" "" "coderabbit.machineId" | trim -}}
+{{- end -}}
+{{- if and $coderabbitMachineId (not (regexMatch "^[A-Za-z0-9._:/-]+$" $coderabbitMachineId)) -}}
+{{-   fail (printf "%s has an unexpected coderabbit.machineId; fix or remove it, then apply again" $deployedConfig) -}}
+{{- end -}}
 [user]
 	name = Ivan D Vasin
 	email = {{ $identity.email }}
@@ -49,14 +60,20 @@
 	br = branch
 	brc = symbolic-ref --short HEAD
 	brd = branch --delete
+	brdf = branch --delete --force
+	brdmg = branch-delete-merged
+	brm = branch --move
+	brmf = branch --move --force
 	cfg = config
 	cfgg = config --global
 	cfgge = config --global --edit
 	cfgl = config --local
 	cfgle = config --local --edit
+	cfg-vsc-mbc = config-vscode-merge-base-current
 	chp = cherry-pick
 	chpa = cherry-pick --abort
 	chpc = cherry-pick --continue
+	chps = cherry-pick --skip
 	ci = commit
 	cm = commit
 	cia = commit --amend
@@ -80,7 +97,7 @@
 	desc = describe --contains --dirty --broken --tags
 	desca = describe --contains --dirty --broken --all
 	ds = diff --break-rewrites=/90 --find-renames=30 --find-copies=30 --stat
-	f = fetch
+	f = fetch --prune
 	g = grep
 	gbl = grep-blame
 	gi = gui
@@ -90,12 +107,15 @@
 	l = log
 	lg = log
 	lgd = log --patch
-	lgd = log --patch
 	lgd1 = log --patch -1
+	lgdma = !git log --patch "$(git default-branch)"..
 	lgs = log --stat
 	lgs1 = log --stat -1
 	lgsd = log --stat --patch
 	lgsd1 = log --stat --patch -1
+	lgsdma = !git log --stat --patch "$(git default-branch)"..
+	lgsma = !git log --stat "$(git default-branch)"..
+	lma = !git log "$(git default-branch)"..
 	lo = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S'
 	lol = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph
 	lol1 = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph -1
@@ -103,11 +123,15 @@
 	lolma = !git log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph "$(git default-branch)"..HEAD
 	ls = ls-files
 	mg = merge
+	mg- = merge @{-1}
 	mga = merge --abort
 	mgb = merge-base
+	mgc = merge --continue
 	mgf = merge --ff-only
+	mgf- = merge --ff-only @{-1}
 	mgma = !git merge "$(git default-branch)"
 	mgnf = merge --no-ff
+	mgnf- = merge --no-ff @{-1}
 	mo = remote
 	pl = pull
 	prune-tags = !git tag --list | xargs git tag --delete && git fetch --tags
@@ -117,14 +141,20 @@
 	psct = push-current-tag
 	psf = push --force
 	pso = push origin
+	psod = push origin --delete
+	psoh = push origin --set-upstream HEAD
+	psou = push origin --set-upstream
 	r = restore
 	rb = rebase
+	rb- = rebase @{-1}
 	rba = rebase --abort
 	rbc = rebase --continue
 	rbi = rebase --interactive
+	rbi- = rebase --interactive @{-1}
 	rbima = !git rebase --interactive "$(git default-branch)"
 	rbiup = rebase --interactive @{upstream}
 	rbma = !git rebase "$(git default-branch)"
+	rbs = rebase --skip
 	rmc = rm --cached
 	rs = reset
 	rsh = reset --hard
@@ -162,6 +192,9 @@
 	ssps = stash push
 	sspsk = stash push --keep-index
 	sspsku = stash push --keep-index --include-untracked
+	sspsp = stash push --patch
+	sspspnk = stash push --patch --no-keep-index
+	sspss = stash push --staged
 	sspsu = stash push --include-untracked
 	sss = stash show
 	sss1 = stash show stash@{1}
@@ -238,6 +271,22 @@
 [credential "https://gist.github.com"]
 	helper =
 	helper = !{{ lookPath "gh" }} auth git-credential
+{{- if lookPath "glab" }}
+[credential "https://gitlab.com"]
+	helper =
+	helper = !{{ lookPath "glab" }} auth git-credential
+{{- end }}
+{{- if lookPath "git-credential-oauth" }}
+[credential "https://codeberg.org"]
+	helper =
+	helper = cache --timeout 21600
+	helper = oauth
+{{- end }}
+[filter "lfs"]
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true
 [color "diff-highlight"]
 	oldNormal = red bold
 	oldHighlight = red bold 52
@@ -253,5 +302,9 @@
 	path = personal.inc
 [includeIf "gitdir:~/.local/share/chezmoi/"]
 	path = personal.inc
+{{- if $coderabbitMachineId }}
+[coderabbit]
+	machineId = {{ $coderabbitMachineId }}
+{{- end }}
 [include]
 	path = config.local

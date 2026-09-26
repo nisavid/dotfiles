@@ -20,6 +20,7 @@ fixture_data='{
   "chezmoi": {
     "os": "linux",
     "homeDir": "'"${fixture_home}"'",
+    "destDir": "'"${fixture_home}"'",
     "hostname": "fixture-workstation"
   },
   "gitIdentity": {
@@ -52,6 +53,50 @@ chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
   < home/dot_config/git/config.tmpl > "$git_config"
 rg -F 'email = developer@example.invalid' "$git_config" >/dev/null ||
   fail 'Git config did not select the synthetic host identity'
+git config --file "$git_config" --list >/dev/null ||
+  fail 'Rendered Git config does not parse'
+[[ $(git config --file "$git_config" filter.lfs.required) == true ]] ||
+  fail 'Git config does not require the LFS filter'
+[[ -z $(git config --file "$git_config" --default '' coderabbit.machineId) ]] ||
+  fail 'Git config invented a CodeRabbit machine ID'
+
+deployed_git_config=$fixture_home/.config/git/config
+mkdir -p -- "${deployed_git_config:h}"
+print -r -- $'[coderabbit]\n\tmachineId = cli/fixture-id' > "$deployed_git_config"
+chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
+  < home/dot_config/git/config.tmpl > "$git_config"
+[[ $(git config --file "$git_config" coderabbit.machineId) == cli/fixture-id ]] ||
+  fail 'Git config dropped the deployed CodeRabbit machine ID'
+print -r -- $'[coderabbit]\n\tmachineId = "fixture id"' > "$deployed_git_config"
+if chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
+  < home/dot_config/git/config.tmpl >/dev/null 2>&1; then
+  fail 'Git config accepted a malformed CodeRabbit machine ID'
+fi
+rm -- "$deployed_git_config"
+
+chezmoi_bin=$(command -v chezmoi)
+helper_bin=$test_dir/helper-bin
+mkdir -p -- "$helper_bin" "$test_dir/no-helper-bin"
+# lookPath returns a cleaned path, and macOS's TMPDIR ends in a slash.
+helper_bin=${helper_bin:A}
+for helper in glab git-credential-oauth; do
+  print -r -- '#!/bin/sh' > "$helper_bin/$helper"
+  chmod 755 "$helper_bin/$helper"
+done
+PATH=$helper_bin "$chezmoi_bin" -S "$repo_root/home" execute-template \
+  --override-data "$fixture_data" < home/dot_config/git/config.tmpl > "$git_config"
+[[ $(git config --file "$git_config" --get-all credential.https://gitlab.com.helper) == \
+  $'\n!'"$helper_bin/glab auth git-credential" ]] ||
+  fail 'Git config does not route gitlab.com credentials through glab'
+[[ $(git config --file "$git_config" --get-all credential.https://codeberg.org.helper) == \
+  $'\ncache --timeout 21600\noauth' ]] ||
+  fail 'Git config does not route codeberg.org credentials through git-credential-oauth'
+PATH=$test_dir/no-helper-bin "$chezmoi_bin" -S "$repo_root/home" execute-template \
+  --override-data "$fixture_data" < home/dot_config/git/config.tmpl > "$git_config"
+[[ -z $(git config --file "$git_config" --get-all credential.https://gitlab.com.helper) ]] ||
+  fail 'Git config configured a gitlab.com helper without glab'
+[[ -z $(git config --file "$git_config" --get-all credential.https://codeberg.org.helper) ]] ||
+  fail 'Git config configured a codeberg.org helper without git-credential-oauth'
 
 personal_include=$test_dir/personal-include
 chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
