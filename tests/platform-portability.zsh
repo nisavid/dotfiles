@@ -8,9 +8,10 @@ workflow=$repo_root/.github/workflows/platform-portability.yml
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/platform-portability.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "FAIL: $*"
-  return 1
+  exit 1
 }
 
 mode_of() {

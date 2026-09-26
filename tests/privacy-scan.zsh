@@ -13,7 +13,8 @@ run_failed_scan() {
   scan_output=$(python3 "$scanner" "$@" 2>&1)
   scan_status=$?
   set -e
-  (( scan_status != 0 ))
+  # exit, not return: errexit inside a function skips zsh's EXIT trap.
+  (( scan_status != 0 )) || exit 1
 }
 
 mkdir -p "$test_root/clean" "$test_root/unsafe"
