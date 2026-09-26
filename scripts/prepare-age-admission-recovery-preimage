@@ -141,6 +141,27 @@ PROTECTION_KEYS = {
     "allow_fork_syncing",
 }
 
+# GitHub embeds whole repository and App records in pull and check-run responses.
+# These fields track incidental repository activity and App record refresh times.
+# App permissions, events, and all other unlisted fields stay bound.
+# The relevant-state comparison validates their shape and then drops them; the
+# raw captures keep them, bound by digest.
+INCIDENTAL_REPOSITORY_FIELDS = frozenset(
+    {
+        "forks",
+        "forks_count",
+        "open_issues",
+        "open_issues_count",
+        "pushed_at",
+        "size",
+        "stargazers_count",
+        "updated_at",
+        "watchers",
+        "watchers_count",
+    }
+)
+INCIDENTAL_APP_FIELDS = frozenset({"updated_at"})
+
 
 class PreimageError(ValueError):
     """The preimage could not be established without broadening authority."""
@@ -1589,6 +1610,43 @@ def _validate_snapshot(
     return value
 
 
+def _discard_incidental(record: dict[str, object], fields: frozenset[str]) -> None:
+    for field in sorted(fields & set(record)):
+        value = record.pop(field)
+        if field.endswith("_at"):
+            valid = value is None or (
+                isinstance(value, str)
+                and GITHUB_TIMESTAMP.fullmatch(value) is not None
+            )
+        else:
+            valid = _is_int(value) and value >= 0
+        if not valid:
+            raise PreimageError("incidental GitHub metadata is malformed")
+
+
+def _relevant_observation(snapshot: dict[str, object]) -> dict[str, object]:
+    relevant = copy.deepcopy(snapshot)
+    pull = relevant["pull"]
+    if not isinstance(pull, dict):
+        raise PreimageError("pull request response is invalid")
+    for side in ("base", "head"):
+        branch = pull.get(side)
+        repository = branch.get("repo") if isinstance(branch, dict) else None
+        if not isinstance(repository, dict):
+            raise PreimageError("pull request repository identity is invalid")
+        _discard_incidental(repository, INCIDENTAL_REPOSITORY_FIELDS)
+    check_runs = relevant["check_runs"]
+    runs = check_runs.get("check_runs") if isinstance(check_runs, dict) else None
+    if not isinstance(runs, list):
+        raise PreimageError("check runs are invalid")
+    for run in runs:
+        app = run.get("app") if isinstance(run, dict) else None
+        if not isinstance(app, dict):
+            raise PreimageError("check run identity is invalid")
+        _discard_incidental(app, INCIDENTAL_APP_FIELDS)
+    return relevant
+
+
 def _write_payload(
     directory: int,
     filename: str,
@@ -1731,8 +1789,8 @@ def _prepare(request_path: Path, state_path: Path) -> None:
         if gh is None or not os.path.isabs(gh):
             raise PreimageError("GitHub CLI is unavailable")
         runner = CaptureRunner(capture_directory, gh)
-        first = _collect_snapshot(runner, "a", request)
-        second = _collect_snapshot(runner, "b", request)
+        first = _relevant_observation(_collect_snapshot(runner, "a", request))
+        second = _relevant_observation(_collect_snapshot(runner, "b", request))
         if _json_bytes(first) != _json_bytes(second):
             raise PreimageError("GitHub evidence changed between complete observations")
 

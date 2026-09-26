@@ -55,6 +55,15 @@ TRUSTED_REVIEWERS = [
     {"id": CODERABBIT_STATUS_CREATOR_ID, "login": CODERABBIT_STATUS_CREATOR_LOGIN}
 ]
 RETIRED_REQUIRED_CHECK = {"context": "Greptile Review", "app_id": 867647}
+RELEVANT_STATE_DRIFTS = (
+    "approval-drift",
+    "check-run-identity-drift",
+    "pull-discussion-drift",
+    "pull-title-drift",
+    "repository-setting-drift",
+    "status-drift",
+    "thread-drift",
+)
 REQUEST_SCHEMA = "issue286-recovery-preimage-request/v2"
 READY_SCHEMA = "issue286-recovery-preimage-ready/v2"
 INTERRUPTED_SCHEMA = "issue286-recovery-preimage-interrupted/v1"
@@ -835,6 +844,56 @@ class RecoveryPreimageTests(unittest.TestCase):
                     for run in value["check_runs"]:
                         if run["name"] == {EXCEPTION_CONTEXT!r}:
                             run["conclusion"] = "success"
+                if scenario.startswith("incidental-drift-per-"):
+                    generation = counters[path]
+                    if scenario == "incidental-drift-per-collection":
+                        generation = (generation + 1) // 2
+                    stamp = "2026-09-26T00:%02d:00Z" % generation
+                    if path.endswith("/pulls/286"):
+                        for side in ("base", "head"):
+                            repository = value[side]["repo"]
+                            repository["default_branch"] = "main"
+                            repository["pushed_at"] = stamp
+                            repository["updated_at"] = stamp
+                            repository["size"] = 1_000 + generation
+                            for count in (
+                                "open_issues",
+                                "open_issues_count",
+                                "stargazers_count",
+                                "watchers",
+                                "watchers_count",
+                                "forks",
+                                "forks_count",
+                            ):
+                                repository[count] = generation
+                    if path.endswith("/check-runs"):
+                        for run in value["check_runs"]:
+                            run["app"]["slug"] = "github-actions"
+                            run["app"]["updated_at"] = stamp
+                if scenario.startswith("bound-drift-per-read-"):
+                    generation = counters[path]
+                    field = scenario[len("bound-drift-per-read-"):]
+                    if field == "pull-updated" and path.endswith("/pulls/286"):
+                        value["updated_at"] = "2026-09-26T00:%02d:00Z" % generation
+                    if field == "pull-comments" and path.endswith("/pulls/286"):
+                        value["comments"] = generation
+                    if field == "repository-setting" and path.endswith("/pulls/286"):
+                        value["base"]["repo"]["allow_auto_merge"] = generation % 2 == 0
+                    if field == "app-permissions" and path.endswith("/check-runs"):
+                        for run in value["check_runs"]:
+                            run["app"]["permissions"] = dict(
+                                checks="write" if generation % 2 else "read"
+                            )
+                if scenario == "malformed-incidental-count" and path.endswith("/pulls/286"):
+                    value["head"]["repo"]["forks_count"] = -1
+                if scenario == "malformed-incidental-timestamp" and path.endswith("/pulls/286"):
+                    value["head"]["repo"]["pushed_at"] = "2026-09-26 00:00:00"
+                if scenario == "malformed-incidental-base-count" and path.endswith("/pulls/286"):
+                    value["base"]["repo"]["open_issues_count"] = True
+                if scenario == "malformed-incidental-app-timestamp" and path.endswith("/check-runs"):
+                    value["check_runs"][0]["app"]["updated_at"] = 123
+                if scenario == "null-incidental-timestamp" and path.endswith("/pulls/286"):
+                    value["base"]["repo"]["pushed_at"] = None
                 if scenario == "protection-drift" and path.endswith("/branches/main/protection"):
                     value["enforce_admins"]["enabled"] = False
                 if scenario == "retired-check-readded" and path.endswith("/branches/main/protection"):
@@ -1491,6 +1550,44 @@ class RecoveryPreimageTests(unittest.TestCase):
                 f"cp {shlex.quote(os.fspath(empty_counter))} "
                 f"{shlex.quote(os.fspath(self.counter))}\n"
             )
+        elif rejected_gate in RELEVANT_STATE_DRIFTS:
+            original, drifted = self._relevant_state_drift(rejected_gate)
+            self.fixture.write_bytes(_json_bytes(original))
+            drifted_fixture = self.private / "drifted-fixture.json"
+            self._write_private_json(drifted_fixture, drifted)
+            # Allowed incidental metadata also moves between the collections.
+            self._set_scenario("incidental-drift-per-collection")
+            interstitial = (
+                f"cp {shlex.quote(os.fspath(drifted_fixture))} "
+                f"{shlex.quote(os.fspath(self.fixture))}\n"
+            )
+        elif rejected_gate == "tampered-original-capture":
+            interstitial = (
+                "print -rn -- ' ' >>"
+                '"$RECOVERY_STATE_DIRECTORY/captures/001-a-pull.stdout.json"\n'
+            )
+        elif rejected_gate == "tampered-original-ready-during-replay":
+            interstitial = textwrap.dedent("""\
+                cmp() {
+                  if [[ ${argv[-1]} == "$RECOVERY_FRESH_STATE_DIRECTORY.stdout" ]]; then
+                    print -rn -- ' ' >>"$RECOVERY_STATE_DIRECTORY/ready.json"
+                  fi
+                  command cmp "$@"
+                }
+                """)
+        elif rejected_gate == "tampered-fresh-capture":
+            # The gate compares the fresh stdout just after the fresh collection.
+            interstitial = textwrap.dedent("""\
+                cmp() {
+                  local capture=$RECOVERY_FRESH_STATE_DIRECTORY/captures/001-a-pull.stdout.json
+                  if [[ ${argv[-1]} == "$RECOVERY_FRESH_STATE_DIRECTORY.stdout" ]]; then
+                    print -rn -- ' ' >>"$capture"
+                  fi
+                  command cmp "$@"
+                }
+                """)
+        elif rejected_gate == "unapproved-ready-digest":
+            interstitial = f"RECOVERY_PREIMAGE_READY_SHA256={'0' * 64}\n"
         elif rejected_gate is not None:
             raise AssertionError(f"unknown rejected gate: {rejected_gate}")
 
@@ -1599,6 +1696,8 @@ class RecoveryPreimageTests(unittest.TestCase):
         )
 
         self.assertNotEqual(result.returncode, 0, (result.stdout, result.stderr))
+        if rejected_gate in RELEVANT_STATE_DRIFTS:
+            self.assertEqual(result.stderr, b"")
         self.assertEqual((mutation / "calls.log").read_bytes(), b"")
         self.assertEqual(
             (mutation / "protection.json").read_bytes(),
@@ -1606,6 +1705,56 @@ class RecoveryPreimageTests(unittest.TestCase):
         )
         self.assertEqual(self._recovery_merge_attempts(mutation), 0)
         self.assertEqual(self._recovery_restore_attempts(mutation), 0)
+
+    def _relevant_state_drift(
+        self, name: str
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        original = self._fixture_value()
+        original["pull"].update(
+            title="Recover the age admission signer",
+            comments=0,
+            updated_at="2026-09-24T21:00:00Z",
+        )
+        original["pull"]["base"]["repo"]["allow_auto_merge"] = False
+        drifted = copy.deepcopy(original)
+        if name == "pull-discussion-drift":
+            drifted["pull"].update(comments=1, updated_at="2026-09-24T21:05:00Z")
+        elif name == "pull-title-drift":
+            drifted["pull"]["title"] = "Recover a different signer"
+        elif name == "repository-setting-drift":
+            drifted["pull"]["base"]["repo"]["allow_auto_merge"] = True
+        elif name == "check-run-identity-drift":
+            for run in drifted["check_runs"]["check_runs"]:
+                if run["name"] == EXCEPTION_CONTEXT:
+                    run["id"] = 104
+        elif name == "status-drift":
+            drifted["statuses"].insert(
+                0, _later_coderabbit_status("success", "Review completed")
+            )
+        elif name == "approval-drift":
+            drifted["reviews"].append(
+                _review(
+                    5_310_300_000,
+                    CODERABBIT_STATUS_CREATOR,
+                    "APPROVED",
+                    HEAD_COMMIT,
+                    "2026-09-24T21:10:00Z",
+                )
+            )
+        elif name == "thread-drift":
+            drifted["review_threads"].append(
+                {"id": "PRRT_resolved_later", "isResolved": True, "isOutdated": False}
+            )
+        else:
+            raise AssertionError(f"unknown relevant-state drift: {name}")
+        return original, drifted
+
+    def _assert_relevant_drift_rejected(self, name: str) -> None:
+        self._assert_ready_gate_rejected(name)
+        # The fresh collection itself was ready; only its relevant-state comparison
+        # with the owner-approved collection stopped the entry gate.
+        fresh = self.private / "procedure-private/fresh"
+        self.assertTrue((fresh / "ready.json").is_file())
 
     def test_preimage_launcher_rejects_an_unverified_collector_before_execution(
         self,
@@ -1741,6 +1890,62 @@ class RecoveryPreimageTests(unittest.TestCase):
 
     def test_stale_fresh_replay_is_rejected_before_mutation(self) -> None:
         self._assert_ready_gate_rejected("stale-fresh-replay")
+
+    def test_incidental_metadata_drift_between_collections_is_replayed(
+        self,
+    ) -> None:
+        self._set_scenario("incidental-drift-per-collection")
+
+        self._assert_recovery_outcome("success", "zero", "preimage", 1, 1)
+
+        procedure_private = self.private / "procedure-private"
+        original = json.loads((procedure_private / "initial/ready.json").read_bytes())
+        fresh = json.loads((procedure_private / "fresh/ready.json").read_bytes())
+        self.assertNotEqual(original["artifacts"], fresh["artifacts"])
+        self.assertEqual(original["payloads"], fresh["payloads"])
+
+    def test_target_pull_discussion_drift_is_rejected_before_mutation(self) -> None:
+        self._assert_relevant_drift_rejected("pull-discussion-drift")
+
+    def test_target_pull_title_drift_is_rejected_before_mutation(self) -> None:
+        self._assert_relevant_drift_rejected("pull-title-drift")
+
+    def test_repository_setting_drift_is_rejected_before_mutation(self) -> None:
+        self._assert_relevant_drift_rejected("repository-setting-drift")
+
+    def test_check_run_identity_drift_is_rejected_before_mutation(self) -> None:
+        self._assert_relevant_drift_rejected("check-run-identity-drift")
+
+    def test_status_drift_is_rejected_before_mutation(self) -> None:
+        self._assert_relevant_drift_rejected("status-drift")
+
+    def test_approval_drift_is_rejected_before_mutation(self) -> None:
+        self._assert_relevant_drift_rejected("approval-drift")
+
+    def test_review_thread_drift_is_rejected_before_mutation(self) -> None:
+        self._assert_relevant_drift_rejected("thread-drift")
+
+    def test_tampered_original_capture_is_rejected_before_replay(self) -> None:
+        self._assert_ready_gate_rejected("tampered-original-capture")
+        self.assertFalse((self.private / "procedure-private/fresh").exists())
+
+    def test_tampered_fresh_capture_is_rejected_before_mutation(self) -> None:
+        self._assert_ready_gate_rejected("tampered-fresh-capture")
+        self.assertTrue(
+            (self.private / "procedure-private/fresh/ready.json").is_file()
+        )
+
+    def test_original_ready_changed_during_replay_is_rejected_before_mutation(
+        self,
+    ) -> None:
+        self._assert_ready_gate_rejected("tampered-original-ready-during-replay")
+        self.assertTrue(
+            (self.private / "procedure-private/fresh/ready.json").is_file()
+        )
+
+    def test_unapproved_ready_digest_is_rejected_before_replay(self) -> None:
+        self._assert_ready_gate_rejected("unapproved-ready-digest")
+        self.assertFalse((self.private / "procedure-private/fresh").exists())
 
     def test_noncanonical_request_fails_before_state_creation(self) -> None:
         self.request.write_text(
@@ -2613,6 +2818,118 @@ class RecoveryPreimageTests(unittest.TestCase):
 
     def test_stale_evidence_between_observations_leaves_no_ready_file(self) -> None:
         self._assert_failed_without_ready("stale-between-passes")
+
+    def test_incidental_metadata_drift_between_observations_is_ready(self) -> None:
+        fixture = self._fixture_value()
+        fixture["pull"].update(comments=3, updated_at="2026-09-24T21:00:00Z")
+        self.fixture.write_bytes(_json_bytes(fixture))
+        self._set_scenario("incidental-drift-per-read")
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(result.stdout, b"recovery preimage ready\n")
+        ready = json.loads((self.state / "ready.json").read_bytes())
+        recorded = {
+            artifact["path"]: artifact["sha256"] for artifact in ready["artifacts"]
+        }
+        raw: dict[str, list[dict[str, object]]] = {}
+        for label in ("pull", "check-runs-p1"):
+            captures = [
+                next((self.state / "captures").glob(f"*-{name}-{label}.stdout.json"))
+                for name in ("a", "b")
+            ]
+            for capture in captures:
+                self.assertEqual(
+                    recorded[f"captures/{capture.name}"],
+                    _sha256(capture.read_bytes()),
+                )
+            raw[label] = [json.loads(capture.read_bytes()) for capture in captures]
+        self.assertNotEqual(
+            raw["pull"][0]["base"]["repo"]["pushed_at"],
+            raw["pull"][1]["base"]["repo"]["pushed_at"],
+        )
+        self.assertNotEqual(
+            raw["check-runs-p1"][0]["check_runs"][0]["app"]["updated_at"],
+            raw["check-runs-p1"][1]["check_runs"][0]["app"]["updated_at"],
+        )
+        observations = json.loads(self._observations_path(self.state).read_bytes())
+        self.assertEqual(observations["pull"]["comments"], 3)
+        self.assertEqual(observations["pull"]["updated_at"], "2026-09-24T21:00:00Z")
+        for side in ("base", "head"):
+            self.assertEqual(
+                observations["pull"][side]["repo"],
+                {"default_branch": "main", "full_name": "nisavid/dotfiles"},
+            )
+        self.assertEqual(
+            [run["app"] for run in observations["check_runs"]["check_runs"]],
+            [{"id": 15368, "slug": "github-actions"}] * 3,
+        )
+        self._assert_read_only_calls()
+
+    def test_bound_drift_between_observations_leaves_no_ready_file(self) -> None:
+        for field in (
+            "pull-updated",
+            "pull-comments",
+            "repository-setting",
+            "app-permissions",
+        ):
+            with self.subTest(field):
+                self._set_scenario(f"bound-drift-per-read-{field}")
+                state = self.private / field
+                offset = self._call_count()
+
+                result = self._run(state)
+
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(
+                    result.stderr, b"recovery preimage preparation failed\n"
+                )
+                self.assertFalse((state / "ready.json").exists())
+                # Both complete observations were read; their comparison failed.
+                endpoints = self._endpoints_since(offset)
+                self.assertEqual(endpoints.count(PULL_ENDPOINT), 2)
+                self.assertEqual(endpoints.count(RULESETS_FIRST_PAGE), 2)
+        self._assert_read_only_calls()
+
+    def test_malformed_incidental_metadata_leaves_no_ready_file(self) -> None:
+        for scenario in (
+            "malformed-incidental-count",
+            "malformed-incidental-timestamp",
+            "malformed-incidental-base-count",
+            "malformed-incidental-app-timestamp",
+        ):
+            with self.subTest(scenario):
+                self._set_scenario(scenario)
+                state = self.private / scenario
+                offset = self._call_count()
+
+                result = self._run(state)
+
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(
+                    result.stderr, b"recovery preimage preparation failed\n"
+                )
+                self.assertFalse((state / "ready.json").exists())
+                endpoints = self._endpoints_since(offset)
+                self.assertEqual(endpoints.count(PULL_ENDPOINT), 1)
+                self.assertEqual(endpoints.count(RULESETS_FIRST_PAGE), 1)
+        self._assert_read_only_calls()
+
+    def test_null_incidental_timestamp_is_ready(self) -> None:
+        self._set_scenario("null-incidental-timestamp")
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertTrue((self.state / "ready.json").is_file())
+        observations = json.loads(self._observations_path(self.state).read_bytes())
+        self.assertNotIn("pushed_at", observations["pull"]["base"]["repo"])
+        capture = next((self.state / "captures").glob("*-a-pull.stdout.json"))
+        self.assertIsNone(json.loads(capture.read_bytes())["base"]["repo"]["pushed_at"])
+        self._assert_read_only_calls()
 
     def test_nonzero_github_read_leaves_no_ready_file(self) -> None:
         self._assert_failed_without_ready("rest-nonzero")

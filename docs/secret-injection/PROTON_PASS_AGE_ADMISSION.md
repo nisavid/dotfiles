@@ -1521,8 +1521,8 @@ The frozen planning input observed these classic `main` protections:
 | Required signatures, branch lock, and fork syncing | disabled |
 | Effective rules and rulesets | none observed |
 
-This snapshot is only a planning precondition. Establish the merge freeze and
-the repository-wide quiescence described below before this collection. Build
+This snapshot is only a planning precondition. Establish the merge freeze
+described below before this collection. Build
 the canonical request in a caller-owned mode-`0700` private parent outside both
 checkouts. The request contains only public repository evidence, but its mode
 and path rules are the same as the bounded recovery evidence.
@@ -1752,8 +1752,8 @@ RECOVERY_PREIMAGE_READY_SHA256=$(file_sha256 \
 The launcher invokes the only supported collector command with a new
 state-directory path. The helper resolves `gh` through ordinary runtime
 `PATH`, bounds every capture and page, records status and standard error for
-each request, performs two complete observations, and writes `ready.json`
-last. Each canonical payload artifact has one shared producer-and-consumer
+each request, performs two complete observations, requires their relevant
+state to agree, and writes `ready.json` last. Each canonical payload artifact has one shared producer-and-consumer
 supported-input limit of 4 MiB (4,194,304 bytes). The collector rejects a
 larger combined payload before creating its artifact or publishing readiness;
 the entry gate below rejects an artifact above the same limit. Capture and
@@ -1842,8 +1842,8 @@ a new path. Immediately before the no-child `ready.json` commit, the collector
 checks the signal latch; a signal before entry prevents publication, a
 completed commit wins over a signal deferred after entry, and a failed commit
 restores signal delivery before finalization. The entry gate below validates
-every recorded artifact and then repeats all reads immediately before it can
-arm restoration.
+every recorded artifact, repeats all reads in a fresh collection, and
+compares the validated relevant state before it can arm restoration.
 
 The minimal named exception request is:
 
@@ -1858,21 +1858,54 @@ request. Before the owner approves it, pause auto-merge and merge queues, freeze
 all other `main` merges, identify the sole operator, and verify no bot or person
 will merge concurrently. Re-read live `main`, the protection digest, recovery
 PR base/head, public pull ref, reviews, conversations, and unrelated checks
-after the freeze. Quiescence is a gate, not an assumption.
+after the freeze. The merge freeze is a gate, not an assumption. It holds
+merges into `main`; it does not hold unrelated repository activity.
 
-The merge freeze is not enough for the replay. `ready.json` binds the raw
-digest of every capture, and the entry gate requires a fresh collection that
-reproduces `ready.json` byte for byte. GitHub responses embed volatile
-repository and app metadata: check-run app records carry `updated_at`, and
-pull responses carry repository timestamps and counters. Any repository
-activity can therefore change the bytes, including a push to any branch, a new
-check run or status, a review or comment, or a settings change. Establish
-repository-wide quiescence before the initial collection, take that collection
-after the freeze, and hold all repository activity until the replay completes.
-If the replay differs, or any activity occurs in that window, discard both
-collections. Take a new initial collection in a new path, record its new
-ready-file digest in the handoff, and obtain a fresh owner approval bound to
-that digest before arming the exception.
+The replay does not require repository-wide quiescence. `ready.json` binds the
+raw digest of every capture for audit, and those captures embed repository and
+App metadata that unrelated pushes and discussion change. Each collection
+therefore compares its two observations, and writes as its observations
+payload, only the validated relevant state: each complete observation with
+exactly these documented incidental fields removed:
+
+- `pushed_at`, `updated_at`, `size`, `open_issues`, `open_issues_count`,
+  `stargazers_count`, `watchers`, `watchers_count`, `forks`, and `forks_count`
+  in the pull request's embedded `base.repo` and `head.repo` records; and
+- `updated_at` in each check run's embedded `app` record.
+
+Each removed value must still be a well-formed GitHub timestamp or null, or a
+nonnegative integer. No other field is removed, and no other timestamp is
+ignored. The recovery pull request's own title, body, state, counters, and
+timestamps; every other field of its `repo` records; its commits, reviews,
+review threads, and requested reviewers; `main` and the pull head ref; every
+check run and status with its app or creator identity and outcome; classic
+protection; and rules all stay bound. A push to another branch or discussion
+on another issue or pull request may proceed. A comment or edit on the
+recovery pull request, a new check run or status for its head, a review, or a
+change to protection, rules, or those recorded repository settings fails the
+comparison.
+
+The entry gate validates the original `ready.json` against the
+owner-approved digest. It then runs a fresh collection in a new path, takes
+that `ready.json`'s own digest as `RECOVERY_FRESH_READY_SHA256`, and validates
+it independently, including every raw artifact. Both validated manifests must
+agree on the request, collector, binding, and every payload digest, including
+the relevant-state observations; their raw capture lists may differ. The gate
+then validates the original bundle against its owner-approved digest again,
+including every artifact, before selecting the mutation payloads. Drift in
+the target pull request, `main`, head, reviewed source, protection, rules,
+reviewer, approval, thread, check, or status identity or outcome, and any
+malformed, incomplete, or tampered evidence, stop the gate before the
+exception request. Then discard both collections. Take a new initial
+collection in a new path, record its new ready-file digest in the handoff, and
+obtain a fresh owner approval bound to that digest before arming the
+exception.
+
+This comparison does not make GitHub atomic. A change after the fresh
+collection is not detected by the replay. Before its one merge attempt, the
+state machine re-reads only the pull request's state, base, and head and live
+`main`, and GitHub still enforces the remaining protections. Keep the merge
+freeze through restoration.
 
 Only the required-status-check subresource changes. Administrator enforcement,
 the current approving review and stale-review rule, conversation resolution,
@@ -1914,6 +1947,14 @@ set -euo pipefail
 test "$REPOSITORY" = nisavid/dotfiles
 test "$RECOVERY_FRESH_STATE_DIRECTORY" != "$RECOVERY_STATE_DIRECTORY"
 umask 077
+
+file_sha256() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk 'NR == 1 { print $1 }'
+  else
+    sha256sum "$1" | awk 'NR == 1 { print $1 }'
+  fi
+}
 
 validate_recovery_ready() {
   python3 -I -B -S - "$1" "$RECOVERY_PREIMAGE_REQUEST" \
@@ -2299,6 +2340,38 @@ try:
     ]
     if payload_values["exception_checks"] != {"strict": True, "checks": exception_checks}:
         stop("exception payload")
+    observations = payload_values["observations"]
+    observation_keys = {
+        "check_runs", "commits", "effective_rules", "main_ref", "protection",
+        "pull", "pull_head_ref", "requested_reviewers", "review_threads",
+        "reviews", "rulesets", "statuses",
+    }
+    if (
+        not isinstance(observations, dict)
+        or set(observations) != observation_keys
+        or observations["pull"]["number"] != pull_number
+        or observations["pull"]["base"]["sha"] != base
+        or observations["pull"]["head"]["sha"] != head
+        or observations["main_ref"]["object"]["sha"] != base
+        or observations["pull_head_ref"]["object"]["sha"] != head
+        or observations["protection"] != expected_protection
+        or observations["effective_rules"] != []
+        or observations["rulesets"] != []
+    ):
+        stop("observation binding")
+    # The replay compares this record; every digest in it was recomputed above.
+    sys.stdout.write(
+        canonical(
+            {
+                "binding": ready["binding"],
+                "collector_sha256": ready["collector_sha256"],
+                "payload_sha256": {
+                    name: reference["sha256"] for name, reference in payloads.items()
+                },
+                "request_sha256": ready["request_sha256"],
+            }
+        ).decode("ascii")
+    )
 except (
     AttributeError,
     IndexError,
@@ -2313,8 +2386,9 @@ except (
 PY
 }
 
-validate_recovery_ready "$RECOVERY_STATE_DIRECTORY" \
-  "$RECOVERY_PREIMAGE_READY_SHA256"
+original_relevant_state=$(validate_recovery_ready \
+  "$RECOVERY_STATE_DIRECTORY" "$RECOVERY_PREIMAGE_READY_SHA256")
+test -n "$original_relevant_state"
 test ! -e "$RECOVERY_FRESH_STATE_DIRECTORY"
 fresh_stdout=$RECOVERY_FRESH_STATE_DIRECTORY.stdout
 fresh_stderr=$RECOVERY_FRESH_STATE_DIRECTORY.stderr
@@ -2327,10 +2401,13 @@ fresh_stderr=$RECOVERY_FRESH_STATE_DIRECTORY.stderr
 )
 test ! -s "$fresh_stderr"
 printf 'recovery preimage ready\n' | cmp -s - "$fresh_stdout"
-cmp -s "$RECOVERY_STATE_DIRECTORY/ready.json" \
-  "$RECOVERY_FRESH_STATE_DIRECTORY/ready.json"
-validate_recovery_ready "$RECOVERY_FRESH_STATE_DIRECTORY" \
-  "$RECOVERY_PREIMAGE_READY_SHA256"
+RECOVERY_FRESH_READY_SHA256=$(file_sha256 \
+  "$RECOVERY_FRESH_STATE_DIRECTORY/ready.json")
+fresh_relevant_state=$(validate_recovery_ready \
+  "$RECOVERY_FRESH_STATE_DIRECTORY" "$RECOVERY_FRESH_READY_SHA256")
+test "$fresh_relevant_state" = "$original_relevant_state"
+test "$(validate_recovery_ready "$RECOVERY_STATE_DIRECTORY" \
+  "$RECOVERY_PREIMAGE_READY_SHA256")" = "$original_relevant_state"
 
 ready=$RECOVERY_STATE_DIRECTORY/ready.json
 protection_preimage=$RECOVERY_STATE_DIRECTORY/$(jq -er \
@@ -2591,7 +2668,8 @@ During the exception window, repository protection does not technically block
 other changes that satisfy the remaining requirements. The merge freeze is a
 human coordination control, not repository admission enforcement. Before any
 production operation, the owner must explicitly choose either to accept that
-residual window for this named recovery under verified quiescence, or to defer
+residual window for this named recovery under the verified merge freeze, or
+to defer
 recovery until an enforceable hold is separately designed and authorized. No
 acceptance is recorded by this prepared proposal. If restoration cannot be
 verified, declare an incident and maintain the human freeze; do not claim that
