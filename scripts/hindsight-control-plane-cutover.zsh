@@ -3,6 +3,7 @@ setopt ERR_EXIT NO_UNSET PIPE_FAIL
 
 : "${HINDSIGHT_AGENTS_CHECKOUT:?set to the clean agents checkout}"
 : "${HINDSIGHT_INSTALLATION_CONFIG:?set to the rendered installation manifest}"
+: "${HINDSIGHT_INSTALL_ROOT:?set to the absolute expected install root, \$HOME/<installRoot> from the encrypted binding, not a value copied from the manifest}"
 : "${stop_legacy:?set to the protected stop command}"
 : "${rollback_preflight:?set to the protected rollback command}"
 : "${activation_acceptance:?set to the protected acceptance command}"
@@ -101,6 +102,7 @@ manifest_install_root="$(
   "$manifest_install_root" == "$home_root"/* ]] || exit 1
 managed_python="${manifest_managed_python:A}"
 install_root="${manifest_install_root:A}"
+[[ "$install_root" == "${HINDSIGHT_INSTALL_ROOT:A}" ]] || exit 1
 expected_commit="$(read_hindsight_value releaseCommit)"
 expected_version="$(read_hindsight_value releaseVersion)"
 candidate="$release_root/bin/hindsight-memory"
