@@ -66,9 +66,9 @@ install_tools() {
   tar -xzf "$downloads/uv.tar.gz" -C "$downloads"
   install -m 0755 "$downloads/$uv_asset/uv" "$downloads/$uv_asset/uvx" "$tools/bin"
   if [[ -n $python ]]; then
-    "$tools/bin/uv" venv --quiet --python "$python" "$tools/venv"
+    "$tools/bin/uv" venv --quiet --clear --python "$python" "$tools/venv"
   else
-    UV_PYTHON_INSTALL_DIR=$tools/python "$tools/bin/uv" venv --quiet \
+    UV_PYTHON_INSTALL_DIR=$tools/python "$tools/bin/uv" venv --quiet --clear \
       --python "$PYTHON_VERSION" --python-preference only-managed "$tools/venv"
   fi
   rm -rf "$downloads"
