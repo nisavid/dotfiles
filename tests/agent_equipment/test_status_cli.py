@@ -213,10 +213,13 @@ def _fake_runtime_inputs(
             },
             "record_versions": {
                 "observe_request": "adapter-contract-v1",
+                "prepare_request": "adapter-contract-v1",
+                "prepared_state_facts": "adapter-contract-v1",
                 "runtime_observation": "adapter-contract-v1",
                 "planned_action": "adapter-contract-v1",
                 "mutation_receipt": "adapter-contract-v1",
                 "captured_state": "agent-equipment-captured-state/v1",
+                "adapter_manifest_set": "agent-equipment-preparation-adapter-manifest-set/v1",
             },
             "automated_control_owners": ["reconciler_owned"],
         }
