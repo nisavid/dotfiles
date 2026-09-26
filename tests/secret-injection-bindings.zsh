@@ -337,6 +337,17 @@ for confidential_value in github-fixture-personal github-fixture-secondary \
   fi
 done
 
+if render_github_profile missing-profile-host "$test_dir/github-missing.env" \
+  2> "$test_dir/github-missing.err"; then
+  fail 'a binding that names a missing profile must not render a GitHub profile'
+fi
+grep -F 'names a missing profile' "$test_dir/github-missing.err" >/dev/null || \
+  fail 'a binding that names a missing profile must report a value-free failure'
+if grep -F -e github-fixture-missing -e fixture-vault -e 'pass://' \
+  "$test_dir/github-missing.env" "$test_dir/github-missing.err" >/dev/null; then
+  fail 'a binding that names a missing profile must not disclose profile or locator data'
+fi
+
 commands_template=home/dot_config/private_secret-exec/private_commands.env.tmpl
 rendered_commands=$test_dir/rendered-commands.env
 chezmoi -S home execute-template \
