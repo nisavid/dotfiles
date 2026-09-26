@@ -45,6 +45,10 @@ print -r -- gh >> "$FAKE_CALLS_LOG"
 print -r -- "${GH_CONFIG_DIR-}" >> "$FAKE_GH_CONFIG_LOG"
 [[ -n ${GH_CONFIG_DIR-} && $GH_CONFIG_DIR != $FAKE_CALLER_GH_CONFIG_DIR &&
   -d $GH_CONFIG_DIR && -z $(print -rl -- $GH_CONFIG_DIR/*(ND)) ]] || exit 74
+for transport_name in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy \
+  ALL_PROXY all_proxy SSL_CERT_FILE SSL_CERT_DIR; do
+  (( ! ${(P)+transport_name} )) || exit 76
+done
 [[ -z ${FAKE_GH_EXIT:-} ]] || exit $FAKE_GH_EXIT
 [[ $GH_TOKEN == fixture-token ]] || exit 71
 [[ $* == 'api --hostname github.com user --jq .login' ]] || exit 73
@@ -54,6 +58,7 @@ cat > "$bin_dir/target" <<'EOF'
 #!/bin/zsh -f
 print -r -- target >> "$FAKE_CALLS_LOG"
 [[ ${GH_CONFIG_DIR-} == $FAKE_CALLER_GH_CONFIG_DIR ]] || exit 75
+[[ ${HTTPS_PROXY-} == http://127.0.0.1:9 && ${SSL_CERT_FILE-} == /nonexistent/ca.pem ]] || exit 77
 [[ $GITHUB_PERSONAL_ACCESS_TOKEN == fixture-token ]] || exit 72
 print -r -- target-ran
 EOF
@@ -84,6 +89,10 @@ launch() {
     PATH=$bin_dir:/usr/bin:/bin \
     GH_HOST=enterprise.invalid \
     GH_CONFIG_DIR=$caller_gh_config \
+    HTTPS_PROXY=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 \
+    HTTP_PROXY=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 \
+    ALL_PROXY=http://127.0.0.1:9 all_proxy=http://127.0.0.1:9 \
+    SSL_CERT_FILE=/nonexistent/ca.pem SSL_CERT_DIR=/nonexistent \
     TMPDIR=$launch_tmpdir \
     FAKE_GITHUB_LOGIN=$login \
     "${launch_environment[@]}" \
