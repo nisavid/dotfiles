@@ -8,7 +8,7 @@ trap '/bin/rm -rf -- "$test_dir"' EXIT
 
 # zsh skips EXIT traps when errexit fires inside a function.
 TRAPZERR() {
-  if [[ -o errexit ]] && (( ${#funcstack} > 1 )); then
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
     /bin/rm -rf -- "$test_dir"
   fi
 }

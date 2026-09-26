@@ -10,7 +10,7 @@ trap 'cleanup_fixtures' EXIT
 
 # zsh skips EXIT traps when errexit fires inside a function.
 TRAPZERR() {
-  if [[ -o errexit ]] && (( ${#funcstack} > 1 )); then
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
     cleanup_fixtures
   fi
 }

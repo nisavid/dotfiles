@@ -29,7 +29,7 @@ trap test_process_fixture_cleanup EXIT
 # zsh skips EXIT traps when errexit fires inside a function.
 TRAPZERR() {
   local failure_status=$?
-  if [[ -o errexit ]] && (( ${#funcstack} > 1 )); then
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
     test_process_fixture_cleanup $failure_status
   fi
 }
