@@ -62,9 +62,13 @@ if before != after:
     raise SystemExit(1)
 PY
 
+# The fixture path may itself contain a client name.
+rendered_for_scan=$(<"$rendered")
+rendered_for_scan=${rendered_for_scan//"$fixture_home"/<fixture-home>}
+print -r -- "$rendered_for_scan" > "$test_dir/rendered-for-scan"
 ! rg -n -i \
   'MLX_OPTIQ|mlx-optiq|HINDSIGHT_API_LLM|127\.0\.0\.1:8766|model_context_window|model_catalog_json' \
-  "$rendered" home/dot_codex/modify_private_config.toml.tmpl \
+  "$test_dir/rendered-for-scan" home/dot_codex/modify_private_config.toml.tmpl \
   home/run_after_install-mlxctl.sh.tmpl >/dev/null || \
   fail 'dotfiles must not configure mlxctl clients'
 
