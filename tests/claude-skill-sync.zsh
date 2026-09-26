@@ -7,6 +7,13 @@ hook=$repo_root/home/run_after_sync-global-agent-skills-to-claude.zsh
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/claude-skill-sync.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
+    rm -rf -- "$test_root"
+  fi
+}
+
 # exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -ru2 -- "FAIL: $*"

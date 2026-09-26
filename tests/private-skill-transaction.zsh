@@ -8,6 +8,13 @@ cli=$repo_root/scripts/private-skill-transaction
 typeset -a fixtures
 trap 'cleanup_fixtures' EXIT
 
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
+    cleanup_fixtures
+  fi
+}
+
 test_dir=${0:A:h}/private-skill-transaction.d
 source $test_dir/support.zsh
 source $test_dir/locking.zsh

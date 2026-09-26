@@ -165,7 +165,8 @@ test_process_fixture_stop_all() {
 }
 
 test_process_fixture_cleanup() {
-  integer cleanup_status=$?
+  # Error traps pass their original status; EXIT traps supply it through $?.
+  integer cleanup_status=${1:-$?}
   emulate -L zsh
   unsetopt err_exit
   local fixture_root=$TEST_PROCESS_FIXTURE_ROOT

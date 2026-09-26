@@ -15,6 +15,13 @@ command -v rg >/dev/null || fail 'rg is required to validate the install boundar
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/mlxctl-install.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
 
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
+    rm -rf -- "$test_dir"
+  fi
+}
+
 fixture_home=$test_dir/home
 fixture_home=${fixture_home:A}
 source_dir=$fixture_home/workspace/tool

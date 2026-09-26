@@ -96,11 +96,37 @@ assert_invalid_profiles() {
 }
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-exec.XXXXXX")
+test_dir=${test_dir:A}
 test_process_fixture_init "$test_dir" || fail 'could not initialize process-fixture cleanup'
 trap test_process_fixture_cleanup EXIT
+
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  local failure_status=$?
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
+    test_process_fixture_cleanup $failure_status
+  fi
+}
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# A failing command substitution must not run the parent's cleanup in its child.
+failing_helper() { false; }
+subshell_cleanup_probe() {
+  [[ "$(failing_helper)" != x ]]
+}
+/bin/sleep 30 &
+cleanup_probe_pid=$!
+test_process_fixture_track_pid $cleanup_probe_pid
+subshell_cleanup_probe
+[[ -d $test_dir ]] || fail 'subshell failure removed the parent fixture directory'
+kill -0 $cleanup_probe_pid 2>/dev/null ||
+  fail 'subshell failure stopped a parent-tracked process'
+kill -TERM $cleanup_probe_pid
+wait $cleanup_probe_pid 2>/dev/null || true
+test_process_fixture_untrack_pid $cleanup_probe_pid
+
 latest_readiness_probe=$test_dir/latest-shared-readiness.status
 for latest_ready_reason in existing-session concurrent-repair repaired; do
   print -rl -- state=ready "reason=$latest_ready_reason" \

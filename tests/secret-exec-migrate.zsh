@@ -13,6 +13,13 @@ fail() {
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-exec-migrate.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
+
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
+    rm -rf -- "$test_dir"
+  fi
+}
 excluded_home=$test_dir/excluded-home
 excluded_config=$excluded_home/.config
 excluded_marker=$test_dir/excluded-pass-cli-ran

@@ -4,6 +4,13 @@ set -euo pipefail
 repo_root=${0:A:h:h}
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/zsh-gui-path.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
+
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
+    rm -rf -- "$test_dir"
+  fi
+}
 fixture_home=${test_dir:A}/home
 fake_bin=$test_dir/bin
 state_dir=$test_dir/state

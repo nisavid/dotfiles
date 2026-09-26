@@ -7,14 +7,25 @@ scanner=$repo_root/scripts/privacy-scan
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/privacy-scan.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
+    rm -rf -- "$test_root"
+  fi
+}
+
 scan_output=
 run_failed_scan() {
+  local case_name=$1
+  shift
   set +e
   scan_output=$(python3 "$scanner" "$@" 2>&1)
   scan_status=$?
   set -e
-  # exit, not return: errexit inside a function skips zsh's EXIT trap.
-  (( scan_status != 0 )) || exit 1
+  if (( scan_status == 0 )); then
+    print -u2 -r -- "FAIL: $case_name scan unexpectedly passed"
+    exit 1
+  fi
 }
 
 mkdir -p "$test_root/clean" "$test_root/unsafe"
@@ -47,7 +58,7 @@ repeat 10001; do
   (( ++inventory_entry ))
   : >"$test_root/inventory-limit/$inventory_entry"
 done
-run_failed_scan --root "$test_root/inventory-limit"
+run_failed_scan 'inventory limit' --root "$test_root/inventory-limit"
 [[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
 
 mkdir -p "$test_root/finding-limit"
@@ -56,7 +67,7 @@ finding_field+=ACCESS_KEY_ID
 repeat 10001; do
   print -r -- "$finding_field=fixture-canary-value"
 done >"$test_root/finding-limit/findings.txt"
-run_failed_scan --root "$test_root/finding-limit"
+run_failed_scan 'finding limit' --root "$test_root/finding-limit"
 [[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
 
 finding_text_root=$test_root/finding-text-limit
@@ -68,7 +79,7 @@ mkdir -p "$finding_text_root"
 repeat 5001; do
   print -r -- "$finding_field=fixture-canary-value"
 done >"$finding_text_root/findings.txt"
-run_failed_scan --root "$test_root/finding-text-limit"
+run_failed_scan 'finding text limit' --root "$test_root/finding-text-limit"
 [[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
 
 mkdir -p "$test_root/content-limit"
@@ -81,7 +92,7 @@ repeat 4; do
   ln "$test_root/content-limit/1.bin" \
     "$test_root/content-limit/$content_entry.bin"
 done
-run_failed_scan --root "$test_root/content-limit"
+run_failed_scan 'content limit' --root "$test_root/content-limit"
 [[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
 
 set +e
@@ -108,12 +119,14 @@ dd if=/dev/zero \
   of="$test_root/oversized-denylist" \
   bs=1 seek=4194305 count=0 2>/dev/null
 run_failed_scan \
+  'oversized denylist' \
   --root "$test_root/clean" \
   --denylist "$test_root/oversized-denylist"
 [[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
 
 mkfifo "$test_root/denylist-fifo"
 run_failed_scan \
+  'denylist FIFO' \
   --root "$test_root/clean" \
   --denylist "$test_root/denylist-fifo"
 [[ $scan_output == 'privacy scan failed' ]]
@@ -127,6 +140,7 @@ print -r -- 'contact operator@'private.invalid >"$test_root/unsafe/email.txt"
 print -r -- 'path=/home/'operator/private >"$test_root/unsafe/path.txt"
 
 run_failed_scan \
+  'unsafe content' \
   --root "$test_root/unsafe" \
   --denylist "$test_root/denylist"
 [[ $scan_output == *'[exact-denylist]'* ]]
@@ -140,7 +154,7 @@ credential_name=AWS_
 credential_name+=ACCESS_KEY_ID
 print -r -- "$credential_name=fixture-canary-value" \
   >"$test_root/cache/.pytest_cache/state"
-run_failed_scan --root "$test_root/cache"
+run_failed_scan 'cache content' --root "$test_root/cache"
 [[ $scan_output == *'[provider-token]'* ]]
 
 mkdir -p "$test_root/encoded"
@@ -153,28 +167,28 @@ iconv -f UTF-8 -t UTF-32LE "$encoded_plaintext" \
 iconv -f UTF-8 -t UTF-32BE "$encoded_plaintext" \
   >"$test_root/encoded/value-be.txt"
 rm -- "$encoded_plaintext"
-run_failed_scan --root "$test_root/encoded"
+run_failed_scan 'encoded content' --root "$test_root/encoded"
 [[ $scan_output == *'value-le.txt:'*'[provider-token]'* ]]
 [[ $scan_output == *'value-be.txt:'*'[provider-token]'* ]]
 
 mkdir -p "$test_root/renamed"
 print -n -r -- $'age-encryption.org/v1\n' >"$test_root/renamed/payload.bin"
-run_failed_scan --root "$test_root/renamed"
+run_failed_scan 'renamed age envelope' --root "$test_root/renamed"
 [[ $scan_output == *'[invalid-age-envelope-suffix]'* ]]
 
 mkdir -p "$test_root/exact-age"
 print -r -- 'not ciphertext' >"$test_root/exact-age/.age"
-run_failed_scan --root "$test_root/exact-age"
+run_failed_scan 'invalid age envelope' --root "$test_root/exact-age"
 [[ $scan_output == *'.age:0: [invalid-age-envelope]'* ]]
 
 mkdir -p "$test_root/required"
-run_failed_scan --root "$test_root/required" --require-age-manifest
+run_failed_scan 'required age manifest' --root "$test_root/required" --require-age-manifest
 [[ $scan_output == *'[invalid-age-envelope-manifest]'* ]]
 
 mkdir -p "$test_root/control"
 control_name=$'line\nforged.txt'
 print -r -- 'clean' >"$test_root/control/$control_name"
-run_failed_scan --root "$test_root/control"
+run_failed_scan 'control character filename' --root "$test_root/control"
 [[ $scan_output == *'[control-character-filename]'* ]]
 [[ $scan_output == *'redacted-path:sha256:'* ]]
 [[ $scan_output != *$'line\nforged.txt'* ]]
