@@ -29,6 +29,13 @@ with the resolved token held in the child environment. It compares the login
 with the rendered expectation and reports only a generic failure, so a stale
 or cross-host credential cannot silently start the MCP process.
 
+The check runs on every `github` launch. An inherited provenance marker never
+lets the launcher reuse injected GitHub values. Every check failure stops the
+launch, even with `--best-effort`: a login mismatch, missing metadata, a missing
+or untrusted `gh`, a `gh` failure or timeout, or an unreachable API.
+Best-effort covers only the credential provider, before the check; an
+unverified credential never starts the consumer.
+
 Codex's configured `github` MCP launches GitHub's remote server through
 `secret-exec` and `mcp-remote`. A separately enabled GitHub app has its own
 authentication; its plugin label does not establish which route a tool uses.
@@ -87,7 +94,9 @@ resolution, still removes every other managed name, including names the profile
 unsets with `!`, and then execs the target with the marker set to that profile.
 A marker that merely contains the name, such as `typesafe-extra` for
 `typesafe`, does not match. If any value is missing, the launcher resolves the
-profile normally. `aws-credential-process` always resolves.
+profile normally. `aws-credential-process` and the `github` profile always
+resolve; `github` must repeat its identity check (see
+[Host-bound GitHub profiles](#host-bound-github-profiles)).
 
 The marker is not authenticated, and reuse trusts the inherited value. A
 process that sets the marker next to its own value for a mapped name gets that
@@ -126,8 +135,9 @@ managed name is gone, a later resolution failure falls back. That includes a
 missing or failing readiness helper (a locked native store, for example), a
 missing or untrusted provider command, a provider timeout or failure, including
 one whose process group became unmanageable, and a resolved value that is empty
-or spans lines. Two post-scrub failures still stop the launch: signals, and a
-failure to close the launcher's diagnostic channel after every value resolved.
+or spans lines. Three post-scrub failures still stop the launch: signals, a
+failed GitHub identity check, and a failure to close the launcher's diagnostic
+channel after every value resolved.
 
 On fallback, the launcher unsets every value it had already exported and the
 provider request variables, and it does not export the provenance marker.
@@ -547,12 +557,15 @@ command name it dispatches on.
 Every shim goes through the launcher. Inside a process tree that already
 carries the mapped profile, the launcher reuses the injected values instead of
 repeating the provider lookup (see [Profile contract](#profile-contract)), so a
-shimmed command still receives only its profile's credentials.
+shimmed command still receives only its profile's credentials. A `github`
+mapping is the exception: it always resolves and repeats its identity check
+(see [Host-bound GitHub profiles](#host-bound-github-profiles)).
 
 A mapping ends with `?`, as in `name=profile?`, to make it best-effort. Its
 shim launches through `secret-exec --best-effort`, so an unavailable provider
 starts the command without that profile's credentials and sends a
-notification (see [Best-effort launches](#best-effort-launches)). A mapping
+notification (see [Best-effort launches](#best-effort-launches)). A failed
+GitHub identity check still stops a best-effort `github` shim. A mapping
 without the suffix keeps failing closed. The suffix follows the profile name
 exactly once: `name=profile??`, `name=?`, and `name=?profile` are malformed.
 A command may appear only once, with or without the suffix.
