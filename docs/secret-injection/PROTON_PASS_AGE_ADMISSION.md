@@ -1497,8 +1497,9 @@ gate below repeat that comparison against the same manifest digest.
 Prepare the recovery input with
 `scripts/prepare-age-admission-recovery-preimage`. The helper is GitHub
 read-only: it uses explicit REST `GET` requests plus one source-owned GraphQL
-query over `POST` to paginate review-thread resolution. It cannot accept a
-caller query, send a GraphQL mutation, call a REST mutation, merge, enable
+query over `POST` to check current approval and paginate review-thread
+resolution. It cannot accept a caller query, send a GraphQL mutation, call a
+REST mutation, merge, enable
 auto-merge, or change protection.
 
 Use the collector staged above. `RECOVERY_PREIMAGE_COLLECTOR_SHA256` is its
@@ -1795,9 +1796,22 @@ pull request's author and either GitHub reports its association as `OWNER`,
 pinned bot. Only `coderabbitai[bot]` (`136622811`) is pinned. GitHub reports
 its association as `NONE`, and no other `NONE`-association reviewer or bot is
 trusted. Any other final-commit approval fails collection, so an unpinned bot's
-approval of the head blocks readiness while it stands. A `PENDING` or
-`CHANGES_REQUESTED` review from any reviewer, including the pinned bot, also
-fails, as do approvals of earlier commits only and any unresolved thread.
+approval of the head blocks readiness while it stands. GitHub's current
+`reviewDecision` must be `APPROVED` on every review-thread page in both
+observations, bound to the requested base and head commits. Historical
+`CHANGES_REQUESTED` records remain in the evidence and do not veto a current
+approval: GitHub retains an earlier change request even after the same reviewer
+approves. The REST history must agree: each reviewer's latest approval, change
+request, or dismissal is selected by submission time, independent of response
+order. A comment does not replace that opinion. A current change request from
+any reviewer blocks collection; a dismissed latest opinion does not count as
+approval. Invalid timestamps or tied latest opinions fail closed. Another
+reviewer's approval cannot clear a change request. The collector still requires
+at least one qualifying latest opinion approving the final commit.
+
+A current `CHANGES_REQUESTED` or `REVIEW_REQUIRED` decision, an absent or unknown
+decision, any `PENDING` review, approvals of earlier commits only, and any
+unresolved thread all fail collection.
 
 Record the request, helper, and ready-file digests in the reviewed operational
 handoff. The collector latches the first `HUP`, `INT`, or `TERM`; later signals
@@ -2178,7 +2192,7 @@ try:
         or ready["outcome"] != "ready"
         or ready["collector_sha256"] != collector_sha
         or ready["graphql_query_sha256"]
-        != "c1d9596eead2a652ce7f33120b48e03b7aaf533f2f5b719a88dd74196f631d54"
+        != "4ce24d04bdcdf3b7fdf792cc2156d113acaa52250e469728b2d87a8991a87e36"
         or ready["request_sha256"] != digest(request_data)
         or ready["limits"] != expected_limits
     ):

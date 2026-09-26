@@ -76,6 +76,7 @@ GRAPHQL_QUERY = """query Issue286RecoveryReviewThreads(
       number
       baseRefOid
       headRefOid
+      reviewDecision
       reviewThreads(first: 100, after: $threadsCursor) {
         nodes {
           id
@@ -91,7 +92,7 @@ GRAPHQL_QUERY = """query Issue286RecoveryReviewThreads(
   }
 }"""
 GRAPHQL_QUERY_SHA256 = (
-    "c1d9596eead2a652ce7f33120b48e03b7aaf533f2f5b719a88dd74196f631d54"
+    "4ce24d04bdcdf3b7fdf792cc2156d113acaa52250e469728b2d87a8991a87e36"
 )
 PUBLIC_CHECK_RUN_ID = 100_415_257_548
 FIRST_ID_OVER_SIGNED_32_BIT = 2_147_483_648
@@ -488,6 +489,7 @@ class RecoveryPreimageTests(unittest.TestCase):
                     "user": {"id": 2, "login": "fixture-reviewer"},
                 }
             ],
+            "review_decision": "APPROVED",
             "review_threads": [
                 {"id": "PRRT_resolved", "isResolved": True, "isOutdated": False}
             ],
@@ -584,7 +586,7 @@ class RecoveryPreimageTests(unittest.TestCase):
                     threads = fixture["review_threads"]
                     has_next = False
                     end_cursor = "fixture-end"
-                    if scenario == "graphql-pagination":
+                    if scenario in {{"graphql-pagination", "review-decision-changed-between-pages"}}:
                         if cursor is None:
                             threads = [threads[0]]
                             has_next = True
@@ -617,6 +619,15 @@ class RecoveryPreimageTests(unittest.TestCase):
                             + "\\n"
                         )
                         raise SystemExit(0)
+                    decision = fixture["review_decision"]
+                    if (
+                        scenario == "review-decision-changed-between-pages"
+                        and cursor is not None
+                    ) or (
+                        scenario == "review-decision-changed-between-observations"
+                        and counters[path] > 1
+                    ):
+                        decision = "CHANGES_REQUESTED"
                     value = {{
                         "data": {{
                             "repository": {{
@@ -624,6 +635,7 @@ class RecoveryPreimageTests(unittest.TestCase):
                                     "number": 286,
                                     "baseRefOid": {BASE_COMMIT!r},
                                     "headRefOid": {HEAD_COMMIT!r},
+                                    "reviewDecision": decision,
                                     "reviewThreads": {{
                                         "nodes": threads,
                                         "pageInfo": {{
@@ -635,6 +647,8 @@ class RecoveryPreimageTests(unittest.TestCase):
                             }}
                         }}
                     }}
+                    if scenario == "review-decision-missing":
+                        del value["data"]["repository"]["pullRequest"]["reviewDecision"]
                     sys.stdout.write(
                         json.dumps(value, sort_keys=True, separators=(",", ":")) + "\\n"
                     )
@@ -2343,6 +2357,170 @@ class RecoveryPreimageTests(unittest.TestCase):
         )
         self._assert_read_only_calls()
 
+    def test_current_approval_accepts_a_superseded_change_request(self) -> None:
+        # PR #327 retains CodeRabbit's earlier change request after the same
+        # reviewer approved the current commit and GitHub reports APPROVED.
+        reviews = _coderabbit_review_history()
+        reviews[1]["state"] = "CHANGES_REQUESTED"
+        self._write_review_fixture(reviews)
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(result.stdout, b"recovery preimage ready\n")
+        self.assertTrue((self.state / "ready.json").is_file())
+        observations = json.loads(self._observations_path(self.state).read_bytes())
+        self.assertEqual(observations["reviews"], reviews)
+        self._assert_read_only_calls()
+
+    def test_unapproved_current_decision_leaves_no_ready_file(self) -> None:
+        for name, decision in {
+            "changes-requested": "CHANGES_REQUESTED",
+            "review-required": "REVIEW_REQUIRED",
+            "null": None,
+            "unknown": "COMMENTED",
+            "wrong-type": True,
+        }.items():
+            with self.subTest(name):
+                fixture = self._fixture_value()
+                fixture["review_decision"] = decision
+                self.fixture.write_bytes(_json_bytes(fixture))
+                state = self.private / name
+
+                result = self._run(state)
+
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(result.stderr, b"recovery preimage preparation failed\n")
+                self.assertFalse((state / "ready.json").exists())
+                self._assert_read_only_calls()
+
+    def test_missing_current_review_decision_leaves_no_ready_file(self) -> None:
+        self._assert_failed_without_ready("review-decision-missing")
+
+    def test_review_decision_change_between_pages_leaves_no_ready_file(self) -> None:
+        self._assert_failed_without_ready("review-decision-changed-between-pages")
+        inputs = [json.loads(line) for line in self.graphql_inputs.read_text().splitlines()]
+        self.assertEqual(
+            [item["variables"]["threadsCursor"] for item in inputs],
+            [None, "fixture-page-one"],
+        )
+
+    def test_review_decision_change_between_observations_leaves_no_ready_file(
+        self,
+    ) -> None:
+        self._assert_failed_without_ready("review-decision-changed-between-observations")
+        self.assertEqual(len(self.graphql_inputs.read_text().splitlines()), 2)
+
+    def test_current_change_request_after_approval_leaves_no_ready_file(self) -> None:
+        fixture = self._fixture_value()
+        fixture["reviews"] = [
+            *_coderabbit_review_history(),
+            _review(
+                5_310_200_000,
+                CODERABBIT_STATUS_CREATOR,
+                "CHANGES_REQUESTED",
+                HEAD_COMMIT,
+                "2026-09-24T21:00:00Z",
+            ),
+        ]
+        fixture["review_decision"] = "CHANGES_REQUESTED"
+        self.fixture.write_bytes(_json_bytes(fixture))
+        self._assert_failed_without_ready("success")
+
+    def test_retracted_approval_blocks_even_when_github_reports_approved(self) -> None:
+        reviews = _coderabbit_review_history()
+        retraction = _review(
+            5_310_200_000,
+            CODERABBIT_STATUS_CREATOR,
+            "CHANGES_REQUESTED",
+            HEAD_COMMIT,
+            "2026-09-24T21:00:00Z",
+        )
+        self._write_review_fixture([*reviews, retraction])
+        self._assert_first_observation_rejected(self.state)
+
+    def test_same_commit_approval_supersedes_change_request_and_survives_comment(
+        self,
+    ) -> None:
+        reviews = _coderabbit_review_history()
+        reviews[1].update(state="CHANGES_REQUESTED", commit_id=HEAD_COMMIT)
+        reviews.append(_review(
+            5_310_200_000, CODERABBIT_STATUS_CREATOR, "COMMENTED", HEAD_COMMIT,
+            "2026-09-24T21:00:00Z",
+        ))
+        self._write_review_fixture(list(reversed(reviews)))
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertTrue((self.state / "ready.json").is_file())
+        self._assert_read_only_calls()
+
+    def test_reviewers_cannot_supersede_each_others_change_requests(self) -> None:
+        reviews = _coderabbit_review_history()
+        reviews[1]["state"] = "CHANGES_REQUESTED"
+        reviews[-1]["user"] = {"id": 2, "login": "fixture-reviewer"}
+        reviews[-1]["author_association"] = "COLLABORATOR"
+        self._write_review_fixture(reviews)
+        self._assert_first_observation_rejected(self.state)
+
+    def test_dismissed_current_opinion_needs_another_qualifying_approval(self) -> None:
+        reviews = _coderabbit_review_history()
+        dismissal = _review(
+            5_310_200_000, CODERABBIT_STATUS_CREATOR, "DISMISSED", HEAD_COMMIT,
+            "2026-09-24T21:00:00Z",
+        )
+        self._write_review_fixture([*reviews, dismissal])
+        self._assert_first_observation_rejected(self.private / "no-other-approval")
+        other = self._fixture_value()["reviews"][0]
+        self._write_review_fixture([*reviews, dismissal, other])
+
+        result = self._run(self.state)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertTrue((self.state / "ready.json").is_file())
+        self._assert_read_only_calls()
+
+    def test_ambiguous_or_invalid_review_order_leaves_no_ready_file(self) -> None:
+        for name, timestamp in {
+            "tied": "2026-09-24T20:53:03Z",
+            "tied-reversed": "2026-09-24T20:53:03Z",
+            "missing": None,
+            "invalid": "not-a-time",
+        }.items():
+            with self.subTest(name):
+                reviews = _coderabbit_review_history()
+                reviews[1].update(state="CHANGES_REQUESTED", submitted_at=timestamp)
+                if name == "tied-reversed":
+                    reviews.reverse()
+                self._write_review_fixture(reviews)
+                self._assert_first_observation_rejected(self.private / name)
+
+    def test_unique_latest_approval_accepts_tied_historical_opinions(self) -> None:
+        reviews = _coderabbit_review_history()
+        reviews[1]["state"] = "CHANGES_REQUESTED"
+        older = copy.deepcopy(reviews[1])
+        older.update(id=5_310_021_367, state="DISMISSED")
+        for name, ordered in {
+            "ascending": [reviews[0], reviews[1], older, reviews[2]],
+            "descending": [reviews[2], older, reviews[1], reviews[0]],
+        }.items():
+            with self.subTest(name):
+                self._write_review_fixture(ordered)
+                state = self.private / name
+                result = self._run(state)
+                self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+                self.assertTrue((state / "ready.json").is_file())
+        self._assert_read_only_calls()
+
+    def test_pending_review_blocks_an_approved_pull_request(self) -> None:
+        reviews = _coderabbit_review_history()
+        pending = copy.deepcopy(reviews[-1])
+        pending.update(id=5_310_200_000, state="PENDING", submitted_at=None)
+        self._write_review_fixture([*reviews, pending])
+        self._assert_first_observation_rejected(self.state)
+
     def test_unpinned_exact_head_approval_leaves_no_ready_file(self) -> None:
         def with_head_approval(
             user: dict[str, object], **changes: object
@@ -2375,22 +2553,14 @@ class RecoveryPreimageTests(unittest.TestCase):
             self._write_review_fixture(_coderabbit_review_history())
             self._assert_first_observation_rejected(state)
 
-    def test_pinned_reviewer_keeps_final_commit_and_change_request_rules(
+    def test_pinned_reviewer_keeps_final_commit_and_independence_rules(
         self,
     ) -> None:
         history = _coderabbit_review_history()
         earlier = copy.deepcopy(history)
         earlier[-1]["commit_id"] = REVIEWED_SOURCE_COMMIT
-        changes = _review(
-            5_310_200_000,
-            CODERABBIT_STATUS_CREATOR,
-            "CHANGES_REQUESTED",
-            HEAD_COMMIT,
-            "2026-09-24T21:00:00Z",
-        )
         cases = {
             "approval-of-an-earlier-commit": (earlier, None),
-            "changes-requested-after-approval": ([*history, changes], None),
             "pinned-reviewer-is-the-author": (history, CODERABBIT_STATUS_CREATOR_ID),
         }
         for name, (reviews, author_id) in cases.items():

@@ -52,6 +52,7 @@ GRAPHQL_QUERY = """query Issue286RecoveryReviewThreads(
       number
       baseRefOid
       headRefOid
+      reviewDecision
       reviewThreads(first: 100, after: $threadsCursor) {
         nodes {
           id
@@ -67,7 +68,7 @@ GRAPHQL_QUERY = """query Issue286RecoveryReviewThreads(
   }
 }"""
 GRAPHQL_QUERY_SHA256 = (
-    "c1d9596eead2a652ce7f33120b48e03b7aaf533f2f5b719a88dd74196f631d54"
+    "4ce24d04bdcdf3b7fdf792cc2156d113acaa52250e469728b2d87a8991a87e36"
 )
 
 REQUEST_MAX_BYTES = 1_048_576
@@ -1165,7 +1166,7 @@ def _paginated_review_threads(
         )
         pull = _exact_keys(
             repository["pullRequest"],
-            {"number", "baseRefOid", "headRefOid", "reviewThreads"},
+            {"number", "baseRefOid", "headRefOid", "reviewDecision", "reviewThreads"},
             "GraphQL pull request",
         )
         if (
@@ -1174,6 +1175,8 @@ def _paginated_review_threads(
             or pull["headRefOid"] != request["head_commit"]
         ):
             raise PreimageError("GraphQL pull request does not match the request")
+        if pull["reviewDecision"] != "APPROVED":
+            raise PreimageError("pull request is not currently approved")
         connection = _exact_keys(
             pull["reviewThreads"], {"nodes", "pageInfo"}, "review threads"
         )
@@ -1349,7 +1352,8 @@ def _validate_reviews(
     if not isinstance(value, list):
         raise PreimageError("pull request reviews are invalid")
     identifiers: set[int] = set()
-    approvals = 0
+    latest: dict[int, dict[str, object]] = {}
+    ambiguous: set[int] = set()
     normalized: list[dict[str, object]] = []
     for record in value:
         if not isinstance(record, dict):
@@ -1359,14 +1363,27 @@ def _validate_reviews(
             raise PreimageError("pull request reviews contain duplicate IDs")
         identifiers.add(identifier)
         state = record.get("state")
-        if state in {"PENDING", "CHANGES_REQUESTED"}:
+        if state == "PENDING":
             raise PreimageError("pull request has an unaccepted review state")
-        if state not in {"APPROVED", "COMMENTED", "DISMISSED"}:
+        if state not in {"APPROVED", "COMMENTED", "DISMISSED", "CHANGES_REQUESTED"}:
             raise PreimageError("pull request review state is invalid")
         user = record.get("user")
         if not isinstance(user, dict):
             raise PreimageError("pull request reviewer identity is invalid")
         reviewer_id = _require_positive_id(user.get("id"), "reviewer ID")
+        if state != "COMMENTED":
+            submitted_at = record.get("submitted_at")
+            if (
+                not isinstance(submitted_at, str)
+                or GITHUB_TIMESTAMP.fullmatch(submitted_at) is None
+            ):
+                raise PreimageError("review submission time is invalid")
+            newest = latest.get(reviewer_id)
+            if newest is None or submitted_at > newest["submitted_at"]:
+                latest[reviewer_id] = record
+                ambiguous.discard(reviewer_id)
+            elif submitted_at == newest["submitted_at"]:
+                ambiguous.add(reviewer_id)
         if state == "APPROVED" and record.get("commit_id") == head:
             login = user.get("login")
             pinned = isinstance(login, str) and (reviewer_id, login) in trusted
@@ -1379,9 +1396,15 @@ def _validate_reviews(
                 or not isinstance(record.get("submitted_at"), str)
             ):
                 raise PreimageError("exact-head approval is not independent")
-            approvals += 1
         normalized.append(record)
-    if approvals < 1:
+    if ambiguous:
+        raise PreimageError("latest reviewer opinion is ambiguous")
+    if any(record["state"] == "CHANGES_REQUESTED" for record in latest.values()):
+        raise PreimageError("pull request has a current change request")
+    if not any(
+        record["state"] == "APPROVED" and record.get("commit_id") == head
+        for record in latest.values()
+    ):
         raise PreimageError("pull request lacks an exact-head approval")
     return sorted(normalized, key=lambda record: int(record["id"]))
 
