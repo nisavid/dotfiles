@@ -1,0 +1,11 @@
+{{- $bindingData := .gitIdentity -}}
+{{- if not (get $bindingData "publicFixture") -}}
+{{- $bindingData = include ".private-git-identities.toml.age" | decrypt | fromToml -}}
+{{- end -}}
+{{- $identityName := default $bindingData.selection.default (index $bindingData.selection.byHostname .chezmoi.hostname) -}}
+{{- $identity := index $bindingData.identities $identityName -}}
+{{- if eq $identityName $bindingData.selection.default -}}
+Ivan's default Git identity is `Ivan D Vasin <{{ $identity.email }}>`, his GitHub account is `nisavid`, and his default branch prefix is `{{ $identity.branchPrefix }}`. Unless the repository's own instructions or a more specific rule for its owner set a different convention, commit with the identity the host's Git configuration provides (don't override it), make GitHub mutations through `nisavid`, and prefix new branches with `{{ $identity.branchPrefix }}`.
+{{- else -}}
+This host's Git identity is `Ivan D Vasin <{{ $identity.email }}>`, and its default branch prefix is `{{ $identity.branchPrefix }}`. Unless the repository's own instructions or a more specific rule for its owner set a different convention, commit with the identity the host's Git configuration provides (don't override it), prefix new branches with `{{ $identity.branchPrefix }}`, and make GitHub mutations only through the account the task or repository establishes.
+{{- end -}}

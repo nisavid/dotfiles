@@ -67,6 +67,27 @@ rg -F 'export EDITOR_TARGET="code"' "$modifier" >/dev/null ||
 rg -F 'export GIT_BRANCH_PREFIX="developer/"' "$modifier" >/dev/null ||
   fail 'Codex modifier did not select the synthetic branch prefix'
 
+git_defaults_rule=home/dot_claude/rules/private_git-defaults.md.tmpl
+work_rule=$test_dir/git-defaults-work
+chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
+  < "$git_defaults_rule" > "$work_rule"
+rg -F 'prefix new branches with `developer/`' "$work_rule" >/dev/null ||
+  fail 'Git defaults rule did not select the synthetic host branch prefix'
+rg -F 'developer@example.invalid' "$work_rule" >/dev/null ||
+  fail 'Git defaults rule did not select the synthetic host email'
+! rg -F 'nisavid' "$work_rule" >/dev/null ||
+  fail 'Git defaults rule states personal defaults on a non-default identity'
+
+personal_rule=$test_dir/git-defaults-personal
+unbound_data=$(print -r -- "$fixture_data" |
+  sed 's/"hostname": "fixture-workstation"/"hostname": "unbound-host"/')
+chezmoi -S "$repo_root/home" execute-template --override-data "$unbound_data" \
+  < "$git_defaults_rule" > "$personal_rule"
+rg -F 'prefix new branches with `nisavid/`' "$personal_rule" >/dev/null ||
+  fail 'Git defaults rule did not select the default identity on an unbound host'
+rg -F 'make GitHub mutations through `nisavid`' "$personal_rule" >/dev/null ||
+  fail 'Git defaults rule did not name the default GitHub account'
+
 no_tracking=$test_dir/configure-no-tracking
 chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
   < home/run_after_configure-zsh-no-tracking.zsh.tmpl > "$no_tracking"
