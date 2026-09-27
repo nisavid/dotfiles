@@ -243,6 +243,33 @@ chmod 1777 "$checker_ancestor"
   fail 'a sticky world-writable checker ancestor must stay trusted'
 chmod 755 "$checker_ancestor"
 
+# An ACL that lets another user change the checker or a directory above it is
+# write access too. macOS lists ACLs apart from the mode bits; a Linux POSIX
+# ACL's write grants show in the group bits, as its mask.
+if [[ $OSTYPE == darwin* ]]; then
+  chmod +a 'everyone allow add_file,delete_child' "$checker_ancestor"
+  expect_fail_closed 'a trusted GitHub identity checker is required' \
+    'an ACL that grants changes to a checker ancestor' fixture-personal github -- target
+  chmod -N "$checker_ancestor"
+  chmod +a 'everyone allow write' "$homebrew_bin/gh"
+  expect_fail_closed 'a trusted GitHub identity checker is required' \
+    'an ACL that grants changes to the checker' fixture-personal github -- target
+  chmod -N "$homebrew_bin/gh"
+  # macOS home directories carry this entry.
+  chmod +a 'everyone deny delete' "$checker_ancestor"
+  [[ $(run_launcher) == target-ran ]] ||
+    fail 'a deny-only ACL on a checker ancestor must stay trusted'
+  chmod -N "$checker_ancestor"
+elif command -v setfacl >/dev/null &&
+  setfacl -m u:nobody:rwx "$checker_ancestor" 2>/dev/null; then
+  expect_fail_closed 'a trusted GitHub identity checker is required' \
+    'a POSIX ACL that grants writes to a checker ancestor' fixture-personal github -- target
+  setfacl -m u:nobody:rx "$checker_ancestor"
+  [[ $(run_launcher) == target-ran ]] ||
+    fail 'a read-only POSIX ACL on a checker ancestor must stay trusted'
+  setfacl -b "$checker_ancestor"
+fi
+
 chmod 720 "$homebrew_bin/gh"
 set +e
 untrusted_output=$(run_launcher 2>&1)

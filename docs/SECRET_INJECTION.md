@@ -49,7 +49,11 @@ must belong to root or the current user and must not be group- or
 world-writable. Every directory above it must also belong to root or the
 current user, and one writable by its group or by others must be sticky, with
 the next path component owned by root or the current user, so no other user can
-rename the checker away after these checks. Homebrew's prefix directories are
+rename the checker away after these checks. On macOS, neither the checker nor
+any directory above it may carry an access control list (ACL) entry that allows
+more than reading; deny entries, such as the one on home directories, are fine.
+On Linux, a POSIX ACL that grants writes shows in the group bits, as its mask,
+so the group-writable rule already covers it. Homebrew's prefix directories are
 group-writable and not sticky, so a Homebrew-installed `gh` fails this check;
 #357 tracks a trusted-group rule.
 
