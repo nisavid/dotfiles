@@ -10,7 +10,7 @@
 # Machine-local git overrides (e.g. coderabbit machineId); not tracked.
 .config/git/config.local
 
-{{ if not (get .hindsight "publicFixture") }}
+{{ if not (get (default (dict) (get . "hindsight")) "publicFixture") }}
 # Hindsight has no consumer binding; only explicit public fixtures render it.
 .agents/skills/hindsight-*
 .config/hindsight-*
