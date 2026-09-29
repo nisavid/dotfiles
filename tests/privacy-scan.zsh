@@ -9,10 +9,10 @@ trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
 scan_output=
 run_scan() {
-  set +e
+  emulate -L zsh
+  setopt nounset pipefail
   scan_output=$(python3 "$scanner" "$@" 2>&1)
   scan_status=$?
-  set -e
 }
 
 run_failed_scan() {
