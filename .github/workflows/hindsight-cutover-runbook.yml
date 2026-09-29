@@ -73,11 +73,45 @@ jobs:
             exit 1
           fi
 
+      - name: Record the default temporary directory
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ.get("TMPDIR") or "/tmp")
+          before = sorted(path.name for path in root.glob("hindsight-cutover-test.*"))
+          record = {"root": str(root), "before": before}
+          (Path(os.environ["RUNNER_TEMP"]) / "cutover-temp-before.json").write_text(json.dumps(record))
+          print(f"Default TMPDIR: {root}")
+          print(f"Resolved directory: {root.resolve()}")
+          print(f"Existing cutover fixture directories: {len(before)}")
+          PY
+
       - name: Run the cutover runbook suite
         working-directory: dotfiles
         env:
           HINDSIGHT_AGENTS_ROOT: ${{ github.workspace }}/agents
-          # The cutover script rejects helpers under any symlinked directory,
-          # and the macOS default TMPDIR sits under the /var symlink.
-          TMPDIR: ${{ runner.temp }}
         run: zsh tests/hindsight-cutover-runbook.zsh
+
+      - name: Verify cutover fixture cleanup
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          record_path = Path(os.environ["RUNNER_TEMP"]) / "cutover-temp-before.json"
+          if not record_path.exists():
+              raise SystemExit("Temporary-directory observation did not run")
+          record = json.loads(record_path.read_text())
+          after = {path.name for path in Path(record["root"]).glob("hindsight-cutover-test.*")}
+          added = sorted(after - set(record["before"]))
+          print(f"New cutover fixture directories remaining: {len(added)}")
+          if added:
+              raise SystemExit("Cutover suite left fixture directories: " + ", ".join(added))
+          PY
