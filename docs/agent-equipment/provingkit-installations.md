@@ -53,7 +53,7 @@ The marketplace defaults to `provingkit`. Codex also supports the explicit
 repository's `provingkit` catalog. Other names are unavailable. Claude retains
 `provingkit`; Cursor uses its local directory route.
 Changing an identity already recorded by this producer requires a separately
-reviewed migration. The command refuses that change before native actions;
+reviewed migration. The command checks this before processing any client;
 it does not install duplicate aliases or rename the existing marketplace.
 
 Use a complete clean catalog from one source snapshot when an existing shared
@@ -161,16 +161,21 @@ do not edit the observation receipt to make an unknown installation appear
 recognized. This also applies to installations recorded by older versions of
 this procedure that lack the `native_files` inventory.
 
-An existing Codex `provingkit-local` source can be adopted in place when its complete files
-and modes match the verified installation view and every selected installation
-already has the requested content, registration, and enabled state. Record its
-actual source and inventories without rebinding the marketplace or changing
-caches. This observation-only adoption also works with unselected members.
+An existing Codex `provingkit-local` source can be adopted in place when its
+complete files and modes match the verified installation view and every selected
+installation already has the requested content, registration, and enabled state.
+Record its actual source and complete file/mode baseline without rebinding the
+marketplace or changing caches. This observation-only adoption also works with
+unselected members.
 Missing selected caches can subsequently be repaired from that same verified
 source without rebinding it; unexplained cache edits still stop replacement.
-Retain the original source directory. A later source change still follows the
-client's rebind rules below; adoption does not make a commit-addressed directory
-mutable or establish a selected-only Codex rebind.
+Retain the original source directory unchanged. Every later run that selects
+Codex checks its recorded baseline before processing any client. A changed or
+missing retained source stops the run for reconciliation with its owner, even
+when it matches the newly requested artifact. Selecting a new artifact while
+the retained source remains unchanged follows the client's rebind rules below;
+adoption does not make a commit-addressed directory mutable or establish a
+selected-only Codex rebind.
 
 An initial source rebind differs by client:
 
@@ -184,12 +189,13 @@ An initial source rebind differs by client:
   report `plugin-not-found`, even though their cache bytes remain. Use the
   complete catalog and replace only the selected installations.
 
-Before native mutations, capture unselected registrations and cache bytes/modes.
+Before native mutations, capture unselected registrations and payload bytes/modes,
+excluding Claude's validated volatile process markers.
 Check them again after each native mutation and at the end. Existing member
 errors, ambiguous scopes, unknown cache layouts, or unrecognized files stop
 reconciliation. An explicitly enabled Claude `autoUpdate` setting also blocks
 reconciliation when unselected members are installed. Its observed setting is reported;
-`unspecified` does not mean disabled. No tested command changed unselected cache
+`unspecified` does not mean disabled. No tested command changed unselected payload
 bytes, but a later interactive client's update behavior still needs observation.
 
 Native command success is insufficient. Claude can report a successful

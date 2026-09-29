@@ -797,7 +797,10 @@ def native_reconcile(
     retained_source_matches = False
     if rebind and native.name == "codex" and native.marketplace == "provingkit-local":
         baseline = native_status(native, choice, root, marketplace, rows, receipt)
-        retained_source_matches = baseline["source_binding"] == "match"
+        prior_source = receipt.get("retained_codex_source")
+        retained_source_matches = baseline["source_binding"] == "match" and (
+            prior_source is None or prior_source["path"] == source
+        )
         if retained_source_matches:
             rebind = False
     unselected = set(rows) - set(choice["members"])
@@ -831,9 +834,13 @@ def native_reconcile(
                 f"unrecognized selected cache for {member}; reconcile its contents with the owner before replacement",
             )
     if retained_source_matches:
+        source_files = files(Path(source))
         native_require(
-            files(Path(source)) == files(root),
+            source_files == files(root),
             "registered source changed during adoption",
+        )
+        receipt.setdefault(
+            "retained_codex_source", {"path": source, "files": source_files}
         )
         changed = False
     else:
@@ -899,6 +906,8 @@ def native_reconcile(
         native.snapshot(final_rows, set(native.sentinels)) == native.sentinels,
         "unselected native state changed; inspect the retained observation",
     )
+    if native.name == "codex" and not retained_source_matches:
+        receipt.pop("retained_codex_source", None)
     return marketplace, final_rows
 
 
@@ -1110,6 +1119,33 @@ def main() -> int:
                     )
                 )
                 return 2
+            try:
+                codex_choice = profile["clients"].get("codex")
+                if codex_choice is not None:
+                    native_require(
+                        receipt.get("codex_marketplace")
+                        in (None, codex_choice.get("marketplace", "provingkit")),
+                        "identity_transition_unavailable: changing a recorded Codex marketplace requires a separate migration",
+                    )
+                    retained = receipt.get("retained_codex_source")
+                    if retained is not None:
+                        native_require(
+                            files(Path(retained["path"])) == retained["files"],
+                            "adopted Codex source changed; reconcile its baseline with the owner",
+                        )
+            except (
+                Unavailable,
+                OSError,
+                ValueError,
+                KeyError,
+                TypeError,
+                AttributeError,
+            ) as error:
+                report.update(
+                    outcome="selection_transition_unavailable", message=str(error)
+                )
+                print(json.dumps(report, sort_keys=True))
+                return 2
             for client, choice in profile["clients"].items():
                 native = None
                 try:
@@ -1124,12 +1160,6 @@ def main() -> int:
                             cursor_reconcile(home, choice, root, receipt)
                         observation = cursor_status(home, choice, root)
                     else:
-                        native_require(
-                            client != "codex"
-                            or receipt.get("codex_marketplace")
-                            in (None, choice.get("marketplace", "provingkit")),
-                            "identity_transition_unavailable: changing a recorded Codex marketplace requires a separate migration",
-                        )
                         with installation_view(root, choice) as root:
                             native = NativeClient(
                                 client, home, choice.get("marketplace", "provingkit")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -316,6 +317,8 @@ class InstallationCommandTests(unittest.TestCase):
         stable = Path(first["clients"]["codex"]["marketplace"]["root"])
         external = self.home / "retained-alpha"
         shutil.copytree(stable, external)
+        retained_backup = self.home / "retained-alpha-backup"
+        shutil.copytree(external, retained_backup)
         for member in selection["profile"]["artifact_slate"]:
             self.native_run(
                 "codex", "plugin", "remove", member + "@provingkit-local", "--json"
@@ -371,6 +374,7 @@ class InstallationCommandTests(unittest.TestCase):
                 if p.is_file()
             },
         )
+
         repeated_code, repeated = self.run_command("reconcile")
         self.assertEqual(
             (repeated_code, repeated["outcome"]), (0, "converged"), repeated
@@ -410,7 +414,68 @@ class InstallationCommandTests(unittest.TestCase):
         )
         code, drift = self.run_command("reconcile")
         self.assertEqual(code, 2, drift)
-        self.assertEqual(drift["clients"]["codex"]["actions"], [])
+        self.assertEqual(drift["clients"], {})
+
+        # An external owner advances this same directory to the requested artifact.
+        # Matching new bytes cannot authorize a transition of an adopted baseline.
+        shutil.rmtree(external)
+        shutil.copytree(artifact_root(self.home, desired, "agent-plugins"), external)
+        catalog = external / ".agents/plugins/marketplace.json"
+        catalog.write_bytes(
+            catalog.read_bytes().replace(
+                b'"name":"provingkit"', b'"name":"provingkit-local"'
+            )
+        )
+        parent_bytes = (external / "RECEIPT.json").read_bytes()
+        parent = json.loads(parent_bytes)
+        (external / "RECEIPT.json").write_text(
+            json.dumps(
+                {
+                    "schema": "provingkit-local-marketplace-projection-v1",
+                    "source_commit": parent["source"]["commit"],
+                    "parent_receipt_sha256": hashlib.sha256(parent_bytes).hexdigest(),
+                    "change": {
+                        "path": ".agents/plugins/marketplace.json",
+                        "field": "name",
+                        "from": "provingkit",
+                        "to": "provingkit-local",
+                    },
+                    "plugin_slate": parent["plugin_slate"],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        self.selection.write_text(json.dumps(desired))
+        code, replaced_source = self.run_command("reconcile")
+        self.assertEqual(code, 2, replaced_source)
+        self.assertIn("adopted Codex source changed", replaced_source["message"])
+        self.assertEqual(replaced_source["clients"], {})
+        self.assertEqual(
+            before_files,
+            {
+                str(p.relative_to(cache)): (p.read_bytes(), p.stat().st_mode)
+                for p in cache.rglob("*")
+                if p.is_file()
+            },
+        )
+
+        # A coordinated selection of all members can rebind from the unchanged
+        # baseline to the owned source; the old source is then no longer needed.
+        shutil.rmtree(external)
+        shutil.copytree(retained_backup, external)
+        desired["profile"]["clients"]["codex"]["members"] = {
+            member: {"enabled": True} for member in desired["profile"]["artifact_slate"]
+        }
+        self.selection.write_text(json.dumps(desired))
+        code, advanced = self.run_command("reconcile")
+        self.assertEqual((code, advanced["outcome"]), (0, "converged"), advanced)
+        self.assertEqual(
+            advanced["clients"]["codex"]["marketplace"]["root"], str(stable)
+        )
+        shutil.rmtree(external)
+        code, independent = self.run_command("status")
+        self.assertEqual((code, independent["outcome"]), (0, "converged"), independent)
 
     def test_claude_process_markers_do_not_change_payload_identity_and_are_backed_up(
         self,
@@ -520,6 +585,7 @@ class InstallationCommandTests(unittest.TestCase):
         receipt.pop("codex_marketplace", None)
         receipt.pop("native_paths", None)
         receipt_path.write_text(json.dumps(receipt))
+        selection = fixture_selection(self.home, clients=("claude", "cursor", "codex"))
         selection["profile"]["clients"]["codex"]["marketplace"] = "provingkit-local"
         self.selection.write_text(json.dumps(selection))
         before = json.loads(
@@ -531,9 +597,11 @@ class InstallationCommandTests(unittest.TestCase):
             self.assertEqual(code, 2, refused)
             self.assertIn(
                 "identity_transition_unavailable",
-                refused["clients"]["codex"]["message"],
+                refused["message"],
             )
-            self.assertEqual(refused["clients"]["codex"]["actions"], [])
+            self.assertEqual(refused["clients"], {})
+            self.assertFalse((self.home / ".cursor/plugins/local").exists())
+            self.assertFalse((self.home / ".claude/plugins/cache").exists())
             self.assertFalse(
                 (
                     self.home
