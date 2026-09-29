@@ -7,7 +7,8 @@ scanner=$repo_root/scripts/privacy-scan
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/privacy-scan.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
-scan_output=
+typeset -g scan_output=
+typeset -gi scan_status=0
 run_scan() {
   emulate -L zsh
   setopt nounset pipefail
@@ -16,18 +17,24 @@ run_scan() {
 }
 
 run_failed_scan() {
+  emulate -L zsh
+  setopt nounset pipefail
   run_scan "$@"
   # exit, not return: errexit inside a function skips zsh's EXIT trap.
   (( scan_status != 0 )) || exit 1
 }
 
 expect_single_finding() {
+  emulate -L zsh
+  setopt nounset pipefail
   local expected=$1
   shift
   expect_findings "$expected" 1 "$@"
 }
 
 expect_findings() {
+  emulate -L zsh
+  setopt nounset pipefail
   local expected=$1
   local expected_count=$2
   local -a output_lines
