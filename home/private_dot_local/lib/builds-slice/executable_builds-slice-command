@@ -33,13 +33,13 @@
 # exit status, and environment. When systemd-run, systemctl, or choom is
 # missing, systemd-run does not report systemd 254 or newer, the systemd user
 # manager does not answer, or builds.slice has no unit file, this script warns
-# once and runs the tool without the cap. When the tool itself is missing, it fails with
-# status 127, like a missing command.
+# once and runs the tool without the cap. When the tool itself is missing, it
+# fails with status 127, like a missing command.
 #
-# choom raises everything the tool starts, including the `sudo pacman` that
-# makepkg -s, -r, and -i run, and pacman's hooks. ~/.config/pacman/makepkg.conf
-# sets that pacman's score back to 0, so a host-wide OOM no longer favors it in
-# the middle of a transaction.
+# choom raises everything the tool starts, including the sudo that makepkg -s,
+# -r, and -i run pacman through, and pacman's hooks.
+# ~/.config/pacman/makepkg.conf sets pacman's score back to 0 and says how far
+# that protects a transaction, given that sudo keeps the raised score.
 #
 # To skip the cap for one run, put /usr/bin first in PATH, for example
 # `PATH=/usr/bin:$PATH makepkg ...`, so the cmake and ninja that the build
