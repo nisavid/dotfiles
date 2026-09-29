@@ -96,6 +96,20 @@ jobs:
           HINDSIGHT_AGENTS_ROOT: ${{ github.workspace }}/agents
         run: zsh tests/hindsight-cutover-runbook.zsh
 
+      - name: Diagnose a failed cutover fixture
+        if: failure()
+        shell: bash
+        env:
+          HINDSIGHT_AGENTS_ROOT: ${{ github.workspace }}/agents
+        run: |
+          set -euo pipefail
+          diagnostic="$RUNNER_TEMP/cutover-diagnostic"
+          mkdir -p "$diagnostic/scripts" "$diagnostic/tests" "$diagnostic/home/.chezmoidata"
+          cp dotfiles/tests/hindsight-cutover-runbook.zsh "$diagnostic/tests/"
+          cp dotfiles/home/.chezmoidata/hindsight.toml "$diagnostic/home/.chezmoidata/"
+          { head -n 1 dotfiles/scripts/hindsight-control-plane-cutover.zsh; echo 'set -x'; tail -n +2 dotfiles/scripts/hindsight-control-plane-cutover.zsh; } > "$diagnostic/scripts/hindsight-control-plane-cutover.zsh"
+          zsh -x "$diagnostic/tests/hindsight-cutover-runbook.zsh"
+
       - name: Verify cutover fixture cleanup
         if: always()
         shell: bash
