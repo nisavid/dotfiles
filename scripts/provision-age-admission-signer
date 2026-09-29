@@ -1,0 +1,4748 @@
+#!/usr/bin/env python3
+"""Provision and qualify one recovery-only age-admission signer."""
+
+from __future__ import annotations
+
+import sys
+
+_FAILURE = "age-admission signer provisioning failed"
+_INTERRUPTED = "age-admission signer provisioning interrupted"
+_RECONCILIATION = "age-admission signer provisioning requires reconciliation"
+_CLEANUP_INCOMPLETE = "age-admission signer provisioning cleanup incomplete"
+
+if not sys.flags.isolated or not sys.flags.dont_write_bytecode or not sys.flags.no_site:
+    print(_FAILURE, file=sys.stderr)
+    raise SystemExit(1)
+
+import argparse
+import base64
+import binascii
+import calendar
+import datetime as dt
+import errno
+import hashlib
+import json
+import os
+import re
+import selectors
+import shutil
+import signal
+import stat
+import struct
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from types import FrameType
+from typing import Any
+
+os.umask(0o077)
+
+REQUEST_SCHEMA = "issue286-provisioning/v4"
+MANIFEST_SCHEMA = "issue286-reviewed-source-manifest/v1"
+FIXTURE_SCHEMA = "issue286-provider-fixture-binding/v1"
+QUALIFIED_CLEAN_SCHEMA = "issue286-qualified-clean/v2"
+READY_FOR_RECOVERY_SCHEMA = "issue286-ready-for-recovery/v2"
+STATE_SCHEMA = "issue286-provisioning-state/v4"
+TERMINAL_COMMIT_SCHEMA = "issue286-terminal-commit/v1"
+FIXTURE_REQUEST_SCHEMA = "issue286-provider-fixture/v1"
+PASS_CLI_SOURCE_COMMIT = "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112"
+PROVIDER_COMMAND_SCHEMA = "issue286-pass-cli-2.3.3-provider-commands/v4"
+SOURCE_MANIFEST_SHA256 = (
+    "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b"
+)
+FIXTURE_REPOSITORY = "fixture.invalid/issue286-age-admission-provider"
+AGENT_REASON = "age-admission signing-key retrieval"
+ITEM_FIELD = "SSH.private_key"
+LOGIN_CREDENTIAL_FIELD = "PROTON_PASS_PERSONAL_ACCESS" + "_TOKEN"
+
+MAX_REQUEST_BYTES = 256 * 1024
+MAX_MANIFEST_BYTES = 256 * 1024
+MAX_FIXTURE_BYTES = 2 * 1024 * 1024
+MAX_STATE_BYTES = 2 * 1024 * 1024
+MAX_RESULT_BYTES = 64 * 1024
+MAX_TERMINAL_BYTES = 64 * 1024
+MAX_SIGNER_PRIVATE_BYTES = 64 * 1024
+MAX_SIGNER_PUBLIC_BYTES = 4 * 1024
+MAX_TOKEN_BYTES = 16 * 1024
+MAX_SOURCE_BLOB_BYTES = 4 * 1024 * 1024
+MAX_SOURCE_AGGREGATE_BYTES = 16 * 1024 * 1024
+MAX_CHILD_CAPTURE_BYTES = 1024 * 1024
+MAX_EXECUTABLE_BYTES = 128 * 1024 * 1024
+MAX_GIT_TREE_ENTRIES = 10_000
+
+TOOL_OBSERVATION_TIMEOUT_SECONDS = 15
+PROVIDER_READ_TIMEOUT_SECONDS = 30
+PROVIDER_MUTATION_TIMEOUT_SECONDS = 60
+PROVIDER_ADAPTER_TIMEOUT_SECONDS = 360
+TERMINATION_GRACE_SECONDS = 2.0
+
+COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+DIGEST = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
+# Proton IDs are 64-byte URL-safe base64 values; pass-cli's is_id requires 88
+# characters ending in "==". They may begin with "-", so argv attaches them.
+IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{86}==\Z", re.ASCII)
+FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}\Z", re.ASCII)
+VERSION_OUTPUT = re.compile(rb"Proton Pass CLI 2\.3\.3 \([0-9a-f]{7,40}\)\n\Z")
+# Pinned agent create prints the bare `pst_<64>::<key>` value; its public docs
+# show an assignment prefix. The key is a URL-safe no-pad 32-byte encoding.
+AGENT_TOKEN = re.compile(
+    r"(?:PROTON_PASS_PERSONAL_ACCESS_TOKEN=)?"
+    r"(pst_[!-9;-~]{64}::([A-Za-z0-9_-]{43}))\Z",
+    re.ASCII,
+)
+SOURCE_PATH = re.compile(r"[A-Za-z0-9._/-]+\Z", re.ASCII)
+
+SOURCE_MODES = {
+    "home/private_dot_local/bin/executable_proton-pass-age-admission": "100644",
+    "home/private_dot_local/bin/executable_proton-pass-ensure-ready": "100755",
+    "scripts/admit-age-envelopes": "100755",
+    "scripts/agent_equipment_public_data.py": "100644",
+    "scripts/build-age-admission-provider-fixture": "100755",
+    "scripts/create-age-admission-receipt": "100755",
+    "scripts/prepare-age-admission-recovery-preimage": "100755",
+    "scripts/privacy-scan": "100755",
+    "scripts/privacy_age_admission.py": "100644",
+    "scripts/privacy_age_envelopes.py": "100644",
+    "scripts/privacy_age_integrity_gate.py": "100755",
+    "scripts/provision-age-admission-signer": "100755",
+    "scripts/run-trusted-age-admission": "100755",
+}
+
+REQUEST_KEYS = {
+    "age_tooling",
+    "mode",
+    "pass_cli",
+    "private_parent",
+    "provider",
+    "provider_schema",
+    "qualification",
+    "qualified_clean",
+    "reviewed_source",
+    "schema",
+    "sessions",
+}
+
+_TERMINATION_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+_caught_signal = 0
+_active_process: ProcessLease | None = None
+
+
+class ProvisioningError(RuntimeError):
+    """The closed provisioning contract was not established."""
+
+
+class TerminalCommitFailure(ProvisioningError):
+    """Terminal publication failed before the disposition commit point."""
+
+
+class ProvisioningInterrupted(BaseException):
+    """A catchable signal interrupted the bounded operation."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(signum)
+        self.signum = signum
+
+
+class ProvisioningStop(BaseException):
+    """The durable state machine reached a non-success terminal stop."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(status)
+        self.status = status
+
+
+class PreSpawnFailure(ProvisioningError):
+    """A durably armed request was proven not to have created a process."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
+
+
+class UnverifiedChildRetirement(ProvisioningError):
+    """A child lease could not prove both leader and process-group retirement."""
+
+
+@dataclass(frozen=True)
+class ChildResult:
+    spawned: bool
+    outcome: str
+    status: int | None
+    signal_number: int | None
+    stdout: bytes
+    stderr: bytes
+
+
+@dataclass
+class ProcessLease:
+    process: subprocess.Popen[bytes]
+    pgid: int
+    term_sent: bool = False
+    finalizing: bool = False
+
+
+def _signal_handler(signum: int, _frame: FrameType | None) -> None:
+    global _caught_signal
+    if _caught_signal:
+        return
+    _caught_signal = signum
+    lease = _active_process
+    if lease is not None and not lease.term_sent:
+        lease.term_sent = True
+        try:
+            os.killpg(lease.pgid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def _install_signal_handlers() -> None:
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        raise ProvisioningError("catchable signal handling is unavailable")
+    for signum in _TERMINATION_SIGNALS:
+        signal.signal(signum, _signal_handler)
+    pthread_sigmask(signal.SIG_UNBLOCK, _TERMINATION_SIGNALS)
+
+
+def _check_signal() -> None:
+    if _caught_signal:
+        raise ProvisioningInterrupted(_caught_signal)
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _canonical_json(document: object) -> bytes:
+    try:
+        return (
+            json.dumps(document, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
+        ).encode("ascii")
+    except (
+        TypeError,
+        UnicodeError,
+        ValueError,
+        OverflowError,
+        RecursionError,
+    ) as error:
+        raise ProvisioningError("JSON value is not canonicalizable") from error
+
+
+def _reject_constant(_value: str) -> None:
+    raise ProvisioningError("non-finite JSON number")
+
+
+def _object_from_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ProvisioningError("duplicate JSON member")
+        result[key] = value
+    return result
+
+
+def _parse_canonical_json(data: bytes) -> dict[str, Any]:
+    try:
+        document = json.loads(
+            data.decode("utf-8"),
+            object_pairs_hook=_object_from_pairs,
+            parse_constant=_reject_constant,
+        )
+    except (UnicodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
+        raise ProvisioningError("JSON input is invalid") from error
+    if not isinstance(document, dict) or _canonical_json(document) != data:
+        raise ProvisioningError("JSON input is not canonical")
+    return document
+
+
+def _exact_keys(value: object, expected: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != expected:
+        raise ProvisioningError(f"{label} shape is invalid")
+    return value
+
+
+def _absolute_path(value: object) -> Path:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ProvisioningError("path is invalid")
+    path = Path(value)
+    if not path.is_absolute() or os.fspath(path) != os.path.abspath(path):
+        raise ProvisioningError("path is not canonical and absolute")
+    return path
+
+
+def _reject_symlink_components(path: Path, *, allow_missing_leaf: bool = False) -> None:
+    current = Path(path.anchor)
+    parts = path.parts[1:]
+    for index, segment in enumerate(parts):
+        current /= segment
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            if allow_missing_leaf and index == len(parts) - 1:
+                return
+            raise ProvisioningError("path is unavailable")
+        except OSError as error:
+            raise ProvisioningError("path is unavailable") from error
+        if stat.S_ISLNK(info.st_mode):
+            raise ProvisioningError("path traverses a symbolic link")
+
+
+def _validate_private_directory(path: Path) -> None:
+    _reject_symlink_components(path)
+    try:
+        info = path.lstat()
+    except OSError as error:
+        raise ProvisioningError("private directory is unavailable") from error
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise ProvisioningError("private directory is not authoritative")
+
+
+def _validate_existing_profile_root(path: Path, label: str) -> None:
+    if path.name == ".session":
+        raise ProvisioningError(f"{label} profile root is a .session directory")
+    _validate_private_directory(path)
+    _validate_private_directory(path / ".session")
+
+
+def _read_regular(
+    path: Path,
+    *,
+    maximum: int,
+    required_mode: int | None = None,
+    require_owner: bool = True,
+    require_private_parent: bool = False,
+    require_single_link: bool = True,
+) -> bytes:
+    if require_private_parent:
+        _validate_private_directory(path.parent)
+    _reject_symlink_components(path)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    no_block = getattr(os, "O_NONBLOCK", None)
+    if no_follow is None or no_block is None:
+        raise ProvisioningError("safe regular-file reads are unavailable")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | no_follow | no_block | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as error:
+        raise ProvisioningError("input file is unavailable") from error
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or require_owner
+            and before.st_uid != os.geteuid()
+            or require_single_link
+            and before.st_nlink != 1
+            or required_mode is not None
+            and stat.S_IMODE(before.st_mode) != required_mode
+            or before.st_size < 0
+            or before.st_size > maximum
+        ):
+            raise ProvisioningError("input file is not authoritative")
+        chunks: list[bytes] = []
+        remaining = maximum + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if len(data) > maximum or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ProvisioningError("input file changed during validation")
+        return data
+    except OSError as error:
+        raise ProvisioningError("input file could not be read") from error
+    finally:
+        os.close(descriptor)
+
+
+def _write_all(descriptor: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            raise ProvisioningError("file write did not complete")
+        remaining = remaining[written:]
+
+
+def _exclusive_create(path: Path) -> tuple[int, tuple[int, int]]:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ProvisioningError("safe file creation is unavailable")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | no_follow
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        os.fchmod(descriptor, 0o600)
+        info = os.fstat(descriptor)
+    except OSError as error:
+        raise ProvisioningError("file could not be created exclusively") from error
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or info.st_nlink != 1
+        or info.st_size != 0
+    ):
+        os.close(descriptor)
+        raise ProvisioningError("created file is not authoritative")
+    return descriptor, (info.st_dev, info.st_ino)
+
+
+def _remove_created_artifact(path: Path, identity: tuple[int, int]) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        _fsync_directory(path.parent)
+        return
+    except OSError as error:
+        raise ProvisioningError(
+            "created file cleanup could not be verified"
+        ) from error
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_nlink != 1
+        or (info.st_dev, info.st_ino) != identity
+    ):
+        raise ProvisioningError("created file cleanup identity changed")
+    try:
+        path.unlink()
+        _fsync_directory(path.parent)
+    except OSError as error:
+        raise ProvisioningError("created file cleanup failed") from error
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise ProvisioningError(
+            "created file cleanup could not be verified"
+        ) from error
+    else:
+        raise ProvisioningError("created file cleanup could not be verified")
+
+
+def _exclusive_write(path: Path, data: bytes, *, final_mode: int = 0o600) -> None:
+    descriptor, identity = _exclusive_create(path)
+    failure: ProvisioningError | OSError | None = None
+    try:
+        _write_all(descriptor, data)
+        os.fsync(descriptor)
+        os.fchmod(descriptor, final_mode)
+        os.fsync(descriptor)
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != final_mode
+            or info.st_nlink != 1
+            or info.st_size != len(data)
+        ):
+            raise ProvisioningError("created file is not authoritative")
+        _fsync_directory(path.parent)
+    except (OSError, ProvisioningError) as error:
+        failure = error
+    try:
+        os.close(descriptor)
+    except OSError as error:
+        if failure is None:
+            failure = error
+    if failure is None:
+        return
+    _remove_created_artifact(path, identity)
+    raise ProvisioningError("created file could not be finalized") from failure
+
+
+def _mkdir(path: Path) -> tuple[int, int]:
+    try:
+        path.mkdir(mode=0o700)
+        path.chmod(0o700)
+        info = path.lstat()
+    except OSError as error:
+        raise ProvisioningError("directory could not be created") from error
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise ProvisioningError("created directory is not authoritative")
+    _fsync_directory(path.parent)
+    return info.st_dev, info.st_ino
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as error:
+        raise ProvisioningError(
+            "directory durability could not be established"
+        ) from error
+
+
+def _state_path(state_directory: Path, relative: str) -> Path:
+    if (
+        not relative
+        or relative.startswith("/")
+        or "\\" in relative
+        or any(part in {"", ".", ".."} for part in relative.split("/"))
+    ):
+        raise ProvisioningError("state artifact path is invalid")
+    path = state_directory.joinpath(*relative.split("/"))
+    try:
+        path.relative_to(state_directory)
+    except ValueError as error:
+        raise ProvisioningError("state artifact escapes its directory") from error
+    return path
+
+
+def _atomic_state_write(state_directory: Path, state: dict[str, Any]) -> None:
+    data = _canonical_json(state)
+    if len(data) > MAX_STATE_BYTES:
+        raise ProvisioningError("state exceeds its bound")
+    pending = (
+        state_directory
+        / f".state.json.pending-{os.getpid()}-{state['request_sequence']}"
+    )
+    descriptor: int | None = None
+    try:
+        descriptor, _identity = _exclusive_create(pending)
+        _write_all(descriptor, data)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        current = state_directory / "state.json"
+        if os.path.lexists(current):
+            info = current.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or stat.S_ISLNK(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_nlink != 1
+            ):
+                raise ProvisioningError("state file is not authoritative")
+        os.replace(pending, current)
+        _fsync_directory(state_directory)
+    except OSError as error:
+        raise ProvisioningError("state could not be updated durably") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            pending.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _read_request(path: Path) -> tuple[dict[str, Any], bytes]:
+    path = _absolute_path(os.fspath(path))
+    data = _read_regular(
+        path,
+        maximum=MAX_REQUEST_BYTES,
+        required_mode=0o600,
+        require_private_parent=True,
+    )
+    return _parse_canonical_json(data), data
+
+
+def _read_state(state_directory: Path) -> dict[str, Any]:
+    _validate_private_directory(state_directory)
+    data = _read_regular(
+        state_directory / "state.json",
+        maximum=MAX_STATE_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    state = _parse_canonical_json(data)
+    if state.get("schema") != STATE_SCHEMA:
+        raise ProvisioningError("state schema is unsupported")
+    return state
+
+
+def _process_group_state(pgid: int) -> str:
+    try:
+        os.killpg(pgid, 0)
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return "absent"
+        return "unverified"
+    return "present"
+
+
+def _wait_for_known_group_state(lease: ProcessLease, deadline: float) -> str:
+    while True:
+        try:
+            lease.process.poll()
+        except (OSError, subprocess.SubprocessError):
+            return "unverified"
+        group_state = _process_group_state(lease.pgid)
+        if group_state != "unverified":
+            return group_state
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return "unverified"
+        time.sleep(min(0.02, remaining))
+
+
+def _send_group_signal(lease: ProcessLease, signum: int) -> bool:
+    if signum == signal.SIGTERM:
+        if lease.term_sent:
+            return True
+        lease.term_sent = True
+    try:
+        os.killpg(lease.pgid, signum)
+    except OSError as error:
+        return error.errno == errno.ESRCH
+    return True
+
+
+def _wait_for_group_retirement(lease: ProcessLease, deadline: float) -> bool:
+    while True:
+        try:
+            leader_reaped = lease.process.poll() is not None
+        except OSError:
+            return False
+        group_state = _process_group_state(lease.pgid)
+        if leader_reaped and group_state == "absent":
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.02, remaining))
+
+
+def _retire_process_group(lease: ProcessLease) -> bool:
+    if lease.finalizing:
+        return False
+    lease.finalizing = True
+    term_deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
+    group_state = _wait_for_known_group_state(lease, term_deadline)
+    if group_state == "unverified":
+        return False
+    if group_state == "present" and not _send_group_signal(lease, signal.SIGTERM):
+        return False
+    if _wait_for_group_retirement(lease, term_deadline):
+        return True
+    kill_deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
+    group_state = _wait_for_known_group_state(lease, kill_deadline)
+    if group_state == "unverified":
+        return False
+    if group_state == "present" and not _send_group_signal(lease, signal.SIGKILL):
+        return False
+    return _wait_for_group_retirement(lease, kill_deadline)
+
+
+def _child_signal_boundary_is_safe() -> bool:
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        return False
+    blocked = pthread_sigmask(signal.SIG_BLOCK, ())
+    return not any(signum in blocked for signum in _TERMINATION_SIGNALS) and not any(
+        signal.getsignal(signum) == signal.SIG_IGN
+        for signum in _TERMINATION_SIGNALS
+    )
+
+
+def _run_child(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    timeout: int,
+    stdout_path: Path | None = None,
+    stderr_path: Path | None = None,
+    maximum_stdout: int = MAX_CHILD_CAPTURE_BYTES,
+    maximum_stderr: int = MAX_CHILD_CAPTURE_BYTES,
+) -> ChildResult:
+    global _active_process
+    process: subprocess.Popen[bytes] | None = None
+    lease: ProcessLease | None = None
+    selector: selectors.BaseSelector | None = None
+    streams: dict[int, tuple[Any, str]] = {}
+    output_descriptors: dict[str, int] = {}
+    captures = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": maximum_stdout, "stderr": maximum_stderr}
+    outcome = "spawn-failure"
+    status: int | None = None
+    child_signal: int | None = None
+    retirement_attempted = False
+    retirement_verified = True
+    surviving_descendant = False
+    timed_out = False
+    overflow = False
+    interrupted = False
+    local_failure = False
+    try:
+        try:
+            for channel, path in (("stdout", stdout_path), ("stderr", stderr_path)):
+                if path is None:
+                    continue
+                _reject_symlink_components(path)
+                descriptor = os.open(
+                    path,
+                    os.O_WRONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                )
+                info = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600
+                    or info.st_nlink != 1
+                    or info.st_size != 0
+                ):
+                    os.close(descriptor)
+                    raise ProvisioningError("capture file is not authoritative")
+                output_descriptors[channel] = descriptor
+        except (OSError, ProvisioningError):
+            return ChildResult(False, outcome, None, None, b"", b"")
+        if _caught_signal:
+            return ChildResult(False, outcome, None, None, b"", b"")
+        if not _child_signal_boundary_is_safe():
+            raise ProvisioningError("child signal boundary is unsafe")
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+                start_new_session=True,
+                close_fds=True,
+                restore_signals=True,
+            )
+        except OSError:
+            return ChildResult(False, outcome, None, None, b"", b"")
+        lease = ProcessLease(process=process, pgid=process.pid)
+        _active_process = lease
+        if process.stdout is None or process.stderr is None:
+            local_failure = True
+        if local_failure:
+            retirement_verified = _retire_process_group(lease)
+            retirement_attempted = True
+        else:
+            selector = selectors.DefaultSelector()
+            streams = {
+                process.stdout.fileno(): (process.stdout, "stdout"),
+                process.stderr.fileno(): (process.stderr, "stderr"),
+            }
+            for stream, _channel in streams.values():
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ)
+        deadline = time.monotonic() + timeout
+        while selector is not None and selector.get_map():
+            if _caught_signal:
+                interrupted = True
+            if not interrupted and not timed_out and not overflow:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                elif process.poll() is not None:
+                    group_state = _process_group_state(lease.pgid)
+                    if group_state == "present":
+                        surviving_descendant = True
+            if (
+                interrupted or timed_out or overflow or surviving_descendant
+            ) and not retirement_attempted:
+                retirement_verified = _retire_process_group(lease)
+                retirement_attempted = True
+                if not retirement_verified:
+                    for stream, _channel in streams.values():
+                        try:
+                            selector.unregister(stream)
+                        except (KeyError, ValueError):
+                            pass
+                        try:
+                            stream.close()
+                        except OSError:
+                            local_failure = True
+                    break
+            if selector is None or not selector.get_map():
+                break
+            wait = 0.05 if retirement_attempted else max(
+                0.0, min(deadline - time.monotonic(), 0.1)
+            )
+            events = selector.select(wait)
+            for key, _mask in events:
+                stream, channel = streams[key.fd]
+                try:
+                    chunk = os.read(key.fd, 64 * 1024)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(stream)
+                    stream.close()
+                    continue
+                allowed = limits[channel] - len(captures[channel])
+                if len(chunk) > allowed:
+                    if allowed > 0:
+                        kept = chunk[:allowed]
+                        captures[channel].extend(kept)
+                        if channel in output_descriptors:
+                            _write_all(output_descriptors[channel], kept)
+                    overflow = True
+                    continue
+                captures[channel].extend(chunk)
+                if channel in output_descriptors:
+                    _write_all(output_descriptors[channel], chunk)
+        if process.poll() is None and not retirement_attempted:
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                try:
+                    process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+            else:
+                timed_out = True
+        if not retirement_attempted:
+            return_code = process.poll()
+            group_state = _process_group_state(lease.pgid)
+            if return_code is not None and group_state == "absent":
+                retirement_verified = True
+            else:
+                if return_code is not None and group_state == "present":
+                    surviving_descendant = True
+                retirement_verified = _retire_process_group(lease)
+                retirement_attempted = True
+        return_code = process.poll()
+        if not retirement_verified or local_failure or surviving_descendant:
+            outcome = "unverified-retirement"
+        elif _caught_signal or interrupted:
+            outcome = "interrupted"
+        elif timed_out:
+            outcome = "timeout"
+        elif overflow:
+            outcome = "capture-overflow"
+        elif return_code is None:
+            outcome = "unreaped"
+        elif return_code < 0:
+            outcome = "signaled"
+            child_signal = -return_code
+        else:
+            outcome = "exited"
+            status = return_code
+        for descriptor in output_descriptors.values():
+            try:
+                os.fsync(descriptor)
+            except OSError:
+                local_failure = True
+        for path in {path.parent for path in (stdout_path, stderr_path) if path is not None}:
+            try:
+                _fsync_directory(path)
+            except ProvisioningError:
+                local_failure = True
+        if local_failure:
+            outcome = "unverified-retirement"
+            status = None
+            child_signal = None
+    except (OSError, ProvisioningError, ValueError, subprocess.SubprocessError):
+        local_failure = True
+        if lease is not None and not retirement_attempted:
+            retirement_verified = _retire_process_group(lease)
+            retirement_attempted = True
+        outcome = "unverified-retirement" if process is not None else "spawn-failure"
+        status = None
+        child_signal = None
+    finally:
+        if lease is not None and not retirement_attempted:
+            retirement_verified = _retire_process_group(lease)
+            retirement_attempted = True
+            if not retirement_verified:
+                outcome = "unverified-retirement"
+                status = None
+                child_signal = None
+        if lease is None or retirement_verified:
+            _active_process = None
+        if selector is not None:
+            try:
+                selector.close()
+            except OSError:
+                local_failure = True
+        for stream, _channel in streams.values():
+            try:
+                stream.close()
+            except OSError:
+                local_failure = True
+        for descriptor in output_descriptors.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                local_failure = True
+    if local_failure and process is not None:
+        outcome = "unverified-retirement"
+        status = None
+        child_signal = None
+    return ChildResult(
+        process is not None,
+        outcome,
+        status,
+        child_signal,
+        bytes(captures["stdout"]),
+        bytes(captures["stderr"]),
+    )
+
+
+def _git_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop(LOGIN_CREDENTIAL_FIELD, None)
+    environment.pop("PROTON_PASS_AGENT_REASON", None)
+    for name in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_ALLOW_PROTOCOL",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_DIR",
+        "GIT_EXEC_PATH",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PROTOCOL_FROM_USER",
+        "GIT_SHALLOW_FILE",
+        "GIT_TEMPLATE_DIR",
+        "GIT_WORK_TREE",
+    ):
+        environment.pop(name, None)
+    for name in tuple(environment):
+        if name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            environment.pop(name, None)
+    environment.update(
+        {
+            "GIT_ALLOW_PROTOCOL": "",
+            "GIT_ATTR_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_PROTOCOL_FROM_USER": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+            "LC_ALL": "C",
+        }
+    )
+    return environment
+
+
+def _git(
+    repository: Path, *arguments: str, maximum_stdout: int = MAX_CHILD_CAPTURE_BYTES
+) -> bytes:
+    _check_signal()
+    executable = shutil.which("git")
+    if executable is None:
+        raise ProvisioningError("Git is unavailable")
+    result = _run_child(
+        [
+            executable,
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            f"core.hooksPath={os.devnull}",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "commit.gpgsign=false",
+            "-C",
+            os.fspath(repository),
+            *arguments,
+        ],
+        environment=_git_environment(),
+        timeout=TOOL_OBSERVATION_TIMEOUT_SECONDS,
+        maximum_stdout=maximum_stdout,
+        maximum_stderr=64 * 1024,
+    )
+    if result.outcome == "unverified-retirement":
+        raise UnverifiedChildRetirement("Git child retirement is unverified")
+    _check_signal()
+    if result.outcome != "exited" or result.status != 0 or result.stderr:
+        raise ProvisioningError("Git operation failed closed")
+    return result.stdout
+
+
+def _validate_manifest(
+    document: dict[str, Any], *, commit: str
+) -> list[dict[str, str]]:
+    _exact_keys(document, {"commit", "entries", "schema"}, "reviewed source manifest")
+    if document["schema"] != MANIFEST_SCHEMA or document["commit"] != commit:
+        raise ProvisioningError("reviewed source manifest binding is invalid")
+    raw_entries = document["entries"]
+    if not isinstance(raw_entries, list) or len(raw_entries) != len(SOURCE_MODES):
+        raise ProvisioningError("reviewed source manifest closure is invalid")
+    entries: list[dict[str, str]] = []
+    for raw in raw_entries:
+        _exact_keys(raw, {"mode", "path", "sha256"}, "reviewed source entry")
+        path = raw["path"]
+        mode = raw["mode"]
+        digest = raw["sha256"]
+        if (
+            not isinstance(path, str)
+            or SOURCE_PATH.fullmatch(path) is None
+            or path.startswith("/")
+            or any(segment in {"", ".", ".."} for segment in path.split("/"))
+            or path not in SOURCE_MODES
+            or mode != SOURCE_MODES[path]
+            or not isinstance(digest, str)
+            or DIGEST.fullmatch(digest) is None
+        ):
+            raise ProvisioningError("reviewed source entry is invalid")
+        entries.append({"mode": mode, "path": path, "sha256": digest})
+    if [entry["path"] for entry in entries] != sorted(SOURCE_MODES):
+        raise ProvisioningError(
+            "reviewed source manifest is not a closed sorted inventory"
+        )
+    return entries
+
+
+def _read_reviewed_sources(
+    repository: Path, commit: str, entries: list[dict[str, str]]
+) -> dict[str, bytes]:
+    _reject_symlink_components(repository)
+    if not repository.is_dir():
+        raise ProvisioningError("reviewed source repository is unavailable")
+    common_raw = _git(
+        repository,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+        maximum_stdout=4096,
+    )
+    try:
+        common = _absolute_path(common_raw.decode("utf-8").rstrip("\n"))
+    except UnicodeError as error:
+        raise ProvisioningError("reviewed Git object database is invalid") from error
+    _reject_symlink_components(common)
+    objects = common / "objects"
+    if not objects.is_dir() or any(
+        os.path.lexists(objects / "info" / name)
+        for name in ("alternates", "http-alternates")
+    ):
+        raise ProvisioningError("reviewed Git object database has external alternates")
+    actual = _git(
+        repository, "rev-parse", "--verify", f"{commit}^{{commit}}", maximum_stdout=64
+    )
+    if actual != f"{commit}\n".encode("ascii"):
+        raise ProvisioningError("reviewed source commit is unavailable")
+    records = _git(
+        repository,
+        "ls-tree",
+        "-z",
+        commit,
+        "--",
+        *[entry["path"] for entry in entries],
+        maximum_stdout=256 * 1024,
+    )
+    parsed: dict[str, tuple[str, str]] = {}
+    for raw in (record for record in records.split(b"\0") if record):
+        try:
+            metadata, raw_path = raw.split(b"\t", 1)
+            mode, kind, object_id = metadata.split(b" ", 2)
+            path = raw_path.decode("ascii")
+            object_text = object_id.decode("ascii")
+        except (ValueError, UnicodeError) as error:
+            raise ProvisioningError(
+                "reviewed source tree record is malformed"
+            ) from error
+        if (
+            kind != b"blob"
+            or COMMIT_ID.fullmatch(object_text) is None
+            or path in parsed
+        ):
+            raise ProvisioningError("reviewed source tree record is invalid")
+        parsed[path] = (mode.decode("ascii"), object_text)
+    if len(parsed) != len(entries) or len(parsed) > MAX_GIT_TREE_ENTRIES:
+        raise ProvisioningError("reviewed source tree is incomplete")
+    sources: dict[str, bytes] = {}
+    aggregate = 0
+    for entry in entries:
+        path = entry["path"]
+        if path not in parsed or parsed[path][0] != entry["mode"]:
+            raise ProvisioningError("reviewed source tree mode is invalid")
+        data = _git(
+            repository,
+            "cat-file",
+            "blob",
+            parsed[path][1],
+            maximum_stdout=MAX_SOURCE_BLOB_BYTES + 1,
+        )
+        aggregate += len(data)
+        if (
+            len(data) > MAX_SOURCE_BLOB_BYTES
+            or aggregate > MAX_SOURCE_AGGREGATE_BYTES
+            or _sha256(data) != entry["sha256"]
+        ):
+            raise ProvisioningError("reviewed source blob binding is invalid")
+        sources[path] = data
+    running = _read_regular(
+        Path(os.path.abspath(__file__)),
+        maximum=MAX_SOURCE_BLOB_BYTES,
+        required_mode=0o755,
+        require_owner=False,
+        require_single_link=False,
+    )
+    if running != sources["scripts/provision-age-admission-signer"]:
+        raise ProvisioningError("running provisioner does not match reviewed source")
+    return sources
+
+
+def _private_name(value: object, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= 128
+        or value != value.strip()
+        or any(character in value for character in ("\x00", "\r", "\n"))
+    ):
+        raise ProvisioningError(f"{label} is invalid")
+    return value
+
+
+def _digest(value: object, label: str) -> str:
+    if not isinstance(value, str) or DIGEST.fullmatch(value) is None:
+        raise ProvisioningError(f"{label} is invalid")
+    return value
+
+
+def _owner_id(value: object, label: str) -> str:
+    # Agent and token logins report "N/A"; only a user login has a positive ID.
+    if not isinstance(value, str) or not value or value == "N/A":
+        raise ProvisioningError(f"{label} is invalid")
+    return value
+
+
+def _file_binding(value: object, label: str) -> dict[str, str]:
+    binding = _exact_keys(value, {"path", "sha256"}, label)
+    return {
+        "path": os.fspath(_absolute_path(binding["path"])),
+        "sha256": _digest(binding["sha256"], f"{label} digest"),
+    }
+
+
+def _platform_name() -> str:
+    if sys.platform.startswith("linux"):
+        return "linux"
+    if sys.platform == "darwin":
+        return "darwin"
+    raise ProvisioningError("only Linux and macOS are supported")
+
+
+def _validate_request(
+    document: dict[str, Any], state_directory: Path
+) -> dict[str, Any]:
+    _exact_keys(document, REQUEST_KEYS, "provisioning request")
+    if document["schema"] != REQUEST_SCHEMA:
+        raise ProvisioningError("request schema is unsupported")
+    mode = document["mode"]
+    if mode not in {"qualification", "production"}:
+        raise ProvisioningError("request mode is invalid")
+    private_parent = _absolute_path(document["private_parent"])
+    _validate_private_directory(private_parent)
+    if state_directory.parent != private_parent:
+        raise ProvisioningError("state directory is outside the private parent")
+
+    source = _exact_keys(
+        document["reviewed_source"],
+        {"commit", "manifest", "repository"},
+        "reviewed source request",
+    )
+    commit = source["commit"]
+    if not isinstance(commit, str) or COMMIT_ID.fullmatch(commit) is None:
+        raise ProvisioningError("reviewed source commit is invalid")
+    manifest_binding = _file_binding(source["manifest"], "reviewed source manifest")
+    repository = _absolute_path(source["repository"])
+    _reject_symlink_components(repository)
+    if not repository.is_dir():
+        raise ProvisioningError("reviewed source repository is unavailable")
+
+    tooling = _exact_keys(
+        document["age_tooling"], {"archive", "sha256"}, "age tooling request"
+    )
+    archive = _absolute_path(tooling["archive"])
+    archive_sha256 = _digest(tooling["sha256"], "age archive digest")
+    _read_regular(
+        archive,
+        maximum=64 * 1024 * 1024,
+        require_owner=True,
+        require_private_parent=True,
+        require_single_link=True,
+    )
+
+    pass_cli = _exact_keys(
+        document["pass_cli"], {"build_sha256", "version_stdout"}, "pass-cli request"
+    )
+    build_sha256 = _digest(pass_cli["build_sha256"], "pass-cli build digest")
+    version_stdout = pass_cli["version_stdout"]
+    try:
+        version_bytes = version_stdout.encode("ascii")
+    except (AttributeError, UnicodeError) as error:
+        raise ProvisioningError("pass-cli version output is invalid") from error
+    if VERSION_OUTPUT.fullmatch(version_bytes) is None:
+        raise ProvisioningError("pass-cli version output is invalid")
+
+    provider_schema = _exact_keys(
+        document["provider_schema"],
+        {"command_schema", "source_commit", "source_manifest_sha256"},
+        "provider schema request",
+    )
+    if provider_schema != {
+        "command_schema": PROVIDER_COMMAND_SCHEMA,
+        "source_commit": PASS_CLI_SOURCE_COMMIT,
+        "source_manifest_sha256": SOURCE_MANIFEST_SHA256,
+    }:
+        raise ProvisioningError("provider schema binding is invalid")
+
+    # The routine reader is named explicitly. Equal profile roots never select
+    # the owner; an existing-agent request with equal roots is rejected.
+    raw_sessions = document["sessions"]
+    primary_kind = (
+        raw_sessions.get("primary") if isinstance(raw_sessions, dict) else None
+    )
+    if primary_kind == "owner":
+        session_keys = {"owner", "primary"}
+    elif primary_kind == "existing-agent":
+        session_keys = {
+            "owner",
+            "primary",
+            "primary_enrollment",
+            "primary_enrollment_name",
+        }
+    elif primary_kind == "existing-pat":
+        session_keys = {"owner", "primary", "primary_reader_profile", "primary_reader_name"}
+    else:
+        raise ProvisioningError("routine reader selection is invalid")
+    sessions = _exact_keys(raw_sessions, session_keys, "session request")
+    owner = _absolute_path(sessions["owner"])
+    normalized_sessions = {"owner": os.fspath(owner), "primary": primary_kind}
+    if primary_kind == "existing-agent":
+        primary = _absolute_path(sessions["primary_enrollment"])
+        if owner == primary:
+            raise ProvisioningError(
+                "owner and primary profile roots are not distinct"
+            )
+        _validate_existing_profile_root(primary, "primary enrollment")
+        normalized_sessions["primary_enrollment"] = os.fspath(primary)
+        normalized_sessions["primary_enrollment_name"] = _private_name(
+            sessions["primary_enrollment_name"], "primary enrollment name"
+        )
+    elif primary_kind == "existing-pat":
+        primary = _absolute_path(sessions["primary_reader_profile"])
+        if owner == primary:
+            raise ProvisioningError(
+                "owner and primary profile roots are not distinct"
+            )
+        _validate_existing_profile_root(primary, "primary PAT")
+        normalized_sessions["primary_reader_profile"] = os.fspath(primary)
+        normalized_sessions["primary_reader_name"] = _private_name(
+            sessions["primary_reader_name"], "primary PAT name"
+        )
+    _validate_existing_profile_root(owner, "owner")
+
+    provider = _exact_keys(
+        document["provider"],
+        {
+            "expiration",
+            "item_title",
+            "primary_share_id",
+            "recovery_agent_name",
+            "share_id",
+            "vault_id",
+            "vault_name",
+        },
+        "provider request",
+    )
+    if provider["expiration"] not in {"1h", "1d", "1w", "1m", "3m", "6m", "1y"}:
+        raise ProvisioningError("agent expiration is invalid")
+    share_id = provider["share_id"]
+    if not isinstance(share_id, str) or IDENTIFIER.fullmatch(share_id) is None:
+        raise ProvisioningError("share ID is invalid")
+    primary_share_id = provider["primary_share_id"]
+    if (
+        not isinstance(primary_share_id, str)
+        or IDENTIFIER.fullmatch(primary_share_id) is None
+    ):
+        raise ProvisioningError("primary share ID is invalid")
+    if primary_kind == "owner" and primary_share_id != share_id:
+        raise ProvisioningError("owner routine share differs from owner mutation share")
+    vault_id = provider["vault_id"]
+    if not isinstance(vault_id, str) or IDENTIFIER.fullmatch(vault_id) is None:
+        raise ProvisioningError("vault ID is invalid")
+    item_title = _private_name(provider["item_title"], "item title")
+    recovery_name = _private_name(provider["recovery_agent_name"], "agent name")
+    vault_name = _private_name(provider["vault_name"], "vault name")
+
+    qualification = document["qualification"]
+    qualified_clean: dict[str, dict[str, str]] | None
+    if mode == "qualification":
+        if qualification not in {"source-test", "live-disposable-provider"}:
+            raise ProvisioningError("qualification evidence class is invalid")
+        if document["qualified_clean"] is not None:
+            raise ProvisioningError(
+                "qualification request cannot consume prior evidence"
+            )
+        qualified_clean = None
+    else:
+        if qualification is not None:
+            raise ProvisioningError(
+                "production request cannot label itself qualification"
+            )
+        bundle = _exact_keys(
+            document["qualified_clean"],
+            {"commit_record", "marker", "producer_state"},
+            "qualified-clean disposition",
+        )
+        qualified_clean = {
+            name: _file_binding(bundle[name], f"qualified-clean {name}")
+            for name in ("commit_record", "marker", "producer_state")
+        }
+
+    return {
+        "age_tooling": {"archive": os.fspath(archive), "sha256": archive_sha256},
+        "mode": mode,
+        "pass_cli": {
+            "build_sha256": build_sha256,
+            "version_stdout": version_stdout,
+        },
+        "private_parent": os.fspath(private_parent),
+        "provider": {
+            "expiration": provider["expiration"],
+            "item_title": item_title,
+            "primary_share_id": primary_share_id,
+            "recovery_agent_name": recovery_name,
+            "share_id": share_id,
+            "vault_id": vault_id,
+            "vault_name": vault_name,
+        },
+        "provider_schema": dict(provider_schema),
+        "qualification": qualification,
+        "qualified_clean": qualified_clean,
+        "reviewed_source": {
+            "commit": commit,
+            "manifest": manifest_binding,
+            "repository": os.fspath(repository),
+        },
+        "schema": REQUEST_SCHEMA,
+        "sessions": normalized_sessions,
+    }
+
+
+def _resolve_executable(name: str) -> tuple[Path, str]:
+    selected = shutil.which(name)
+    if selected is None:
+        raise ProvisioningError(f"{name} is unavailable")
+    try:
+        resolved = Path(selected).resolve(strict=True)
+    except OSError as error:
+        raise ProvisioningError(f"{name} is unavailable") from error
+    _reject_symlink_components(resolved)
+    data = _read_regular(
+        resolved,
+        maximum=MAX_EXECUTABLE_BYTES,
+        require_owner=False,
+        require_single_link=False,
+    )
+    try:
+        info = resolved.stat(follow_symlinks=False)
+    except OSError as error:
+        raise ProvisioningError(f"{name} is unavailable") from error
+    if not info.st_mode & 0o111:
+        raise ProvisioningError(f"{name} is not executable")
+    return resolved, _sha256(data)
+
+
+def _provider_environment(
+    session: Path,
+    tools_directory: Path,
+    *,
+    reason: bool = False,
+    login_credential: str | None = None,
+) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop(LOGIN_CREDENTIAL_FIELD, None)
+    environment.pop("PROTON_PASS_AGENT_REASON", None)
+    ambient_path = environment.get("PATH")
+    environment["PATH"] = os.fspath(tools_directory) + (
+        os.pathsep + ambient_path if ambient_path else ""
+    )
+    environment.update(
+        {
+            "AGE_TOOLING_DIRECTORY": os.fspath(tools_directory),
+            "LC_ALL": "C",
+            "PROTON_PASS_KEY_PROVIDER": "keyring",
+            "PROTON_PASS_NO_UPDATE_CHECK": "1",
+            "PROTON_PASS_SESSION_DIR": os.fspath(session),
+        }
+    )
+    platform_name = _platform_name()
+    if platform_name == "linux":
+        environment["PROTON_PASS_LINUX_KEYRING"] = "dbus"
+    else:
+        environment.pop("PROTON_PASS_LINUX_KEYRING", None)
+    if reason:
+        environment["PROTON_PASS_AGENT_REASON"] = AGENT_REASON
+    if login_credential is not None:
+        environment[LOGIN_CREDENTIAL_FIELD] = login_credential
+    return environment
+
+
+def _local_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.pop(LOGIN_CREDENTIAL_FIELD, None)
+    environment.pop("PROTON_PASS_AGENT_REASON", None)
+    environment.update(
+        {
+            "LC_ALL": "C",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+        }
+    )
+    return environment
+
+
+def _ensure_pass_cli_binding(state: dict[str, Any]) -> None:
+    resolved, digest = _resolve_executable("pass-cli")
+    binding = state["bindings"]["pass_cli"]
+    if (
+        os.fspath(resolved) != binding["observed_path"]
+        or digest != binding["build_sha256"]
+    ):
+        raise ProvisioningError("pass-cli runtime PATH binding drifted")
+
+
+def _parse_json_output(data: bytes) -> object:
+    if not data.endswith(b"\n") or b"\0" in data or len(data) > MAX_RESULT_BYTES:
+        raise ProvisioningError("provider JSON output framing is invalid")
+    try:
+        value = json.loads(
+            data.decode("utf-8"),
+            object_pairs_hook=_object_from_pairs,
+            parse_constant=_reject_constant,
+        )
+    except (UnicodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
+        raise ProvisioningError("provider JSON output is invalid") from error
+    return value
+
+
+def _parse_public_key(data: bytes) -> tuple[str, str]:
+    if not data.endswith(b"\n") or data.count(b"\n") != 1 or b"\0" in data:
+        raise ProvisioningError("signer public key is invalid")
+    fields = data[:-1].split(b" ", 2)
+    if len(fields) < 2 or fields[0] != b"ssh-ed25519" or not fields[1]:
+        raise ProvisioningError("signer public key is invalid")
+    try:
+        decoded = base64.b64decode(fields[1], validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ProvisioningError("signer public key is invalid") from error
+
+    def ssh_string(offset: int) -> tuple[bytes, int]:
+        if offset + 4 > len(decoded):
+            raise ProvisioningError("signer public key is invalid")
+        size = struct.unpack(">I", decoded[offset : offset + 4])[0]
+        start = offset + 4
+        end = start + size
+        if end > len(decoded):
+            raise ProvisioningError("signer public key is invalid")
+        return decoded[start:end], end
+
+    algorithm, offset = ssh_string(0)
+    key, offset = ssh_string(offset)
+    if algorithm != b"ssh-ed25519" or len(key) != 32 or offset != len(decoded):
+        raise ProvisioningError("signer public key is invalid")
+    fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(decoded).digest()).decode(
+        "ascii"
+    ).rstrip("=")
+    return fingerprint, _sha256(data)
+
+
+def _relative_fixture_path(value: object, *, expected: str | None = None) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith("/")
+        or "\\" in value
+        or any(part in {"", ".", ".."} for part in value.split("/"))
+        or expected is not None
+        and value != expected
+    ):
+        raise ProvisioningError("fixture path is invalid")
+    return value
+
+
+def _validate_tool_binding(
+    fixture_directory: Path,
+    value: object,
+    *,
+    expected_path: str,
+    expected_mode: int,
+) -> dict[str, str]:
+    binding = _exact_keys(value, {"path", "sha256"}, "fixture tool binding")
+    relative = _relative_fixture_path(binding["path"], expected=expected_path)
+    digest = _digest(binding["sha256"], "fixture tool digest")
+    path = fixture_directory.joinpath(*relative.split("/"))
+    data = _read_regular(
+        path,
+        maximum=MAX_EXECUTABLE_BYTES,
+        required_mode=expected_mode,
+        require_owner=True,
+        require_single_link=True,
+    )
+    if _sha256(data) != digest:
+        raise ProvisioningError("fixture tool digest does not match")
+    return {"path": relative, "sha256": digest}
+
+
+def _validate_repository_binding(
+    fixture_directory: Path,
+    label: str,
+    value: object,
+    source_entries: list[dict[str, str]],
+) -> dict[str, Any]:
+    binding = _exact_keys(
+        value, {"commit", "files", "path", "tree"}, "fixture repository"
+    )
+    relative = _relative_fixture_path(binding["path"], expected=f"repositories/{label}")
+    commit = binding["commit"]
+    tree = binding["tree"]
+    if (
+        not isinstance(commit, str)
+        or COMMIT_ID.fullmatch(commit) is None
+        or not isinstance(tree, str)
+        or COMMIT_ID.fullmatch(tree) is None
+    ):
+        raise ProvisioningError("fixture repository identity is invalid")
+    repository = fixture_directory.joinpath(*relative.split("/"))
+    _reject_symlink_components(repository)
+    if not repository.is_dir():
+        raise ProvisioningError("fixture repository is unavailable")
+    if (
+        _git(repository, "rev-parse", "HEAD", maximum_stdout=64)
+        != f"{commit}\n".encode()
+    ):
+        raise ProvisioningError("fixture repository commit does not match")
+    if (
+        _git(repository, "rev-parse", "HEAD^{tree}", maximum_stdout=64)
+        != f"{tree}\n".encode()
+    ):
+        raise ProvisioningError("fixture repository tree does not match")
+    if _git(repository, "remote") or _git(repository, "status", "--porcelain"):
+        raise ProvisioningError("fixture repository is not clean and remote-free")
+    raw_files = binding["files"]
+    if (
+        not isinstance(raw_files, list)
+        or not raw_files
+        or len(raw_files) > MAX_GIT_TREE_ENTRIES
+    ):
+        raise ProvisioningError("fixture repository inventory is invalid")
+    files: list[dict[str, str]] = []
+    by_path: dict[str, dict[str, str]] = {}
+    for raw in raw_files:
+        entry = _exact_keys(raw, {"mode", "origin", "path", "sha256"}, "fixture file")
+        path = _relative_fixture_path(entry["path"])
+        mode = entry["mode"]
+        origin = entry["origin"]
+        digest = _digest(entry["sha256"], "fixture file digest")
+        if (
+            mode not in {"100644", "100755"}
+            or origin
+            not in {
+                "fixture-only-stub",
+                "generated",
+                "reviewed-source",
+            }
+            or path in by_path
+        ):
+            raise ProvisioningError("fixture file inventory is invalid")
+        normalized = {"mode": mode, "origin": origin, "path": path, "sha256": digest}
+        files.append(normalized)
+        by_path[path] = normalized
+    if [entry["path"] for entry in files] != sorted(by_path):
+        raise ProvisioningError("fixture file inventory is not sorted")
+    records = _git(
+        repository, "ls-tree", "-r", "-z", commit, maximum_stdout=2 * 1024 * 1024
+    )
+    observed: set[str] = set()
+    aggregate = 0
+    for raw in (record for record in records.split(b"\0") if record):
+        try:
+            metadata, raw_path = raw.split(b"\t", 1)
+            mode, kind, object_id = metadata.split(b" ", 2)
+            path = raw_path.decode("ascii")
+        except (ValueError, UnicodeError) as error:
+            raise ProvisioningError("fixture repository tree is malformed") from error
+        if kind != b"blob" or path not in by_path or path in observed:
+            raise ProvisioningError("fixture repository tree is invalid")
+        entry = by_path[path]
+        if mode.decode("ascii") != entry["mode"]:
+            raise ProvisioningError("fixture repository file mode does not match")
+        blob = _git(
+            repository,
+            "cat-file",
+            "blob",
+            object_id.decode("ascii"),
+            maximum_stdout=MAX_SOURCE_BLOB_BYTES + 1,
+        )
+        aggregate += len(blob)
+        if aggregate > 32 * 1024 * 1024 or _sha256(blob) != entry["sha256"]:
+            raise ProvisioningError("fixture repository file digest does not match")
+        observed.add(path)
+    if observed != set(by_path):
+        raise ProvisioningError("fixture repository inventory is incomplete")
+    for source in source_entries:
+        entry = by_path.get(source["path"])
+        if entry != {
+            "mode": source["mode"],
+            "origin": "reviewed-source",
+            "path": source["path"],
+            "sha256": source["sha256"],
+        }:
+            raise ProvisioningError(
+                "fixture repository reviewed source binding is invalid"
+            )
+    return {"commit": commit, "files": files, "path": relative, "tree": tree}
+
+
+def _validate_fixture(
+    fixture_directory: Path,
+    *,
+    manifest_entries: list[dict[str, str]],
+    manifest_sha256: str,
+    source_commit: str,
+    public_key_sha256: str,
+    expected_fingerprint: str,
+) -> tuple[dict[str, Any], bytes]:
+    data = _read_regular(
+        fixture_directory / "fixture.json",
+        maximum=MAX_FIXTURE_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    fixture = _parse_canonical_json(data)
+    _exact_keys(
+        fixture,
+        {
+            "age_identity",
+            "authority",
+            "preflight",
+            "repositories",
+            "schema",
+            "signer",
+            "source",
+            "staged_tools",
+        },
+        "fixture binding",
+    )
+    if fixture["schema"] != FIXTURE_SCHEMA:
+        raise ProvisioningError("fixture schema is unsupported")
+    if fixture["authority"] != {
+        "publication_permitted": False,
+        "purpose": "offline-synthetic-provider-qualification",
+        "real_transition_authority": False,
+        "repository": FIXTURE_REPOSITORY,
+    }:
+        raise ProvisioningError("fixture authority boundary is invalid")
+    if fixture["preflight"] != {
+        "status": 0,
+        "stderr_utf8": "",
+        "stdout_utf8": "required\n",
+    }:
+        raise ProvisioningError("fixture preflight binding is invalid")
+    source = _exact_keys(
+        fixture["source"], {"commit", "entries", "manifest_sha256"}, "fixture source"
+    )
+    if source != {
+        "commit": source_commit,
+        "entries": manifest_entries,
+        "manifest_sha256": manifest_sha256,
+    }:
+        raise ProvisioningError("fixture source binding is invalid")
+    signer = _exact_keys(
+        fixture["signer"], {"fingerprint", "public_key_sha256"}, "fixture signer"
+    )
+    if signer != {
+        "fingerprint": expected_fingerprint,
+        "public_key_sha256": public_key_sha256,
+    }:
+        raise ProvisioningError("fixture signer binding is invalid")
+    identity = _exact_keys(
+        fixture["age_identity"], {"path", "recipient", "sha256"}, "fixture age identity"
+    )
+    identity_path = _relative_fixture_path(
+        identity["path"], expected="private/age-identity.txt"
+    )
+    if (
+        not isinstance(identity["recipient"], str)
+        or re.fullmatch(r"age1pq1[a-z0-9]+", identity["recipient"], re.ASCII) is None
+    ):
+        raise ProvisioningError("fixture age recipient is invalid")
+    identity_digest = _digest(identity["sha256"], "fixture age identity digest")
+    identity_bytes = _read_regular(
+        fixture_directory.joinpath(*identity_path.split("/")),
+        maximum=MAX_SIGNER_PRIVATE_BYTES,
+        required_mode=0o600,
+    )
+    if not identity_bytes or _sha256(identity_bytes) != identity_digest:
+        raise ProvisioningError("fixture age identity binding is invalid")
+    repositories = _exact_keys(
+        fixture["repositories"], {"base", "head"}, "fixture repositories"
+    )
+    base = _validate_repository_binding(
+        fixture_directory, "base", repositories["base"], manifest_entries
+    )
+    head = _validate_repository_binding(
+        fixture_directory, "head", repositories["head"], manifest_entries
+    )
+    if base["commit"] == head["commit"]:
+        raise ProvisioningError("fixture transition is not distinct")
+    if (
+        _git(
+            fixture_directory / head["path"],
+            "diff",
+            "--name-only",
+            base["commit"],
+            head["commit"],
+            maximum_stdout=1024,
+        )
+        != b".privacy-age-envelopes.json\nhome/private.age\n"
+    ):
+        raise ProvisioningError("fixture protected transition is not exact")
+    tools_value = _exact_keys(
+        fixture["staged_tools"],
+        {
+            "age",
+            "age_inspect",
+            "age_keygen",
+            "provider_adapter",
+            "provider_readiness",
+            "trusted_launcher",
+        },
+        "fixture staged tools",
+    )
+    specifications = {
+        "age": ("tools/age", 0o700),
+        "age_inspect": ("tools/age-inspect", 0o700),
+        "age_keygen": ("tools/age-keygen", 0o700),
+        "provider_adapter": ("tools/proton-pass-age-admission", 0o700),
+        "provider_readiness": ("tools/proton-pass-ensure-ready", 0o700),
+        "trusted_launcher": ("tools/run-trusted-age-admission", 0o755),
+    }
+    tools = {
+        label: _validate_tool_binding(
+            fixture_directory,
+            tools_value[label],
+            expected_path=path,
+            expected_mode=mode,
+        )
+        for label, (path, mode) in specifications.items()
+    }
+    normalized = {
+        "age_identity": {
+            "path": identity_path,
+            "recipient": identity["recipient"],
+            "sha256": identity_digest,
+        },
+        "authority": fixture["authority"],
+        "preflight": fixture["preflight"],
+        "repositories": {"base": base, "head": head},
+        "schema": FIXTURE_SCHEMA,
+        "signer": signer,
+        "source": source,
+        "staged_tools": tools,
+    }
+    if _canonical_json(normalized) != data:
+        raise ProvisioningError("fixture binding normalization changed bytes")
+    return normalized, data
+
+
+def _qualified_bindings(state: dict[str, Any], *, include_path: bool) -> dict[str, Any]:
+    pass_cli = {
+        "build_sha256": state["bindings"]["pass_cli"]["build_sha256"],
+        "version_stdout": state["bindings"]["pass_cli"]["version_stdout"],
+    }
+    if include_path:
+        pass_cli["observed_path"] = state["bindings"]["pass_cli"]["observed_path"]
+    return {
+        "pass_cli": pass_cli,
+        "platform": state["bindings"]["platform"],
+        "provider_schema": state["bindings"]["provider_schema"],
+        "reviewed_source": {
+            "commit": state["bindings"]["reviewed_source"]["commit"],
+            "manifest_sha256": state["bindings"]["reviewed_source"]["manifest_sha256"],
+        },
+    }
+
+
+def _validate_terminal_bindings(
+    value: object, label: str
+) -> dict[str, Any]:
+    bindings = _exact_keys(
+        value,
+        {"pass_cli", "platform", "provider_schema", "reviewed_source"},
+        label,
+    )
+    pass_cli = _exact_keys(
+        bindings["pass_cli"],
+        {"build_sha256", "version_stdout"},
+        f"{label} pass-cli",
+    )
+    build_sha256 = _digest(
+        pass_cli["build_sha256"], f"{label} pass-cli build digest"
+    )
+    version_stdout = pass_cli["version_stdout"]
+    try:
+        version_bytes = version_stdout.encode("ascii")
+    except (AttributeError, UnicodeError) as error:
+        raise ProvisioningError(f"{label} pass-cli version is invalid") from error
+    if VERSION_OUTPUT.fullmatch(version_bytes) is None:
+        raise ProvisioningError(f"{label} pass-cli version is invalid")
+    platform = bindings["platform"]
+    if platform != _platform_name():
+        raise ProvisioningError(f"{label} platform is invalid")
+    provider_schema = _exact_keys(
+        bindings["provider_schema"],
+        {"command_schema", "source_commit", "source_manifest_sha256"},
+        f"{label} provider schema",
+    )
+    if provider_schema != {
+        "command_schema": PROVIDER_COMMAND_SCHEMA,
+        "source_commit": PASS_CLI_SOURCE_COMMIT,
+        "source_manifest_sha256": SOURCE_MANIFEST_SHA256,
+    }:
+        raise ProvisioningError(f"{label} provider schema is invalid")
+    reviewed_source = _exact_keys(
+        bindings["reviewed_source"],
+        {"commit", "manifest_sha256"},
+        f"{label} reviewed source",
+    )
+    commit = reviewed_source["commit"]
+    if not isinstance(commit, str) or COMMIT_ID.fullmatch(commit) is None:
+        raise ProvisioningError(f"{label} reviewed source commit is invalid")
+    manifest_sha256 = _digest(
+        reviewed_source["manifest_sha256"],
+        f"{label} reviewed source manifest digest",
+    )
+    return {
+        "pass_cli": {
+            "build_sha256": build_sha256,
+            "version_stdout": version_stdout,
+        },
+        "platform": platform,
+        "provider_schema": dict(provider_schema),
+        "reviewed_source": {
+            "commit": commit,
+            "manifest_sha256": manifest_sha256,
+        },
+    }
+
+
+def _validate_terminal_plan(value: object, label: str) -> dict[str, Any]:
+    plan = _exact_keys(
+        value,
+        {"bindings", "commit_record", "marker", "outcome"},
+        label,
+    )
+    outcome = plan["outcome"]
+    marker_name = {
+        "qualified-clean": "qualified-clean.json",
+        "ready-for-recovery": "ready-for-recovery.json",
+    }.get(outcome)
+    if marker_name is None:
+        raise ProvisioningError(f"{label} outcome is invalid")
+    marker = _exact_keys(
+        plan["marker"], {"relative_path", "sha256"}, f"{label} marker"
+    )
+    marker_sha256 = _digest(marker["sha256"], f"{label} marker digest")
+    if marker["relative_path"] != marker_name:
+        raise ProvisioningError(f"{label} marker name is invalid")
+    commit_record = _exact_keys(
+        plan["commit_record"],
+        {"final_name", "sha256"},
+        f"{label} commit record",
+    )
+    commit_sha256 = _digest(
+        commit_record["sha256"], f"{label} commit-record digest"
+    )
+    if commit_record["final_name"] != "terminal-commit.json":
+        raise ProvisioningError(f"{label} commit-record name is invalid")
+    return {
+        "bindings": _validate_terminal_bindings(
+            plan["bindings"], f"{label} bindings"
+        ),
+        "commit_record": {
+            "final_name": "terminal-commit.json",
+            "sha256": commit_sha256,
+        },
+        "marker": {
+            "relative_path": marker_name,
+            "sha256": marker_sha256,
+        },
+        "outcome": outcome,
+    }
+
+
+def _read_disposition_file(
+    binding: dict[str, str], *, maximum: int, label: str
+) -> tuple[Path, bytes]:
+    path = _absolute_path(binding["path"])
+    data = _read_regular(
+        path,
+        maximum=maximum,
+        required_mode=0o600,
+        require_private_parent=True,
+    )
+    if _sha256(data) != binding["sha256"]:
+        raise ProvisioningError(f"{label} digest does not match")
+    return path, data
+
+
+def _validate_prior_qualified_clean(
+    binding: dict[str, dict[str, str]], state: dict[str, Any]
+) -> None:
+    bundle = _exact_keys(
+        binding,
+        {"commit_record", "marker", "producer_state"},
+        "qualified-clean disposition",
+    )
+    normalized = {
+        name: _file_binding(bundle[name], f"qualified-clean {name}")
+        for name in ("commit_record", "marker", "producer_state")
+    }
+    commit_path, commit_bytes = _read_disposition_file(
+        normalized["commit_record"],
+        maximum=MAX_TERMINAL_BYTES,
+        label="qualified-clean commit record",
+    )
+    marker_path, marker_bytes = _read_disposition_file(
+        normalized["marker"],
+        maximum=MAX_TERMINAL_BYTES,
+        label="qualified-clean marker",
+    )
+    producer_path, producer_bytes = _read_disposition_file(
+        normalized["producer_state"],
+        maximum=MAX_STATE_BYTES,
+        label="qualified-clean producer state",
+    )
+    operation_directory = producer_path.parent
+    if (
+        commit_path.parent != operation_directory
+        or marker_path.parent != operation_directory
+        or commit_path.name != "terminal-commit.json"
+        or marker_path.name != "qualified-clean.json"
+        or producer_path.name != "state.json"
+    ):
+        raise ProvisioningError(
+            "qualified-clean disposition does not share one operation directory"
+        )
+
+    commit_record = _parse_canonical_json(commit_bytes)
+    marker = _parse_canonical_json(marker_bytes)
+    producer = _parse_canonical_json(producer_bytes)
+    _exact_keys(
+        producer,
+        {
+            "artifacts",
+            "bindings",
+            "checks",
+            "mode",
+            "outcome",
+            "pending_request",
+            "phase",
+            "request",
+            "request_sequence",
+            "resources",
+            "schema",
+            "terminal_plan",
+        },
+        "qualified-clean producer state",
+    )
+    if (
+        producer["schema"] != STATE_SCHEMA
+        or producer["mode"] != "qualification"
+        or producer["phase"] != "qualified-clean"
+        or producer["outcome"] != "qualified-clean"
+        or producer["pending_request"] is not None
+        or type(producer["request_sequence"]) is not int
+        or producer["request_sequence"] < 1
+    ):
+        raise ProvisioningError("qualified-clean producer state is invalid")
+    producer_request = _validate_request(producer["request"], operation_directory)
+    if (
+        producer_request != producer["request"]
+        or producer_request["mode"] != "qualification"
+        or producer_request["qualification"] != "live-disposable-provider"
+        or producer_request["qualified_clean"] is not None
+        or producer_request["sessions"] != state["request"]["sessions"]
+    ):
+        raise ProvisioningError("qualified-clean producer request is invalid")
+
+    producer_bindings = _exact_keys(
+        producer["bindings"],
+        {
+            "fixture",
+            "owner_id",
+            "recovery_share_id",
+            "pass_cli",
+            "platform",
+            "provider_schema",
+            "reviewed_source",
+            "ssh_keygen",
+        },
+        "qualified-clean producer bindings",
+    )
+    _owner_id(producer_bindings["owner_id"], "qualified-clean producer owner ID")
+    if (
+        not isinstance(producer_bindings["recovery_share_id"], str)
+        or IDENTIFIER.fullmatch(producer_bindings["recovery_share_id"]) is None
+    ):
+        raise ProvisioningError("qualified-clean producer recovery share is invalid")
+    producer_pass_cli = _exact_keys(
+        producer_bindings["pass_cli"],
+        {"build_sha256", "observed_path", "version_stdout"},
+        "qualified-clean producer pass-cli",
+    )
+    _absolute_path(producer_pass_cli["observed_path"])
+    producer_reviewed_source = _exact_keys(
+        producer_bindings["reviewed_source"],
+        {"commit", "entries", "manifest_sha256"},
+        "qualified-clean producer reviewed source",
+    )
+    producer_terminal_bindings = _validate_terminal_bindings(
+        {
+            "pass_cli": {
+                "build_sha256": producer_pass_cli["build_sha256"],
+                "version_stdout": producer_pass_cli["version_stdout"],
+            },
+            "platform": producer_bindings["platform"],
+            "provider_schema": producer_bindings["provider_schema"],
+            "reviewed_source": {
+                "commit": producer_reviewed_source["commit"],
+                "manifest_sha256": producer_reviewed_source["manifest_sha256"],
+            },
+        },
+        "qualified-clean producer terminal bindings",
+    )
+    current_bindings = _validate_terminal_bindings(
+        _qualified_bindings(state, include_path=False),
+        "current production terminal bindings",
+    )
+
+    expected_checks = {
+        "agent_listing": True,
+        "audit": True,
+        "item_listing": True,
+        "primary_after_revocation": True,
+        "primary_readback": True,
+        "recovery_readback": True,
+        "revoked_probe_failed": True,
+    }
+    checks = _exact_keys(
+        producer["checks"], set(expected_checks), "qualified-clean producer checks"
+    )
+    if checks != expected_checks:
+        raise ProvisioningError("qualified-clean producer checks are incomplete")
+    resources = _exact_keys(
+        producer["resources"],
+        {"agent", "item", "session"},
+        "qualified-clean producer resources",
+    )
+    agent = _exact_keys(
+        resources["agent"],
+        {"candidates", "name", "pat_id", "state"},
+        "qualified-clean producer agent",
+    )
+    item = _exact_keys(
+        resources["item"],
+        {"candidates", "id", "state"},
+        "qualified-clean producer item",
+    )
+    session = _exact_keys(
+        resources["session"],
+        {"directory", "state"},
+        "qualified-clean producer session",
+    )
+    if (
+        agent["state"] != "removed"
+        or item["state"] != "removed"
+        or session != {"directory": "private/recovery-session", "state": "removed"}
+    ):
+        raise ProvisioningError("qualified-clean producer resources are not removed")
+
+    plan = _validate_terminal_plan(
+        producer["terminal_plan"], "qualified-clean terminal plan"
+    )
+    _exact_keys(
+        commit_record,
+        {"bindings", "marker", "outcome", "schema"},
+        "qualified-clean commit record",
+    )
+    record_bindings = _validate_terminal_bindings(
+        commit_record["bindings"], "qualified-clean commit-record bindings"
+    )
+    record_marker = _exact_keys(
+        commit_record["marker"],
+        {"relative_path", "sha256"},
+        "qualified-clean commit-record marker",
+    )
+    _exact_keys(
+        marker,
+        {
+            "authority",
+            "bindings",
+            "checks",
+            "outcome",
+            "production_eligible",
+            "qualification",
+            "remote_resources",
+            "schema",
+        },
+        "qualified-clean marker",
+    )
+    marker_bindings = _validate_terminal_bindings(
+        marker["bindings"], "qualified-clean marker bindings"
+    )
+    if (
+        commit_record["schema"] != TERMINAL_COMMIT_SCHEMA
+        or commit_record["outcome"] != "qualified-clean"
+        or commit_record["marker"] != plan["marker"]
+        or record_marker != plan["marker"]
+        or marker["schema"] != QUALIFIED_CLEAN_SCHEMA
+        or marker["authority"]
+        != {"publication_permitted": False, "real_transition_authority": False}
+        or marker["outcome"] != "qualified-clean"
+        or marker["production_eligible"] is not True
+        or marker["qualification"] != "live-disposable-provider"
+        or marker["remote_resources"] != {"agent": "removed", "item": "removed"}
+        or marker["checks"] != expected_checks
+        or plan["outcome"] != "qualified-clean"
+        or plan["marker"]
+        != {
+            "relative_path": "qualified-clean.json",
+            "sha256": _sha256(marker_bytes),
+        }
+        or plan["commit_record"]
+        != {
+            "final_name": "terminal-commit.json",
+            "sha256": _sha256(commit_bytes),
+        }
+        or normalized["marker"]["sha256"] != plan["marker"]["sha256"]
+        or normalized["commit_record"]["sha256"]
+        != plan["commit_record"]["sha256"]
+        or producer_terminal_bindings != current_bindings
+        or plan["bindings"] != current_bindings
+        or record_bindings != current_bindings
+        or marker_bindings != current_bindings
+    ):
+        raise ProvisioningError(
+            "qualified-clean disposition is not production-eligible"
+        )
+
+
+def _new_state(
+    request: dict[str, Any],
+    *,
+    entries: list[dict[str, str]],
+    manifest_sha256: str,
+    pass_cli_path: Path,
+    ssh_keygen_path: Path,
+    ssh_keygen_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "artifacts": {
+            "agent_token": "private/agent-token",
+            "builder": "private/build-age-admission-provider-fixture",
+            "builder_request": "private/fixture-request.json",
+            "fixture_directory": "fixture",
+            "item_template": "private/item-template.json",
+            "receipts": [],
+            "signer_private": "private/admission-ed25519",
+            "signer_public": "private/admission-ed25519.pub",
+        },
+        "bindings": {
+            "fixture": None,
+            "owner_id": None,
+            "recovery_share_id": None,
+            "pass_cli": {
+                "build_sha256": request["pass_cli"]["build_sha256"],
+                "observed_path": os.fspath(pass_cli_path),
+                "version_stdout": request["pass_cli"]["version_stdout"],
+            },
+            "platform": _platform_name(),
+            "provider_schema": request["provider_schema"],
+            "reviewed_source": {
+                "commit": request["reviewed_source"]["commit"],
+                "entries": entries,
+                "manifest_sha256": manifest_sha256,
+            },
+            "ssh_keygen": {
+                "observed_path": os.fspath(ssh_keygen_path),
+                "sha256": ssh_keygen_sha256,
+            },
+        },
+        "checks": {
+            "agent_listing": False,
+            "audit": False,
+            "item_listing": False,
+            "primary_after_revocation": False,
+            "primary_readback": False,
+            "recovery_readback": False,
+            "revoked_probe_failed": False,
+        },
+        "mode": request["mode"],
+        "outcome": "running",
+        "pending_request": None,
+        "phase": "validated",
+        "request": request,
+        "request_sequence": 0,
+        "resources": {
+            "agent": {
+                "candidates": [],
+                "name": request["provider"]["recovery_agent_name"],
+                "pat_id": None,
+                "state": "absent",
+            },
+            "item": {"candidates": [], "id": None, "state": "absent"},
+            "session": {"directory": "private/recovery-session", "state": "absent"},
+        },
+        "schema": STATE_SCHEMA,
+        "terminal_plan": None,
+    }
+
+
+def _acknowledged(result: ChildResult) -> bool:
+    return (
+        result.spawned
+        and result.outcome == "exited"
+        and result.status == 0
+        and result.stderr == b""
+    )
+
+
+def _require_verified_retirement(result: ChildResult) -> None:
+    if result.outcome == "unverified-retirement":
+        raise UnverifiedChildRetirement("child process-group retirement is unverified")
+
+
+def _run_provider_read(
+    state: dict[str, Any],
+    command: list[str],
+    *,
+    session: Path,
+    tools_directory: Path,
+    timeout: int = PROVIDER_READ_TIMEOUT_SECONDS,
+    reason: bool = False,
+) -> ChildResult:
+    _check_signal()
+    _ensure_pass_cli_binding(state)
+    result = _run_child(
+        command,
+        environment=_provider_environment(session, tools_directory, reason=reason),
+        timeout=timeout,
+    )
+    _require_verified_retirement(result)
+    _check_signal()
+    return result
+
+
+def _closed_info(
+    data: bytes, *, expected_agent: str | None, expected_reader_name: str | None = None
+) -> str:
+    value = _parse_json_output(data)
+    if not isinstance(value, dict):
+        raise ProvisioningError("provider info output is invalid")
+    common = {"id", "release_track", "session_has_lock"}
+    optional = {"install_source", "session_lock_after_seconds"}
+    if expected_reader_name is not None:
+        if expected_agent is not None:
+            raise ProvisioningError("provider info role is ambiguous")
+        required = common | {"personal_access_token_name"}
+        allowed = required | optional
+        if (
+            not required <= set(value) <= allowed
+            or value["id"] != "N/A"
+            or value["personal_access_token_name"] != expected_reader_name
+            or not isinstance(value["release_track"], str)
+            or not value["release_track"]
+        ):
+            raise ProvisioningError("primary PAT info output is invalid")
+    elif expected_agent is None:
+        required = common | {"email", "username"}
+        allowed = required | optional | {"env"}
+        if (
+            not required <= set(value) <= allowed
+            or "personal_access_token_name" in value
+            or not all(
+                isinstance(value[name], str) and value[name]
+                for name in ("id", "release_track", "email", "username")
+            )
+            or value["id"] == "N/A"
+        ):
+            raise ProvisioningError("owner info output is invalid")
+    else:
+        required = common | {"personal_access_token_name"}
+        allowed = required | optional
+        if (
+            not required <= set(value) <= allowed
+            or value["id"] != "N/A"
+            or value["personal_access_token_name"] != f"[Agent] {expected_agent}"
+            or not isinstance(value["release_track"], str)
+            or not value["release_track"]
+        ):
+            raise ProvisioningError("agent info output is invalid")
+    if type(value["session_has_lock"]) is not bool:
+        raise ProvisioningError("provider info lock state is invalid")
+    if value["session_has_lock"]:
+        if (
+            type(value.get("session_lock_after_seconds")) is not int
+            or value["session_lock_after_seconds"] < 0
+        ):
+            raise ProvisioningError("provider info lock state is invalid")
+    elif "session_lock_after_seconds" in value:
+        raise ProvisioningError("provider info lock state is invalid")
+    if "install_source" in value and (
+        not isinstance(value["install_source"], str) or not value["install_source"]
+    ):
+        raise ProvisioningError("provider info install source is invalid")
+    return value["id"]
+
+
+def _parse_item_id(data: bytes) -> str:
+    if not data.endswith(b"\n") or data.count(b"\n") != 1:
+        raise ProvisioningError("item create output is invalid")
+    try:
+        value = data[:-1].decode("ascii")
+    except UnicodeError as error:
+        raise ProvisioningError("item create output is invalid") from error
+    if IDENTIFIER.fullmatch(value) is None:
+        raise ProvisioningError("item create output is invalid")
+    return value
+
+
+def _parse_agent_token(data: bytes) -> str:
+    value = _parse_json_output(data)
+    if not isinstance(value, dict) or list(value) != ["token", "instruction"]:
+        raise ProvisioningError("agent create output is invalid")
+    token_output = value["token"]
+    instruction = value["instruction"]
+    if (
+        not isinstance(token_output, str)
+        or not isinstance(instruction, str)
+        or not instruction
+        or len(token_output.encode("utf-8")) > MAX_TOKEN_BYTES
+    ):
+        raise ProvisioningError("agent create output is invalid")
+    matched = AGENT_TOKEN.fullmatch(token_output)
+    if matched is None:
+        raise ProvisioningError("agent create token is invalid")
+    key = matched.group(2)
+    try:
+        decoded = base64.urlsafe_b64decode(key + "=")
+    except (binascii.Error, ValueError) as error:
+        raise ProvisioningError("agent create token is invalid") from error
+    # Nonzero trailing bits still decode, but do not re-encode to the key.
+    canonical = base64.urlsafe_b64encode(decoded).decode("ascii")
+    if len(decoded) != 32 or canonical != key + "=":
+        raise ProvisioningError("agent create token is invalid")
+    return matched.group(1)
+
+
+def _arm_mutation(
+    state_directory: Path,
+    state: dict[str, Any],
+    *,
+    kind: str,
+    resource: str,
+    command: list[str],
+    targets: dict[str, Any],
+    postcondition: str,
+) -> tuple[Path, Path, str]:
+    if state["pending_request"] is not None:
+        raise ProvisioningError("another provider request is already pending")
+    current = state["resources"][resource]["state"]
+    if current in {"requesting", "removing", "unknown"}:
+        raise ProvisioningError("resource state blocks another provider request")
+    state["request_sequence"] += 1
+    sequence = state["request_sequence"]
+    stdout_relative = f"captures/{sequence:04d}.stdout"
+    stderr_relative = f"captures/{sequence:04d}.stderr"
+    stdout_path = _state_path(state_directory, stdout_relative)
+    stderr_path = _state_path(state_directory, stderr_relative)
+    for path in (stdout_path, stderr_path):
+        descriptor, _identity = _exclusive_create(path)
+        os.fsync(descriptor)
+        os.close(descriptor)
+    _fsync_directory(stdout_path.parent)
+    next_state = (
+        "removing"
+        if kind in {"agent-delete", "item-delete", "local-logout"}
+        else "requesting"
+    )
+    state["resources"][resource]["state"] = next_state
+    state["pending_request"] = {
+        "captures": {"stderr": stderr_relative, "stdout": stdout_relative},
+        "command": command,
+        "kind": kind,
+        "postcondition": postcondition,
+        "prior_state": current,
+        "resource": resource,
+        "sequence": sequence,
+        "targets": targets,
+    }
+    _atomic_state_write(state_directory, state)
+    return stdout_path, stderr_path, current
+
+
+def _ambiguous_status(kind: str) -> int:
+    return 21 if kind in {"agent-delete", "item-delete", "local-logout"} else 20
+
+
+def _record_ambiguous(
+    state_directory: Path,
+    state: dict[str, Any],
+    *,
+    resource: str,
+    status: int,
+) -> None:
+    state["resources"][resource]["state"] = "unknown"
+    state["outcome"] = (
+        "remote-cleanup-incomplete" if status == 21 else "reconciliation-required"
+    )
+    _atomic_state_write(state_directory, state)
+
+
+def _mutation(
+    state_directory: Path,
+    state: dict[str, Any],
+    *,
+    kind: str,
+    resource: str,
+    command: list[str],
+    session: Path,
+    tools_directory: Path,
+    targets: dict[str, Any],
+    postcondition: str,
+    success_state: str,
+    expected_output: Any,
+    reason: bool = False,
+    login_credential: str | None = None,
+) -> Any:
+    _ensure_pass_cli_binding(state)
+    stdout_path, stderr_path, prior_state = _arm_mutation(
+        state_directory,
+        state,
+        kind=kind,
+        resource=resource,
+        command=command,
+        targets=targets,
+        postcondition=postcondition,
+    )
+    try:
+        _ensure_pass_cli_binding(state)
+    except ProvisioningError:
+        state["resources"][resource]["state"] = prior_state
+        state["pending_request"] = None
+        _atomic_state_write(state_directory, state)
+        raise PreSpawnFailure(kind)
+    result = _run_child(
+        command,
+        environment=_provider_environment(
+            session,
+            tools_directory,
+            reason=reason,
+            login_credential=login_credential,
+        ),
+        timeout=PROVIDER_MUTATION_TIMEOUT_SECONDS,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+    )
+    if not result.spawned:
+        state["resources"][resource]["state"] = prior_state
+        state["pending_request"] = None
+        _atomic_state_write(state_directory, state)
+        raise PreSpawnFailure(kind)
+
+    parsed: Any = None
+    output_valid = False
+    try:
+        parsed = expected_output(result.stdout)
+        output_valid = result.stderr == b""
+    except ProvisioningError:
+        output_valid = False
+
+    if _acknowledged(result) and output_valid:
+        if kind == "agent-create":
+            token_path = _state_path(state_directory, state["artifacts"]["agent_token"])
+            _exclusive_write(token_path, (parsed + "\n").encode("utf-8"))
+        state["resources"][resource]["state"] = success_state
+        if kind == "item-create":
+            state["resources"]["item"]["id"] = parsed
+        state["pending_request"] = None
+        _atomic_state_write(state_directory, state)
+        if kind == "agent-create":
+            try:
+                stdout_path.unlink()
+                _fsync_directory(stdout_path.parent)
+            except OSError as error:
+                raise ProvisioningError(
+                    "agent token capture could not be retired"
+                ) from error
+        _check_signal()
+        return parsed
+
+    known_nonzero = result.outcome == "exited" and result.status not in {None, 0}
+    lost_status_settled = (
+        kind in {"item-create", "agent-create"}
+        and output_valid
+        and not known_nonzero
+        and result.outcome != "exited"
+    )
+    if lost_status_settled:
+        if kind == "item-create":
+            state["resources"]["item"]["id"] = parsed
+        else:
+            token_path = _state_path(state_directory, state["artifacts"]["agent_token"])
+            if not os.path.lexists(token_path):
+                _exclusive_write(token_path, (parsed + "\n").encode("utf-8"))
+        state["resources"][resource]["state"] = "present"
+        state["pending_request"] = None
+        state["outcome"] = "reconciliation-required"
+        _atomic_state_write(state_directory, state)
+        if _caught_signal and result.outcome != "unverified-retirement":
+            raise ProvisioningInterrupted(_caught_signal)
+        raise ProvisioningStop(20)
+
+    status = _ambiguous_status(kind)
+    state["pending_request"]["targets"]["observed_result"] = {
+        "outcome": result.outcome,
+        "signal": result.signal_number,
+        "status": result.status,
+    }
+    _record_ambiguous(state_directory, state, resource=resource, status=status)
+    if _caught_signal and result.outcome != "unverified-retirement":
+        raise ProvisioningInterrupted(_caught_signal)
+    raise ProvisioningStop(status)
+
+
+def _expected_exact(value: bytes):
+    def parse(data: bytes) -> None:
+        if data != value:
+            raise ProvisioningError("provider acknowledgement is invalid")
+
+    return parse
+
+
+def _require_read_success(result: ChildResult, label: str) -> bytes:
+    if not _acknowledged(result):
+        raise ProvisioningError(f"{label} did not return an acknowledged result")
+    return result.stdout
+
+
+def _check_info(
+    state: dict[str, Any],
+    *,
+    session: Path,
+    tools_directory: Path,
+    expected_agent: str | None,
+    expected_reader_name: str | None = None,
+) -> str:
+    result = _run_provider_read(
+        state,
+        ["pass-cli", "info", "--output", "json"],
+        session=session,
+        tools_directory=tools_directory,
+    )
+    return _closed_info(
+        _require_read_success(result, "provider info"),
+        expected_agent=expected_agent,
+        expected_reader_name=expected_reader_name,
+    )
+
+
+def _check_readiness(
+    state: dict[str, Any], *, session: Path, fixture_directory: Path
+) -> None:
+    _ensure_pass_cli_binding(state)
+    tools = fixture_directory / "tools"
+    result = _run_child(
+        [os.fspath(tools / "proton-pass-ensure-ready")],
+        environment=_provider_environment(session, tools),
+        timeout=PROVIDER_READ_TIMEOUT_SECONDS,
+    )
+    _require_verified_retirement(result)
+    _check_signal()
+    if not _acknowledged(result) or result.stdout:
+        raise ProvisioningError(
+            "provider readiness did not acknowledge existing session"
+        )
+
+
+def _vault_share_for_session(
+    state: dict[str, Any],
+    *,
+    session: Path,
+    fixture_directory: Path,
+    expected_share_id: str | None,
+) -> str:
+    request = state["request"]
+    result = _run_provider_read(
+        state,
+        ["pass-cli", "vault", "list", "--output", "json"],
+        session=session,
+        tools_directory=fixture_directory / "tools",
+    )
+    value = _parse_json_output(_require_read_success(result, "vault listing"))
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"vaults"}
+        or not isinstance(value["vaults"], list)
+        or len(value["vaults"]) > 10_000
+    ):
+        raise ProvisioningError("vault listing is invalid")
+    matches = []
+    for record in value["vaults"]:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"name", "vault_id", "share_id"}
+            or not isinstance(record["name"], str)
+            or not record["name"]
+            or any(
+                not isinstance(record[key], str)
+                or IDENTIFIER.fullmatch(record[key]) is None
+                for key in ("vault_id", "share_id")
+            )
+        ):
+            raise ProvisioningError("vault listing record is invalid")
+        if record["name"] == request["provider"]["vault_name"]:
+            matches.append(record)
+    if (
+        len(matches) != 1
+        or matches[0]["vault_id"] != request["provider"]["vault_id"]
+    ):
+        raise ProvisioningError("selected vault binding is invalid")
+    share_id = matches[0]["share_id"]
+    if expected_share_id is not None and share_id != expected_share_id:
+        raise ProvisioningError("selected share binding is invalid")
+    return share_id
+
+
+def _valid_item_summary(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ProvisioningError("item listing record is invalid")
+    required = {
+        "create_time",
+        "flags",
+        "id",
+        "item_type",
+        "modify_time",
+        "share_id",
+        "state",
+        "title",
+        "vault_id",
+    }
+    if frozenset(value) not in {
+        frozenset(required),
+        frozenset(required | {"folder_id"}),
+    }:
+        raise ProvisioningError("item listing record is not closed")
+    for name in ("id", "share_id", "vault_id"):
+        if (
+            not isinstance(value[name], str)
+            or IDENTIFIER.fullmatch(value[name]) is None
+        ):
+            raise ProvisioningError("item listing identifier is invalid")
+    if (
+        not isinstance(value["title"], str)
+        or not isinstance(value["state"], str)
+        or not isinstance(value["item_type"], str)
+        or not isinstance(value["create_time"], str)
+        or not value["create_time"]
+        or not isinstance(value["modify_time"], str)
+        or not value["modify_time"]
+        or not isinstance(value["flags"], list)
+        or not all(isinstance(flag, str) for flag in value["flags"])
+        or "folder_id" in value
+        and (not isinstance(value["folder_id"], str) or not value["folder_id"])
+    ):
+        raise ProvisioningError("item listing record is invalid")
+    return value
+
+
+def _item_listing(
+    state: dict[str, Any], *, fixture_directory: Path
+) -> list[dict[str, Any]]:
+    request = state["request"]
+    result = _run_provider_read(
+        state,
+        [
+            "pass-cli",
+            "item",
+            "list",
+            f"--share-id={request['provider']['share_id']}",
+            "--filter-type",
+            "custom",
+            "--filter-state",
+            "active",
+            "--output",
+            "json",
+        ],
+        session=Path(request["sessions"]["owner"]),
+        tools_directory=fixture_directory / "tools",
+    )
+    value = _parse_json_output(_require_read_success(result, "item listing"))
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"items"}
+        or not isinstance(value["items"], list)
+    ):
+        raise ProvisioningError("item listing is invalid")
+    if len(value["items"]) > 10_000:
+        raise ProvisioningError("item listing exceeds its bound")
+    return [_valid_item_summary(record) for record in value["items"]]
+
+
+def _confirm_item_listing(state: dict[str, Any], *, fixture_directory: Path) -> None:
+    records = _item_listing(state, fixture_directory=fixture_directory)
+    request = state["request"]
+    expected_id = state["resources"]["item"]["id"]
+    matches = [
+        record
+        for record in records
+        if record["id"] == expected_id
+        and record["share_id"] == request["provider"]["share_id"]
+        and record["vault_id"] == request["provider"]["vault_id"]
+        and record["title"] == request["provider"]["item_title"]
+        and record["state"] == "Active"
+        and record["item_type"] == "custom"
+    ]
+    if len(matches) != 1:
+        raise ProvisioningError("item listing did not confirm the acknowledged item")
+    state["checks"]["item_listing"] = True
+
+
+def _expiration_timestamp(epoch: int, expiration: str) -> int:
+    instant = dt.datetime.fromtimestamp(epoch, tz=dt.timezone.utc)
+    if expiration == "1h":
+        return int((instant + dt.timedelta(hours=1)).timestamp())
+    if expiration == "1d":
+        return int((instant + dt.timedelta(days=1)).timestamp())
+    if expiration == "1w":
+        return int((instant + dt.timedelta(weeks=1)).timestamp())
+    months = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}[expiration]
+    month_index = instant.year * 12 + instant.month - 1 + months
+    year, zero_month = divmod(month_index, 12)
+    month = zero_month + 1
+    day = min(instant.day, calendar.monthrange(year, month)[1])
+    return int(instant.replace(year=year, month=month, day=day).timestamp())
+
+
+def _valid_agent_record(value: object) -> dict[str, Any]:
+    record = _exact_keys(
+        value, {"expire_time", "name", "pat_id"}, "agent listing record"
+    )
+    if (
+        not isinstance(record["pat_id"], str)
+        or IDENTIFIER.fullmatch(record["pat_id"]) is None
+        or not isinstance(record["name"], str)
+        or not record["name"]
+        or record["expire_time"] is not None
+        and type(record["expire_time"]) is not int
+    ):
+        raise ProvisioningError("agent listing record is invalid")
+    return record
+
+
+def _agent_listing(
+    state: dict[str, Any], *, fixture_directory: Path
+) -> list[dict[str, Any]]:
+    request = state["request"]
+    result = _run_provider_read(
+        state,
+        ["pass-cli", "agent", "list", "--output", "json"],
+        session=Path(request["sessions"]["owner"]),
+        tools_directory=fixture_directory / "tools",
+    )
+    value = _parse_json_output(_require_read_success(result, "agent listing"))
+    if not isinstance(value, list) or len(value) > 10_000:
+        raise ProvisioningError("agent listing is invalid")
+    return [_valid_agent_record(record) for record in value]
+
+
+def _confirm_agent_listing(
+    state_directory: Path,
+    state: dict[str, Any],
+    *,
+    fixture_directory: Path,
+    request_started: int,
+    request_finished: int,
+) -> None:
+    try:
+        records = _agent_listing(state, fixture_directory=fixture_directory)
+    except UnverifiedChildRetirement:
+        raise
+    except ProvisioningError:
+        state["outcome"] = "remote-cleanup-incomplete"
+        _atomic_state_write(state_directory, state)
+        raise ProvisioningStop(21)
+    request = state["request"]
+    name = request["provider"]["recovery_agent_name"]
+    matches = [record for record in records if record["name"] == name]
+    state["resources"]["agent"]["candidates"] = matches
+    requested = request["provider"]["expiration"]
+    lower = _expiration_timestamp(request_started, requested)
+    upper = _expiration_timestamp(request_finished, requested)
+    if (
+        len(matches) != 1
+        or type(matches[0]["expire_time"]) is not int
+        or not lower <= matches[0]["expire_time"] <= upper
+    ):
+        state["outcome"] = "remote-cleanup-incomplete"
+        _atomic_state_write(state_directory, state)
+        raise ProvisioningStop(21)
+    record = matches[0]
+    state["resources"]["agent"]["pat_id"] = record["pat_id"]
+    state["checks"]["agent_listing"] = True
+
+
+def _confirm_monitor(state: dict[str, Any], *, fixture_directory: Path) -> None:
+    request = state["request"]
+    name = request["provider"]["recovery_agent_name"]
+    result = _run_provider_read(
+        state,
+        ["pass-cli", "agent", "monitor", name, "--limit", "100", "--output", "json"],
+        session=Path(request["sessions"]["owner"]),
+        tools_directory=fixture_directory / "tools",
+    )
+    value = _parse_json_output(_require_read_success(result, "agent monitor"))
+    if not isinstance(value, list) or len(value) > 100:
+        raise ProvisioningError("agent monitor output is invalid")
+    matches = []
+    for raw in value:
+        record = _exact_keys(
+            raw,
+            {"action", "action_time", "object_id", "payload", "record_id", "vault_id"},
+            "agent monitor record",
+        )
+        if (
+            not isinstance(record["record_id"], str)
+            or IDENTIFIER.fullmatch(record["record_id"]) is None
+            or not isinstance(record["vault_id"], str)
+            or IDENTIFIER.fullmatch(record["vault_id"]) is None
+            or record["object_id"] is not None
+            and (
+                not isinstance(record["object_id"], str)
+                or IDENTIFIER.fullmatch(record["object_id"]) is None
+            )
+            or not isinstance(record["action"], str)
+            or not isinstance(record["action_time"], str)
+            or not record["action_time"]
+        ):
+            raise ProvisioningError("agent monitor record is invalid")
+        payload = record["payload"]
+        if payload is not None:
+            payload = _exact_keys(
+                payload, {"item_name", "reason", "vault_name"}, "agent monitor payload"
+            )
+            if not all(
+                value is None or isinstance(value, str) for value in payload.values()
+            ):
+                raise ProvisioningError("agent monitor payload is invalid")
+        if (
+            record["object_id"] == state["resources"]["item"]["id"]
+            and record["action"] == "ItemRead"
+            and payload
+            == {
+                "item_name": request["provider"]["item_title"],
+                "reason": AGENT_REASON,
+                "vault_name": request["provider"]["vault_name"],
+            }
+        ):
+            matches.append(record)
+    if len(matches) != 1:
+        raise ProvisioningError("agent monitor did not contain one exact read event")
+    state["checks"]["audit"] = True
+
+
+def _generate_signer(state_directory: Path, state: dict[str, Any]) -> tuple[str, str]:
+    resolved, digest = _resolve_executable("ssh-keygen")
+    binding = state["bindings"]["ssh_keygen"]
+    if os.fspath(resolved) != binding["observed_path"] or digest != binding["sha256"]:
+        raise ProvisioningError("ssh-keygen runtime PATH binding drifted")
+    private_path = _state_path(state_directory, state["artifacts"]["signer_private"])
+    result = _run_child(
+        [
+            "ssh-keygen",
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-C",
+            "issue286-age-admission",
+            "-f",
+            os.fspath(private_path),
+        ],
+        environment=_local_environment(),
+        timeout=TOOL_OBSERVATION_TIMEOUT_SECONDS,
+    )
+    _require_verified_retirement(result)
+    _check_signal()
+    if not _acknowledged(result) or result.stdout:
+        raise ProvisioningError("disposable signer generation failed")
+    private = _read_regular(
+        private_path,
+        maximum=MAX_SIGNER_PRIVATE_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    public_path = _state_path(state_directory, state["artifacts"]["signer_public"])
+    public = _read_regular(
+        public_path,
+        maximum=MAX_SIGNER_PUBLIC_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    if not private:
+        raise ProvisioningError("disposable signer private key is empty")
+    return _parse_public_key(public)
+
+
+def _build_fixture(
+    state_directory: Path,
+    state: dict[str, Any],
+    sources: dict[str, bytes],
+) -> Path:
+    builder_path = _state_path(state_directory, state["artifacts"]["builder"])
+    _exclusive_write(
+        builder_path,
+        sources["scripts/build-age-admission-provider-fixture"],
+        final_mode=0o600,
+    )
+    request = state["request"]
+    builder_request = {
+        "age_tooling": request["age_tooling"],
+        "reviewed_source": request["reviewed_source"],
+        "schema": FIXTURE_REQUEST_SCHEMA,
+        "signer_public_key": os.fspath(
+            _state_path(state_directory, state["artifacts"]["signer_public"])
+        ),
+    }
+    builder_request_path = _state_path(
+        state_directory, state["artifacts"]["builder_request"]
+    )
+    _exclusive_write(builder_request_path, _canonical_json(builder_request))
+    fixture_directory = _state_path(
+        state_directory, state["artifacts"]["fixture_directory"]
+    )
+    result = _run_child(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-S",
+            os.fspath(builder_path),
+            "--request",
+            os.fspath(builder_request_path),
+            "--operation-directory",
+            os.fspath(fixture_directory),
+        ],
+        environment=_local_environment(),
+        timeout=PROVIDER_ADAPTER_TIMEOUT_SECONDS,
+    )
+    _require_verified_retirement(result)
+    _check_signal()
+    if not _acknowledged(result) or result.stdout != b"fixture-ready\n":
+        raise ProvisioningError("synthetic provider fixture build failed")
+    return fixture_directory
+
+
+def _write_item_template(state_directory: Path, state: dict[str, Any]) -> None:
+    signer_path = _state_path(state_directory, state["artifacts"]["signer_private"])
+    signer = _read_regular(
+        signer_path,
+        maximum=MAX_SIGNER_PRIVATE_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    try:
+        signer_text = signer.decode("utf-8")
+    except UnicodeError as error:
+        raise ProvisioningError("signer private key is not UTF-8") from error
+    if not signer_text or "\x00" in signer_text:
+        raise ProvisioningError("signer private key is invalid")
+    # pass-cli exposes a custom field as "<section>.<field>", so the selected
+    # name is split rather than stored whole inside its section.
+    section_name, field_name = ITEM_FIELD.split(".", 1)
+    template = {
+        "sections": [
+            {
+                "fields": [
+                    {
+                        "field_name": field_name,
+                        "field_type": "hidden",
+                        "value": signer_text,
+                    }
+                ],
+                "section_name": section_name,
+            }
+        ],
+        "title": state["request"]["provider"]["item_title"],
+    }
+    template_path = _state_path(state_directory, state["artifacts"]["item_template"])
+    _exclusive_write(template_path, _canonical_json(template))
+
+
+def _receipt_command(
+    state_directory: Path,
+    state: dict[str, Any],
+    fixture_directory: Path,
+    receipt_relative: str,
+    share_id: str,
+) -> list[str]:
+    fixture = state["bindings"]["fixture"]["document"]
+    base = fixture["repositories"]["base"]
+    head = fixture["repositories"]["head"]
+    return [
+        sys.executable,
+        "-I",
+        "-B",
+        "-S",
+        os.fspath(
+            fixture_directory / fixture["staged_tools"]["provider_adapter"]["path"]
+        ),
+        f"--share-id={share_id}",
+        f"--item-id={state['resources']['item']['id']}",
+        "--expected-fingerprint",
+        fixture["signer"]["fingerprint"],
+        "--trusted-launcher",
+        os.fspath(
+            fixture_directory / fixture["staged_tools"]["trusted_launcher"]["path"]
+        ),
+        "--base-repository",
+        os.fspath(fixture_directory / base["path"]),
+        "--base-commit",
+        base["commit"],
+        "--head-repository",
+        os.fspath(fixture_directory / head["path"]),
+        "--head-commit",
+        head["commit"],
+        "--repository",
+        FIXTURE_REPOSITORY,
+        "--identity",
+        os.fspath(fixture_directory / fixture["age_identity"]["path"]),
+        "--trusted-admitter",
+        os.fspath(fixture_directory / base["path"] / "scripts/admit-age-envelopes"),
+        "--output",
+        os.fspath(_state_path(state_directory, receipt_relative)),
+    ]
+
+
+def _verify_receipt(
+    state_directory: Path,
+    state: dict[str, Any],
+    fixture_directory: Path,
+    receipt_relative: str,
+) -> None:
+    fixture = state["bindings"]["fixture"]["document"]
+    base = fixture["repositories"]["base"]
+    head = fixture["repositories"]["head"]
+    receipt = _state_path(state_directory, receipt_relative)
+    receipt_data = _read_regular(
+        receipt,
+        maximum=256 * 1024,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    if not receipt_data:
+        raise ProvisioningError("synthetic receipt is empty")
+    command = [
+        sys.executable,
+        "-I",
+        "-B",
+        "-S",
+        os.fspath(
+            fixture_directory / base["path"] / "scripts/privacy_age_integrity_gate.py"
+        ),
+        "--base-repository",
+        os.fspath(fixture_directory / base["path"]),
+        "--base-commit",
+        base["commit"],
+        "--head-repository",
+        os.fspath(fixture_directory / head["path"]),
+        "--head-commit",
+        head["commit"],
+        "--admission-body",
+        os.fspath(receipt),
+        "--allowed-signers",
+        os.fspath(
+            fixture_directory / base["path"] / ".github/age-admission/allowed_signers"
+        ),
+        "--repository",
+        FIXTURE_REPOSITORY,
+    ]
+    environment = _local_environment()
+    environment["AGE_TOOLING_DIRECTORY"] = os.fspath(fixture_directory / "tools")
+    result = _run_child(
+        command,
+        environment=environment,
+        timeout=PROVIDER_READ_TIMEOUT_SECONDS,
+    )
+    _require_verified_retirement(result)
+    _check_signal()
+    if (
+        not _acknowledged(result)
+        or result.stdout != b"privacy age integrity boundary verified\n"
+    ):
+        raise ProvisioningError("synthetic receipt verification failed")
+
+
+def _primary_reader(request: dict[str, Any]) -> tuple[Path, str | None, str | None]:
+    sessions = request["sessions"]
+    if sessions["primary"] == "owner":
+        return Path(sessions["owner"]), None, None
+    if sessions["primary"] == "existing-pat":
+        return Path(sessions["primary_reader_profile"]), None, sessions["primary_reader_name"]
+    return (
+        Path(sessions["primary_enrollment"]),
+        sessions["primary_enrollment_name"],
+        None,
+    )
+
+
+def _perform_readback(
+    state_directory: Path,
+    state: dict[str, Any],
+    *,
+    fixture_directory: Path,
+    session: Path,
+    expected_agent: str | None,
+    receipt_label: str,
+    share_id: str,
+    expected_reader_name: str | None = None,
+) -> None:
+    if not isinstance(share_id, str) or IDENTIFIER.fullmatch(share_id) is None:
+        raise ProvisioningError("readback share ID is invalid")
+    observed_id = _check_info(
+        state,
+        session=session,
+        tools_directory=fixture_directory / "tools",
+        expected_agent=expected_agent,
+        expected_reader_name=expected_reader_name,
+    )
+    # A user-login read must still be the owner captured before any effect.
+    if (
+        expected_agent is None
+        and expected_reader_name is None
+        and observed_id != state["bindings"]["owner_id"]
+    ):
+        raise ProvisioningError("owner identity changed before routine read")
+    _check_readiness(state, session=session, fixture_directory=fixture_directory)
+    if expected_reader_name is not None:
+        _check_info(
+            state,
+            session=session,
+            tools_directory=fixture_directory / "tools",
+            expected_agent=None,
+            expected_reader_name=expected_reader_name,
+        )
+    receipt_relative = f"private/{receipt_label}.receipt"
+    if receipt_relative in state["artifacts"]["receipts"]:
+        raise ProvisioningError("receipt label was reused")
+    state["artifacts"]["receipts"].append(receipt_relative)
+    _atomic_state_write(state_directory, state)
+    _ensure_pass_cli_binding(state)
+    result = _run_child(
+        _receipt_command(
+            state_directory, state, fixture_directory, receipt_relative, share_id
+        ),
+        environment=_provider_environment(
+            session, fixture_directory / "tools", reason=True
+        ),
+        timeout=PROVIDER_ADAPTER_TIMEOUT_SECONDS,
+    )
+    _require_verified_retirement(result)
+    _check_signal()
+    if not _acknowledged(result) or result.stdout:
+        raise ProvisioningError("provider adapter readback failed")
+    if expected_reader_name is not None:
+        _check_info(
+            state,
+            session=session,
+            tools_directory=fixture_directory / "tools",
+            expected_agent=None,
+            expected_reader_name=expected_reader_name,
+        )
+    _verify_receipt(state_directory, state, fixture_directory, receipt_relative)
+
+
+def _delete_agent(
+    state_directory: Path, state: dict[str, Any], fixture_directory: Path
+) -> None:
+    agent = state["resources"]["agent"]
+    name = agent["name"]
+    pat_id = agent["pat_id"]
+    if not isinstance(pat_id, str) or IDENTIFIER.fullmatch(pat_id) is None:
+        raise ProvisioningError("retained agent PAT ID is invalid")
+    _mutation(
+        state_directory,
+        state,
+        kind="agent-delete",
+        resource="agent",
+        command=["pass-cli", "pat", "delete", f"--pat-id={pat_id}"],
+        session=Path(state["request"]["sessions"]["owner"]),
+        tools_directory=fixture_directory / "tools",
+        targets={"name": name, "pat_id": pat_id},
+        postcondition="exact retained agent PAT removed",
+        success_state="removed",
+        expected_output=_expected_exact(
+            b"Personal access token deleted successfully\n"
+        ),
+    )
+
+
+def _delete_item(
+    state_directory: Path, state: dict[str, Any], fixture_directory: Path
+) -> None:
+    item_id = state["resources"]["item"]["id"]
+    share_id = state["request"]["provider"]["share_id"]
+    if not isinstance(item_id, str) or IDENTIFIER.fullmatch(item_id) is None:
+        raise ProvisioningError("retained item ID is invalid")
+    _mutation(
+        state_directory,
+        state,
+        kind="item-delete",
+        resource="item",
+        command=[
+            "pass-cli",
+            "item",
+            "delete",
+            f"--share-id={share_id}",
+            f"--item-id={item_id}",
+        ],
+        session=Path(state["request"]["sessions"]["owner"]),
+        tools_directory=fixture_directory / "tools",
+        targets={"id": item_id, "share_id": share_id},
+        postcondition="exact retained item removed",
+        success_state="removed",
+        expected_output=_expected_exact(
+            f"Item {item_id} deleted successfully\n".encode("ascii")
+        ),
+    )
+
+
+def _logout(
+    state_directory: Path, state: dict[str, Any], fixture_directory: Path
+) -> None:
+    session = _state_path(state_directory, state["resources"]["session"]["directory"])
+    _mutation(
+        state_directory,
+        state,
+        kind="local-logout",
+        resource="session",
+        command=["pass-cli", "logout", "--force"],
+        session=session,
+        tools_directory=fixture_directory / "tools",
+        targets={"directory": state["resources"]["session"]["directory"]},
+        postcondition="local recovery session logged out after remote cleanup",
+        success_state="removed",
+        expected_output=_expected_exact(
+            b"Executing force logout\nSuccessfully performed force logout\n"
+        ),
+    )
+
+
+def _confirm_revoked_probe(
+    state_directory: Path, state: dict[str, Any], fixture_directory: Path
+) -> None:
+    item_id = state["resources"]["item"]["id"]
+    recovery_share_id = state["bindings"]["recovery_share_id"]
+    if (
+        not isinstance(recovery_share_id, str)
+        or IDENTIFIER.fullmatch(recovery_share_id) is None
+    ):
+        raise ProvisioningError("recovery share ID is not bound")
+    session = _state_path(state_directory, state["resources"]["session"]["directory"])
+    result = _run_provider_read(
+        state,
+        [
+            "pass-cli",
+            "item",
+            "view",
+            f"--share-id={recovery_share_id}",
+            f"--item-id={item_id}",
+            "--field",
+            ITEM_FIELD,
+            "--output",
+            "human",
+        ],
+        session=session,
+        tools_directory=fixture_directory / "tools",
+        reason=True,
+    )
+    signer = _read_regular(
+        _state_path(state_directory, state["artifacts"]["signer_private"]),
+        maximum=MAX_SIGNER_PRIVATE_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    if (
+        not result.spawned
+        or result.outcome != "exited"
+        or result.status is None
+        or result.status == 0
+        or result.stdout
+        or signer
+        and signer in result.stderr
+    ):
+        raise ProvisioningError(
+            "revoked recovery session retained selected-field access"
+        )
+    state["checks"]["revoked_probe_failed"] = True
+
+
+def _remove_regular_artifact(path: Path) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise ProvisioningError("local artifact could not be inspected") from error
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_nlink != 1
+    ):
+        raise ProvisioningError("local artifact is not authoritative")
+    try:
+        path.unlink()
+        _fsync_directory(path.parent)
+    except OSError as error:
+        raise ProvisioningError("local artifact could not be removed") from error
+
+
+def _remove_local_sensitive_artifacts(
+    state_directory: Path,
+    state: dict[str, Any],
+    *,
+    retain_signer_public: bool = False,
+) -> None:
+    artifacts = state["artifacts"]
+    for relative in (
+        artifacts["agent_token"],
+        artifacts["item_template"],
+        artifacts["signer_private"],
+        *(() if retain_signer_public else (artifacts["signer_public"],)),
+        *artifacts["receipts"],
+        artifacts["builder_request"],
+        artifacts["builder"],
+    ):
+        _remove_regular_artifact(_state_path(state_directory, relative))
+    fixture_directory = _state_path(state_directory, artifacts["fixture_directory"])
+    try:
+        info = fixture_directory.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise ProvisioningError("synthetic fixture could not be inspected") from error
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise ProvisioningError("synthetic fixture is not authoritative")
+    try:
+        shutil.rmtree(fixture_directory)
+        _fsync_directory(state_directory)
+    except OSError as error:
+        raise ProvisioningError("synthetic fixture could not be removed") from error
+
+
+def _verify_retained_signer_public(
+    state_directory: Path, state: dict[str, Any]
+) -> None:
+    public = _read_regular(
+        _state_path(state_directory, state["artifacts"]["signer_public"]),
+        maximum=MAX_SIGNER_PUBLIC_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    fingerprint, public_key_sha256 = _parse_public_key(public)
+    if state["bindings"]["fixture"]["document"]["signer"] != {
+        "fingerprint": fingerprint,
+        "public_key_sha256": public_key_sha256,
+    }:
+        raise ProvisioningError("retained signer public key binding is invalid")
+
+
+def _record_terminal_failure(
+    state_directory: Path, state: dict[str, Any], prior_phase: str
+) -> None:
+    state["phase"] = prior_phase
+    state["outcome"] = "local-cleanup-incomplete"
+    try:
+        _atomic_state_write(state_directory, state)
+    except (OSError, ProvisioningError):
+        pass
+
+
+def _terminal_final_absent(path: Path) -> None:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise ProvisioningError(
+            "terminal commit-record absence could not be verified"
+        ) from error
+    raise ProvisioningError("terminal commit record already exists")
+
+
+def _commit_terminal(
+    state_directory: Path,
+    state: dict[str, Any],
+    marker_name: str,
+    marker: dict[str, Any],
+    outcome: str,
+    prior_phase: str,
+) -> None:
+    marker_bytes = _canonical_json(marker)
+    marker_reference = {
+        "relative_path": marker_name,
+        "sha256": _sha256(marker_bytes),
+    }
+    bindings = _qualified_bindings(state, include_path=False)
+    commit_record = {
+        "bindings": bindings,
+        "marker": marker_reference,
+        "outcome": outcome,
+        "schema": TERMINAL_COMMIT_SCHEMA,
+    }
+    commit_bytes = _canonical_json(commit_record)
+    terminal_plan = {
+        "bindings": bindings,
+        "commit_record": {
+            "final_name": "terminal-commit.json",
+            "sha256": _sha256(commit_bytes),
+        },
+        "marker": marker_reference,
+        "outcome": outcome,
+    }
+    if (
+        len(marker_bytes) > MAX_TERMINAL_BYTES
+        or len(commit_bytes) > MAX_TERMINAL_BYTES
+    ):
+        _record_terminal_failure(state_directory, state, prior_phase)
+        raise TerminalCommitFailure("terminal disposition exceeds its bound")
+
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        _record_terminal_failure(state_directory, state, prior_phase)
+        raise TerminalCommitFailure("safe terminal publication is unavailable")
+    _check_signal()
+    try:
+        saved_mask = pthread_sigmask(signal.SIG_BLOCK, _TERMINATION_SIGNALS)
+    except OSError as error:
+        _record_terminal_failure(state_directory, state, prior_phase)
+        raise TerminalCommitFailure(
+            "terminal signal mask could not be established"
+        ) from error
+
+    marker_path = state_directory / marker_name
+    prepared_path = state_directory / ".terminal-commit.prepared"
+    final_path = state_directory / "terminal-commit.json"
+    try:
+        if _caught_signal:
+            raise ProvisioningInterrupted(_caught_signal)
+        state["phase"] = outcome
+        state["outcome"] = outcome
+        state["terminal_plan"] = terminal_plan
+        _atomic_state_write(state_directory, state)
+        _exclusive_write(marker_path, marker_bytes)
+        _exclusive_write(prepared_path, commit_bytes)
+        _terminal_final_absent(final_path)
+        os.replace(prepared_path, final_path)
+        return
+    except ProvisioningInterrupted:
+        try:
+            pthread_sigmask(signal.SIG_SETMASK, saved_mask)
+        except OSError as error:
+            _record_terminal_failure(state_directory, state, prior_phase)
+            raise TerminalCommitFailure(
+                "terminal signal mask could not be restored"
+            ) from error
+        _record_terminal_failure(state_directory, state, prior_phase)
+        raise
+    except (OSError, ProvisioningError) as error:
+        try:
+            pthread_sigmask(signal.SIG_SETMASK, saved_mask)
+        except OSError as mask_error:
+            _record_terminal_failure(state_directory, state, prior_phase)
+            raise TerminalCommitFailure(
+                "terminal signal mask could not be restored"
+            ) from mask_error
+        _record_terminal_failure(state_directory, state, prior_phase)
+        raise TerminalCommitFailure(
+            "terminal disposition could not be committed"
+        ) from error
+    # Rename is the commit point. Catchable termination remains blocked through
+    # the final fixed status bytes, and no filesystem operation follows it.
+
+
+def _finish_qualification(state_directory: Path, state: dict[str, Any]) -> None:
+    if (
+        state["resources"]["agent"]["state"] != "removed"
+        or state["resources"]["item"]["state"] != "removed"
+    ):
+        raise ProvisioningError("qualified cleanup did not remove remote resources")
+    if not all(state["checks"].values()):
+        raise ProvisioningError("qualified cleanup checks are incomplete")
+    _remove_local_sensitive_artifacts(state_directory, state)
+    prior_phase = state["phase"]
+    evidence = {
+        "authority": {
+            "publication_permitted": False,
+            "real_transition_authority": False,
+        },
+        "bindings": _qualified_bindings(state, include_path=False),
+        "checks": state["checks"],
+        "outcome": "qualified-clean",
+        "production_eligible": state["request"]["qualification"]
+        == "live-disposable-provider",
+        "qualification": state["request"]["qualification"],
+        "remote_resources": {"agent": "removed", "item": "removed"},
+        "schema": QUALIFIED_CLEAN_SCHEMA,
+    }
+    _commit_terminal(
+        state_directory,
+        state,
+        "qualified-clean.json",
+        evidence,
+        "qualified-clean",
+        prior_phase,
+    )
+
+
+def _finish_production(state_directory: Path, state: dict[str, Any]) -> None:
+    if any(
+        state["resources"][name]["state"] != "present"
+        for name in ("agent", "item", "session")
+    ):
+        raise ProvisioningError("production resources are not positively retained")
+    for name in (
+        "item_listing",
+        "primary_readback",
+        "agent_listing",
+        "recovery_readback",
+        "audit",
+    ):
+        if state["checks"][name] is not True:
+            raise ProvisioningError("production verification checks are incomplete")
+    _remove_local_sensitive_artifacts(
+        state_directory, state, retain_signer_public=True
+    )
+    _verify_retained_signer_public(state_directory, state)
+    prior_phase = state["phase"]
+    evidence = {
+        "authority": {
+            "github_mutation_permitted": False,
+            "real_transition_authority": False,
+            "recovery_requires_separate_authorization": True,
+        },
+        "bindings": _qualified_bindings(state, include_path=False),
+        "checks": state["checks"],
+        "outcome": "ready-for-recovery",
+        "private_state": "state.json",
+        "schema": READY_FOR_RECOVERY_SCHEMA,
+    }
+    _commit_terminal(
+        state_directory,
+        state,
+        "ready-for-recovery.json",
+        evidence,
+        "ready-for-recovery",
+        prior_phase,
+    )
+
+
+def _rollback(
+    state_directory: Path, state: dict[str, Any], fixture_directory: Path | None
+) -> bool:
+    if state["pending_request"] is not None or any(
+        resource["state"] in {"requesting", "removing", "unknown"}
+        for resource in state["resources"].values()
+    ):
+        return False
+    if fixture_directory is not None:
+        if state["resources"]["agent"]["state"] == "present":
+            _delete_agent(state_directory, state, fixture_directory)
+        if state["resources"]["item"]["state"] == "present":
+            _delete_item(state_directory, state, fixture_directory)
+        if (
+            state["resources"]["session"]["state"] == "present"
+            and state["resources"]["agent"]["state"] == "removed"
+            and state["resources"]["item"]["state"] == "removed"
+        ):
+            _logout(state_directory, state, fixture_directory)
+    _remove_local_sensitive_artifacts(state_directory, state)
+    state["outcome"] = "rolled-back"
+    _atomic_state_write(state_directory, state)
+    return True
+
+
+def _execute_workflow(
+    state_directory: Path,
+    state: dict[str, Any],
+    sources: dict[str, bytes],
+    manifest_entries: list[dict[str, str]],
+    manifest_sha256: str,
+) -> str:
+    if state["mode"] == "production":
+        binding = state["request"]["qualified_clean"]
+        if not isinstance(binding, dict):
+            raise ProvisioningError("production qualification binding is unavailable")
+        _validate_prior_qualified_clean(binding, state)
+
+    fingerprint, public_key_sha256 = _generate_signer(state_directory, state)
+    fixture_directory = _build_fixture(state_directory, state, sources)
+    fixture, fixture_bytes = _validate_fixture(
+        fixture_directory,
+        manifest_entries=manifest_entries,
+        manifest_sha256=manifest_sha256,
+        source_commit=state["request"]["reviewed_source"]["commit"],
+        public_key_sha256=public_key_sha256,
+        expected_fingerprint=fingerprint,
+    )
+    state["bindings"]["fixture"] = {
+        "document": fixture,
+        "sha256": _sha256(fixture_bytes),
+    }
+    state["phase"] = "fixture-ready"
+    _atomic_state_write(state_directory, state)
+
+    request = state["request"]
+    tools = fixture_directory / "tools"
+    owner_session = Path(request["sessions"]["owner"])
+    version = _run_provider_read(
+        state,
+        ["pass-cli", "--version"],
+        session=owner_session,
+        tools_directory=tools,
+        timeout=TOOL_OBSERVATION_TIMEOUT_SECONDS,
+    )
+    if not _acknowledged(version) or version.stdout != request["pass_cli"][
+        "version_stdout"
+    ].encode("ascii"):
+        raise ProvisioningError("pass-cli version observation did not match")
+    state["bindings"]["owner_id"] = _check_info(
+        state,
+        session=owner_session,
+        tools_directory=tools,
+        expected_agent=None,
+    )
+    primary_session, primary_agent, primary_reader_name = _primary_reader(request)
+    _vault_share_for_session(
+        state,
+        session=owner_session,
+        fixture_directory=fixture_directory,
+        expected_share_id=request["provider"]["share_id"],
+    )
+    if primary_session != owner_session:
+        _check_info(
+            state,
+            session=primary_session,
+            tools_directory=tools,
+            expected_agent=primary_agent,
+            expected_reader_name=primary_reader_name,
+        )
+        _vault_share_for_session(
+            state,
+            session=primary_session,
+            fixture_directory=fixture_directory,
+            expected_share_id=request["provider"]["primary_share_id"],
+        )
+
+    _write_item_template(state_directory, state)
+    item_id = _mutation(
+        state_directory,
+        state,
+        kind="item-create",
+        resource="item",
+        command=[
+            "pass-cli",
+            "item",
+            "create",
+            "custom",
+            "--from-template",
+            os.fspath(
+                _state_path(state_directory, state["artifacts"]["item_template"])
+            ),
+            f"--share-id={request['provider']['share_id']}",
+        ],
+        session=owner_session,
+        tools_directory=tools,
+        targets={
+            "share_id": request["provider"]["share_id"],
+            "title": request["provider"]["item_title"],
+        },
+        postcondition="one immutable active custom item with retained ID",
+        success_state="present",
+        expected_output=_parse_item_id,
+    )
+    if not isinstance(item_id, str):
+        raise ProvisioningError("item creation did not retain an ID")
+    state["phase"] = "item-present"
+    _confirm_item_listing(state, fixture_directory=fixture_directory)
+    _atomic_state_write(state_directory, state)
+
+    _perform_readback(
+        state_directory,
+        state,
+        fixture_directory=fixture_directory,
+        session=primary_session,
+        expected_agent=primary_agent,
+        expected_reader_name=primary_reader_name,
+        receipt_label="primary",
+        share_id=request["provider"]["primary_share_id"],
+    )
+    state["checks"]["primary_readback"] = True
+    state["phase"] = "primary-readback-verified"
+    _atomic_state_write(state_directory, state)
+
+    agent_name = request["provider"]["recovery_agent_name"]
+    request_started = int(time.time())
+    login_credential = _mutation(
+        state_directory,
+        state,
+        kind="agent-create",
+        resource="agent",
+        command=[
+            "pass-cli",
+            "agent",
+            "create",
+            agent_name,
+            "--expiration",
+            request["provider"]["expiration"],
+            "--vault",
+            request["provider"]["vault_name"],
+        ],
+        session=owner_session,
+        tools_directory=tools,
+        targets={
+            "expiration": request["provider"]["expiration"],
+            "name": agent_name,
+            "vault_name": request["provider"]["vault_name"],
+        },
+        postcondition="one Viewer agent with retained token and exact name",
+        success_state="present",
+        expected_output=_parse_agent_token,
+    )
+    request_finished = int(time.time())
+    if not isinstance(login_credential, str):
+        raise ProvisioningError("agent creation did not retain a token")
+    _confirm_agent_listing(
+        state_directory,
+        state,
+        fixture_directory=fixture_directory,
+        request_started=request_started,
+        request_finished=request_finished,
+    )
+    state["phase"] = "agent-present"
+    _atomic_state_write(state_directory, state)
+
+    token_path = _state_path(state_directory, state["artifacts"]["agent_token"])
+    token_data = _read_regular(
+        token_path,
+        maximum=MAX_TOKEN_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    if token_data != (login_credential + "\n").encode("utf-8"):
+        raise ProvisioningError("private agent token binding changed")
+    recovery_session = _state_path(
+        state_directory, state["resources"]["session"]["directory"]
+    )
+    _mutation(
+        state_directory,
+        state,
+        kind="agent-login",
+        resource="session",
+        command=["pass-cli", "login"],
+        session=recovery_session,
+        tools_directory=tools,
+        targets={
+            "agent_name": agent_name,
+            "directory": state["resources"]["session"]["directory"],
+        },
+        postcondition="exact recovery agent existing session",
+        success_state="present",
+        expected_output=_expected_exact(
+            b"Personal access token session created successfully\n"
+            + f"Successfully logged in as personal access token: {agent_name}\n".encode()
+        ),
+        login_credential=login_credential,
+    )
+    _check_info(
+        state,
+        session=recovery_session,
+        tools_directory=tools,
+        expected_agent=agent_name,
+    )
+    state["bindings"]["recovery_share_id"] = _vault_share_for_session(
+        state,
+        session=recovery_session,
+        fixture_directory=fixture_directory,
+        expected_share_id=None,
+    )
+    state["phase"] = "session-existing"
+    _atomic_state_write(state_directory, state)
+
+    _perform_readback(
+        state_directory,
+        state,
+        fixture_directory=fixture_directory,
+        session=recovery_session,
+        expected_agent=agent_name,
+        receipt_label="recovery",
+        share_id=state["bindings"]["recovery_share_id"],
+    )
+    state["checks"]["recovery_readback"] = True
+    _confirm_monitor(state, fixture_directory=fixture_directory)
+    state["phase"] = "recovery-readback-verified"
+    _atomic_state_write(state_directory, state)
+
+    if state["mode"] == "production":
+        _finish_production(state_directory, state)
+        return "ready-for-recovery"
+
+    _delete_agent(state_directory, state, fixture_directory)
+    _confirm_revoked_probe(state_directory, state, fixture_directory)
+    _perform_readback(
+        state_directory,
+        state,
+        fixture_directory=fixture_directory,
+        session=primary_session,
+        expected_agent=primary_agent,
+        expected_reader_name=primary_reader_name,
+        receipt_label="primary-after-revocation",
+        share_id=request["provider"]["primary_share_id"],
+    )
+    state["checks"]["primary_after_revocation"] = True
+    _atomic_state_write(state_directory, state)
+    _delete_item(state_directory, state, fixture_directory)
+    _logout(state_directory, state, fixture_directory)
+    _finish_qualification(state_directory, state)
+    return "qualified-clean"
+
+
+def _start(arguments: argparse.Namespace) -> str:
+    state_directory = _absolute_path(os.fspath(arguments.state_directory))
+    request_document, _request_bytes = _read_request(arguments.request)
+    request = _validate_request(request_document, state_directory)
+    try:
+        state_directory.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise ProvisioningError("state directory cannot be inspected") from error
+    else:
+        raise ProvisioningError("state directory already exists")
+
+    manifest_path = Path(request["reviewed_source"]["manifest"]["path"])
+    manifest_data = _read_regular(
+        manifest_path,
+        maximum=MAX_MANIFEST_BYTES,
+        required_mode=0o600,
+        require_private_parent=True,
+    )
+    if _sha256(manifest_data) != request["reviewed_source"]["manifest"]["sha256"]:
+        raise ProvisioningError("reviewed source manifest digest does not match")
+    manifest = _parse_canonical_json(manifest_data)
+    entries = _validate_manifest(manifest, commit=request["reviewed_source"]["commit"])
+    try:
+        sources = _read_reviewed_sources(
+            Path(request["reviewed_source"]["repository"]),
+            request["reviewed_source"]["commit"],
+            entries,
+        )
+    except UnverifiedChildRetirement:
+        # No state directory exists yet, so there is nothing to record.
+        raise ProvisioningStop(21)
+    pass_cli_path, pass_cli_sha256 = _resolve_executable("pass-cli")
+    if pass_cli_sha256 != request["pass_cli"]["build_sha256"]:
+        raise ProvisioningError("pass-cli build digest does not match")
+    ssh_keygen_path, ssh_keygen_sha256 = _resolve_executable("ssh-keygen")
+
+    _check_signal()
+    _mkdir(state_directory)
+    for relative in ("private", "captures", "private/recovery-session"):
+        _mkdir(_state_path(state_directory, relative))
+    state = _new_state(
+        request,
+        entries=entries,
+        manifest_sha256=_sha256(manifest_data),
+        pass_cli_path=pass_cli_path,
+        ssh_keygen_path=ssh_keygen_path,
+        ssh_keygen_sha256=ssh_keygen_sha256,
+    )
+    _atomic_state_write(state_directory, state)
+    if _caught_signal:
+        state["outcome"] = "rolled-back"
+        _atomic_state_write(state_directory, state)
+        raise ProvisioningInterrupted(_caught_signal)
+    fixture_directory: Path | None = None
+    try:
+        outcome = _execute_workflow(
+            state_directory,
+            state,
+            sources,
+            entries,
+            _sha256(manifest_data),
+        )
+        return outcome
+    except ProvisioningInterrupted:
+        if state["outcome"] == "running":
+            state["outcome"] = "local-cleanup-incomplete"
+            _atomic_state_write(state_directory, state)
+        raise
+    except ProvisioningStop:
+        raise
+    except TerminalCommitFailure:
+        raise
+    except UnverifiedChildRetirement:
+        state["outcome"] = "local-cleanup-incomplete"
+        _atomic_state_write(state_directory, state)
+        raise ProvisioningStop(21)
+    except ProvisioningError as error:
+        fixture_relative = state["artifacts"]["fixture_directory"]
+        fixture_directory = _state_path(state_directory, fixture_relative)
+        if isinstance(error, PreSpawnFailure) and _caught_signal:
+            state["outcome"] = "local-cleanup-incomplete"
+            _atomic_state_write(state_directory, state)
+            raise ProvisioningInterrupted(_caught_signal)
+        if isinstance(error, PreSpawnFailure) and error.kind in {
+            "agent-delete",
+            "item-delete",
+            "local-logout",
+        }:
+            state["outcome"] = "remote-cleanup-incomplete"
+            _atomic_state_write(state_directory, state)
+            raise
+        try:
+            classified = _rollback(
+                state_directory,
+                state,
+                fixture_directory if fixture_directory.exists() else None,
+            )
+        except ProvisioningStop:
+            raise
+        except ProvisioningInterrupted:
+            # An acknowledged rollback delete or logout already persisted its
+            # resource; classify what remains and take no further step.
+            if state["outcome"] == "running":
+                state["outcome"] = (
+                    "remote-cleanup-incomplete"
+                    if any(
+                        resource["state"] not in {"absent", "removed"}
+                        for resource in state["resources"].values()
+                    )
+                    else "local-cleanup-incomplete"
+                )
+                _atomic_state_write(state_directory, state)
+            raise
+        except ProvisioningError as rollback_error:
+            if isinstance(rollback_error, PreSpawnFailure) and rollback_error.kind in {
+                "agent-delete",
+                "item-delete",
+                "local-logout",
+            }:
+                state["outcome"] = "remote-cleanup-incomplete"
+            elif state["outcome"] == "running":
+                state["outcome"] = "local-cleanup-incomplete"
+            classified = state["outcome"] in {
+                "local-cleanup-incomplete",
+                "remote-cleanup-incomplete",
+            }
+            if classified:
+                _atomic_state_write(state_directory, state)
+        if classified and _caught_signal:
+            raise ProvisioningInterrupted(_caught_signal)
+        raise
+
+
+def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None:
+    _exact_keys(
+        state,
+        {
+            "artifacts",
+            "bindings",
+            "checks",
+            "mode",
+            "outcome",
+            "pending_request",
+            "phase",
+            "request",
+            "request_sequence",
+            "resources",
+            "schema",
+            "terminal_plan",
+        },
+        "provisioning state",
+    )
+    if (
+        state["schema"] != STATE_SCHEMA
+        or state["mode"] not in {"qualification", "production"}
+        or state["phase"]
+        not in {
+            "validated",
+            "fixture-ready",
+            "item-present",
+            "primary-readback-verified",
+            "agent-present",
+            "session-existing",
+            "recovery-readback-verified",
+            "qualified-clean",
+            "ready-for-recovery",
+        }
+        or state["outcome"]
+        not in {
+            "running",
+            "reconciliation-required",
+            "qualified-clean",
+            "ready-for-recovery",
+            "rolled-back",
+            "remote-cleanup-incomplete",
+            "local-cleanup-incomplete",
+        }
+    ):
+        raise ProvisioningError("provisioning state identity is invalid")
+    terminal_plan = state["terminal_plan"]
+    if terminal_plan is None:
+        if state["phase"] in {"qualified-clean", "ready-for-recovery"} or state[
+            "outcome"
+        ] in {"qualified-clean", "ready-for-recovery"}:
+            raise ProvisioningError("terminal state has no disposition plan")
+    else:
+        normalized_plan = _validate_terminal_plan(
+            terminal_plan, "persisted terminal plan"
+        )
+        if normalized_plan != terminal_plan or (
+            state["outcome"] == normalized_plan["outcome"]
+            and state["phase"] != normalized_plan["outcome"]
+        ) or state["outcome"] not in {
+            normalized_plan["outcome"],
+            "local-cleanup-incomplete",
+        }:
+            raise ProvisioningError("persisted terminal plan is invalid")
+
+    normalized_request = _validate_request(state["request"], state_directory)
+    if (
+        normalized_request != state["request"]
+        or state["mode"] != normalized_request["mode"]
+    ):
+        raise ProvisioningError("persisted provisioning request is invalid")
+
+    artifacts = _exact_keys(
+        state["artifacts"],
+        {
+            "agent_token",
+            "builder",
+            "builder_request",
+            "fixture_directory",
+            "item_template",
+            "receipts",
+            "signer_private",
+            "signer_public",
+        },
+        "state artifacts",
+    )
+    fixed_artifacts = {
+        "agent_token": "private/agent-token",
+        "builder": "private/build-age-admission-provider-fixture",
+        "builder_request": "private/fixture-request.json",
+        "fixture_directory": "fixture",
+        "item_template": "private/item-template.json",
+        "signer_private": "private/admission-ed25519",
+        "signer_public": "private/admission-ed25519.pub",
+    }
+    if any(artifacts[name] != value for name, value in fixed_artifacts.items()):
+        raise ProvisioningError("state artifact binding is invalid")
+    receipt_order = [
+        "private/primary.receipt",
+        "private/recovery.receipt",
+        "private/primary-after-revocation.receipt",
+    ]
+    if (
+        not isinstance(artifacts["receipts"], list)
+        or artifacts["receipts"] != receipt_order[: len(artifacts["receipts"])]
+    ):
+        raise ProvisioningError("state receipt inventory is invalid")
+
+    checks = _exact_keys(
+        state["checks"],
+        {
+            "agent_listing",
+            "audit",
+            "item_listing",
+            "primary_after_revocation",
+            "primary_readback",
+            "recovery_readback",
+            "revoked_probe_failed",
+        },
+        "state checks",
+    )
+    if any(type(value) is not bool for value in checks.values()):
+        raise ProvisioningError("state check value is invalid")
+
+    bindings = _exact_keys(
+        state["bindings"],
+        {
+            "fixture",
+            "owner_id",
+            "recovery_share_id",
+            "pass_cli",
+            "platform",
+            "provider_schema",
+            "reviewed_source",
+            "ssh_keygen",
+        },
+        "state bindings",
+    )
+    if bindings["platform"] != _platform_name():
+        raise ProvisioningError("state platform binding is invalid")
+    # Every provider request is armed after the owner ID is captured.
+    _owner_id(bindings["owner_id"], "state owner ID")
+    recovery_share_id = bindings["recovery_share_id"]
+    if recovery_share_id is not None and (
+        not isinstance(recovery_share_id, str)
+        or IDENTIFIER.fullmatch(recovery_share_id) is None
+    ):
+        raise ProvisioningError("state recovery share ID is invalid")
+    pass_cli = _exact_keys(
+        bindings["pass_cli"],
+        {"build_sha256", "observed_path", "version_stdout"},
+        "state pass-cli binding",
+    )
+    if (
+        _digest(pass_cli["build_sha256"], "state pass-cli digest")
+        != normalized_request["pass_cli"]["build_sha256"]
+        or os.fspath(_absolute_path(pass_cli["observed_path"]))
+        != pass_cli["observed_path"]
+        or pass_cli["version_stdout"]
+        != normalized_request["pass_cli"]["version_stdout"]
+    ):
+        raise ProvisioningError("state pass-cli binding is invalid")
+    ssh_keygen = _exact_keys(
+        bindings["ssh_keygen"],
+        {"observed_path", "sha256"},
+        "state ssh-keygen binding",
+    )
+    _absolute_path(ssh_keygen["observed_path"])
+    _digest(ssh_keygen["sha256"], "state ssh-keygen digest")
+    if bindings["provider_schema"] != normalized_request["provider_schema"]:
+        raise ProvisioningError("state provider schema binding is invalid")
+
+    reviewed = _exact_keys(
+        bindings["reviewed_source"],
+        {"commit", "entries", "manifest_sha256"},
+        "state reviewed source binding",
+    )
+    if reviewed["commit"] != normalized_request["reviewed_source"]["commit"]:
+        raise ProvisioningError("state reviewed source commit is invalid")
+    entries = _validate_manifest(
+        {
+            "commit": reviewed["commit"],
+            "entries": reviewed["entries"],
+            "schema": MANIFEST_SCHEMA,
+        },
+        commit=reviewed["commit"],
+    )
+    if entries != reviewed["entries"]:
+        raise ProvisioningError("state reviewed source entries are invalid")
+    manifest_path = Path(normalized_request["reviewed_source"]["manifest"]["path"])
+    manifest_data = _read_regular(
+        manifest_path,
+        maximum=MAX_MANIFEST_BYTES,
+        required_mode=0o600,
+        require_private_parent=True,
+    )
+    manifest_sha256 = _sha256(manifest_data)
+    if (
+        _digest(reviewed["manifest_sha256"], "state manifest digest") != manifest_sha256
+        or manifest_sha256
+        != normalized_request["reviewed_source"]["manifest"]["sha256"]
+        or _validate_manifest(
+            _parse_canonical_json(manifest_data), commit=reviewed["commit"]
+        )
+        != entries
+    ):
+        raise ProvisioningError("state reviewed source manifest is invalid")
+    _read_reviewed_sources(
+        Path(normalized_request["reviewed_source"]["repository"]),
+        reviewed["commit"],
+        entries,
+    )
+
+    fixture_binding = _exact_keys(
+        bindings["fixture"], {"document", "sha256"}, "state fixture binding"
+    )
+    fixture_digest = _digest(fixture_binding["sha256"], "state fixture digest")
+    fixture_document = fixture_binding["document"]
+    if not isinstance(fixture_document, dict):
+        raise ProvisioningError("state fixture document is invalid")
+    signer = _exact_keys(
+        fixture_document.get("signer"),
+        {"fingerprint", "public_key_sha256"},
+        "state fixture signer",
+    )
+    if (
+        not isinstance(signer["fingerprint"], str)
+        or FINGERPRINT.fullmatch(signer["fingerprint"]) is None
+    ):
+        raise ProvisioningError("state fixture signer is invalid")
+    public_key_sha256 = _digest(
+        signer["public_key_sha256"], "state fixture public key digest"
+    )
+    fixture_directory = _state_path(state_directory, artifacts["fixture_directory"])
+    normalized_fixture, fixture_bytes = _validate_fixture(
+        fixture_directory,
+        manifest_entries=entries,
+        manifest_sha256=manifest_sha256,
+        source_commit=reviewed["commit"],
+        public_key_sha256=public_key_sha256,
+        expected_fingerprint=signer["fingerprint"],
+    )
+    if (
+        normalized_fixture != fixture_document
+        or _sha256(fixture_bytes) != fixture_digest
+        or _sha256(_canonical_json(fixture_document)) != fixture_digest
+    ):
+        raise ProvisioningError("state fixture binding is invalid")
+
+    if (
+        type(state["request_sequence"]) is not int
+        or not 1 <= state["request_sequence"] <= 9999
+    ):
+        raise ProvisioningError("provisioning request sequence is invalid")
+    resources = _exact_keys(
+        state["resources"], {"agent", "item", "session"}, "resource state"
+    )
+    if set(resources["agent"]) != {"candidates", "name", "pat_id", "state"}:
+        raise ProvisioningError("agent state is invalid")
+    if set(resources["item"]) != {"candidates", "id", "state"}:
+        raise ProvisioningError("item state is invalid")
+    if set(resources["session"]) != {"directory", "state"}:
+        raise ProvisioningError("session state is invalid")
+    allowed_states = {
+        "absent",
+        "requesting",
+        "present",
+        "removing",
+        "removed",
+        "unknown",
+    }
+    if any(resource["state"] not in allowed_states for resource in resources.values()):
+        raise ProvisioningError("resource state is invalid")
+    agent = resources["agent"]
+    item = resources["item"]
+    session = resources["session"]
+    if (
+        agent["name"] != normalized_request["provider"]["recovery_agent_name"]
+        or agent["pat_id"] is not None
+        and (
+            not isinstance(agent["pat_id"], str)
+            or IDENTIFIER.fullmatch(agent["pat_id"]) is None
+        )
+        or not isinstance(agent["candidates"], list)
+        or len(agent["candidates"]) > 10_000
+    ):
+        raise ProvisioningError("agent state is invalid")
+    for candidate in agent["candidates"]:
+        _valid_agent_record(candidate)
+    if (
+        item["id"] is not None
+        and (
+            not isinstance(item["id"], str) or IDENTIFIER.fullmatch(item["id"]) is None
+        )
+        or not isinstance(item["candidates"], list)
+        or len(item["candidates"]) > 10_000
+    ):
+        raise ProvisioningError("item state is invalid")
+    for candidate in item["candidates"]:
+        record = _exact_keys(
+            candidate,
+            {"id", "item_type", "share_id", "state", "title"},
+            "item candidate",
+        )
+        if (
+            not isinstance(record["id"], str)
+            or IDENTIFIER.fullmatch(record["id"]) is None
+            or not isinstance(record["share_id"], str)
+            or IDENTIFIER.fullmatch(record["share_id"]) is None
+            or not all(
+                isinstance(record[name], str)
+                for name in ("item_type", "state", "title")
+            )
+        ):
+            raise ProvisioningError("item candidate is invalid")
+    if session != {
+        "directory": "private/recovery-session",
+        "state": session["state"],
+    }:
+        raise ProvisioningError("session state is invalid")
+    pending = state["pending_request"]
+    if pending is None:
+        raise ProvisioningError("no provider request requires resumption")
+    _exact_keys(
+        pending,
+        {
+            "captures",
+            "command",
+            "kind",
+            "postcondition",
+            "prior_state",
+            "resource",
+            "sequence",
+            "targets",
+        },
+        "pending provider request",
+    )
+    if (
+        pending["kind"]
+        not in {
+            "item-create",
+            "agent-create",
+            "agent-login",
+            "agent-delete",
+            "item-delete",
+            "local-logout",
+        }
+        or pending["resource"] not in resources
+    ):
+        raise ProvisioningError("pending provider request identity is invalid")
+    resource_for_kind = {
+        "item-create": "item",
+        "agent-create": "agent",
+        "agent-login": "session",
+        "agent-delete": "agent",
+        "item-delete": "item",
+        "local-logout": "session",
+    }
+    if pending["resource"] != resource_for_kind[pending["kind"]]:
+        raise ProvisioningError("pending provider request resource is invalid")
+    if type(pending["sequence"]) is not int or not 1 <= pending["sequence"] <= 9999:
+        raise ProvisioningError("pending request sequence is invalid")
+    captures = _exact_keys(
+        pending["captures"], {"stderr", "stdout"}, "pending captures"
+    )
+    for channel in ("stderr", "stdout"):
+        expected = f"captures/{pending['sequence']:04d}.{channel}"
+        if captures[channel] != expected:
+            raise ProvisioningError("pending capture path is invalid")
+        _read_regular(
+            _state_path(state_directory, captures[channel]),
+            maximum=MAX_CHILD_CAPTURE_BYTES,
+            required_mode=0o600,
+            require_private_parent=False,
+        )
+    if pending["sequence"] != state["request_sequence"]:
+        raise ProvisioningError("pending request sequence is invalid")
+    kind = pending["kind"]
+    if kind == "agent-delete" and agent["pat_id"] is None:
+        raise ProvisioningError("pending agent deletion has no retained PAT ID")
+    prior_for_kind = {
+        "item-create": "absent",
+        "agent-create": "absent",
+        "agent-login": "absent",
+        "agent-delete": "present",
+        "item-delete": "present",
+        "local-logout": "present",
+    }
+    postcondition_for_kind = {
+        "item-create": "one immutable active custom item with retained ID",
+        "agent-create": "one Viewer agent with retained token and exact name",
+        "agent-login": "exact recovery agent existing session",
+        "agent-delete": "exact retained agent PAT removed",
+        "item-delete": "exact retained item removed",
+        "local-logout": "local recovery session logged out after remote cleanup",
+    }
+    if (
+        pending["prior_state"] != prior_for_kind[kind]
+        or pending["postcondition"] != postcondition_for_kind[kind]
+        or resources[pending["resource"]]["state"]
+        not in {
+            "unknown",
+            "removing"
+            if kind in {"agent-delete", "item-delete", "local-logout"}
+            else "requesting",
+        }
+    ):
+        raise ProvisioningError("pending provider request transition is invalid")
+
+    request = normalized_request
+    command_for_kind = {
+        "item-create": [
+            "pass-cli",
+            "item",
+            "create",
+            "custom",
+            "--from-template",
+            os.fspath(_state_path(state_directory, artifacts["item_template"])),
+            f"--share-id={request['provider']['share_id']}",
+        ],
+        "agent-create": [
+            "pass-cli",
+            "agent",
+            "create",
+            request["provider"]["recovery_agent_name"],
+            "--expiration",
+            request["provider"]["expiration"],
+            "--vault",
+            request["provider"]["vault_name"],
+        ],
+        "agent-login": ["pass-cli", "login"],
+        "agent-delete": [
+            "pass-cli",
+            "pat",
+            "delete",
+            f"--pat-id={agent['pat_id']}",
+        ],
+        "item-delete": [
+            "pass-cli",
+            "item",
+            "delete",
+            f"--share-id={request['provider']['share_id']}",
+            f"--item-id={item['id']}",
+        ],
+        "local-logout": ["pass-cli", "logout", "--force"],
+    }
+    if pending["command"] != command_for_kind[kind]:
+        raise ProvisioningError("pending provider command is invalid")
+    expected_targets = {
+        "item-create": {
+            "share_id": request["provider"]["share_id"],
+            "title": request["provider"]["item_title"],
+        },
+        "agent-create": {
+            "expiration": request["provider"]["expiration"],
+            "name": request["provider"]["recovery_agent_name"],
+            "vault_name": request["provider"]["vault_name"],
+        },
+        "agent-login": {
+            "agent_name": request["provider"]["recovery_agent_name"],
+            "directory": session["directory"],
+        },
+        "agent-delete": {
+            "name": request["provider"]["recovery_agent_name"],
+            "pat_id": agent["pat_id"],
+        },
+        "item-delete": {
+            "id": item["id"],
+            "share_id": request["provider"]["share_id"],
+        },
+        "local-logout": {"directory": session["directory"]},
+    }[kind]
+    targets = pending["targets"]
+    if not isinstance(targets, dict):
+        raise ProvisioningError("pending provider targets are invalid")
+    without_observation = {
+        name: value for name, value in targets.items() if name != "observed_result"
+    }
+    if without_observation != expected_targets:
+        raise ProvisioningError("pending provider targets are invalid")
+    if "observed_result" in targets:
+        observation = _exact_keys(
+            targets["observed_result"],
+            {"outcome", "signal", "status"},
+            "pending provider result",
+        )
+        if (
+            observation["outcome"]
+            not in {
+                "capture-overflow",
+                "exited",
+                "interrupted",
+                "signaled",
+                "timeout",
+                "unreaped",
+                "unverified-retirement",
+            }
+            or observation["signal"] is not None
+            and type(observation["signal"]) is not int
+            or observation["status"] is not None
+            and type(observation["status"]) is not int
+        ):
+            raise ProvisioningError("pending provider result is invalid")
+
+
+def _resume_create_capture(
+    state_directory: Path, state: dict[str, Any], kind: str
+) -> bool:
+    pending = state["pending_request"]
+    stdout = _read_regular(
+        _state_path(state_directory, pending["captures"]["stdout"]),
+        maximum=MAX_CHILD_CAPTURE_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    stderr = _read_regular(
+        _state_path(state_directory, pending["captures"]["stderr"]),
+        maximum=MAX_CHILD_CAPTURE_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    if stderr:
+        return False
+    try:
+        if kind == "item-create":
+            item_id = _parse_item_id(stdout)
+            state["resources"]["item"]["id"] = item_id
+            resource = "item"
+        else:
+            token = _parse_agent_token(stdout)
+            token_path = _state_path(state_directory, state["artifacts"]["agent_token"])
+            if os.path.lexists(token_path):
+                existing = _read_regular(
+                    token_path,
+                    maximum=MAX_TOKEN_BYTES,
+                    required_mode=0o600,
+                    require_private_parent=False,
+                )
+                if existing != (token + "\n").encode("utf-8"):
+                    return False
+            else:
+                _exclusive_write(token_path, (token + "\n").encode("utf-8"))
+            resource = "agent"
+    except ProvisioningError:
+        return False
+    state["resources"][resource]["state"] = "present"
+    state["pending_request"] = None
+    state["outcome"] = "reconciliation-required"
+    _atomic_state_write(state_directory, state)
+    return True
+
+
+def _capture_can_settle_lost_status(state: dict[str, Any]) -> bool:
+    targets = state["pending_request"]["targets"]
+    if not isinstance(targets, dict):
+        return False
+    observation = targets.get("observed_result")
+    if observation is None:
+        return True
+    if not isinstance(observation, dict) or set(observation) != {
+        "outcome",
+        "signal",
+        "status",
+    }:
+        return False
+    return (
+        observation["outcome"]
+        in {
+            "capture-overflow",
+            "interrupted",
+            "signaled",
+            "timeout",
+            "unreaped",
+            "unverified-retirement",
+        }
+        and observation["status"] is None
+    )
+
+
+def _resume_item_observation(
+    state: dict[str, Any], fixture_directory: Path, kind: str
+) -> None:
+    records = _item_listing(state, fixture_directory=fixture_directory)
+    request = state["request"]
+    if kind == "item-create":
+        candidates = [
+            {
+                "id": record["id"],
+                "item_type": record["item_type"],
+                "share_id": record["share_id"],
+                "state": record["state"],
+                "title": record["title"],
+            }
+            for record in records
+            if record["share_id"] == request["provider"]["share_id"]
+            and record["vault_id"] == request["provider"]["vault_id"]
+            and record["title"] == request["provider"]["item_title"]
+            and record["state"] == "Active"
+            and record["item_type"] == "custom"
+        ]
+    else:
+        retained = state["resources"]["item"]["id"]
+        candidates = [
+            {
+                "id": record["id"],
+                "item_type": record["item_type"],
+                "share_id": record["share_id"],
+                "state": record["state"],
+                "title": record["title"],
+            }
+            for record in records
+            if record["id"] == retained
+            and record["share_id"] == request["provider"]["share_id"]
+            and record["vault_id"] == request["provider"]["vault_id"]
+        ]
+    state["resources"]["item"]["candidates"] = candidates
+
+
+def _resume_agent_observation(
+    state: dict[str, Any], fixture_directory: Path, kind: str
+) -> None:
+    records = _agent_listing(state, fixture_directory=fixture_directory)
+    name = state["resources"]["agent"]["name"]
+    if kind == "agent-create":
+        candidates = [record for record in records if record["name"] == name]
+    else:
+        retained = state["resources"]["agent"]["pat_id"]
+        candidates = [
+            record
+            for record in records
+            if record["name"] == name
+            and (retained is None or record["pat_id"] == retained)
+        ]
+    state["resources"]["agent"]["candidates"] = candidates
+
+
+def _resume(arguments: argparse.Namespace) -> str:
+    state_directory = _absolute_path(os.fspath(arguments.state_directory))
+    state = _read_state(state_directory)
+    try:
+        _validate_resume_state(state, state_directory)
+    except UnverifiedChildRetirement:
+        # Unvalidated state is left byte-identical, keeping its classification.
+        raise ProvisioningStop(21)
+    pending = state["pending_request"]
+    kind = pending["kind"]
+    resource = pending["resource"]
+    status = _ambiguous_status(kind)
+    if state["resources"][resource]["state"] in {"requesting", "removing"}:
+        _record_ambiguous(state_directory, state, resource=resource, status=status)
+    elif state["resources"][resource]["state"] != "unknown":
+        raise ProvisioningError("pending request resource is not ambiguous")
+    if (
+        kind in {"item-create", "agent-create"}
+        and _capture_can_settle_lost_status(state)
+        and _resume_create_capture(state_directory, state, kind)
+    ):
+        if _caught_signal:
+            raise ProvisioningInterrupted(_caught_signal)
+        raise ProvisioningStop(20)
+
+    fixture_directory = _state_path(
+        state_directory, state["artifacts"]["fixture_directory"]
+    )
+    try:
+        if kind in {"item-create", "item-delete"}:
+            _resume_item_observation(state, fixture_directory, kind)
+        elif kind in {"agent-create", "agent-delete"}:
+            _resume_agent_observation(state, fixture_directory, kind)
+        else:
+            session = _state_path(
+                state_directory, state["resources"]["session"]["directory"]
+            )
+            result = _run_provider_read(
+                state,
+                ["pass-cli", "info", "--output", "json"],
+                session=session,
+                tools_directory=fixture_directory / "tools",
+            )
+            if kind == "agent-login" and _acknowledged(result):
+                _closed_info(
+                    result.stdout,
+                    expected_agent=state["resources"]["agent"]["name"],
+                )
+                state["resources"]["session"]["state"] = "present"
+                state["pending_request"] = None
+                state["phase"] = "session-existing"
+    except ProvisioningInterrupted:
+        _atomic_state_write(state_directory, state)
+        raise
+    except UnverifiedChildRetirement:
+        state["outcome"] = "local-cleanup-incomplete"
+        _atomic_state_write(state_directory, state)
+        raise ProvisioningStop(21)
+    except ProvisioningError:
+        # A failed or malformed observation never settles an ambiguous write.
+        pass
+    state["outcome"] = (
+        "remote-cleanup-incomplete" if status == 21 else "reconciliation-required"
+    )
+    _atomic_state_write(state_directory, state)
+    if _caught_signal:
+        raise ProvisioningInterrupted(_caught_signal)
+    raise ProvisioningStop(status)
+
+
+class _ClosedArgumentParser(argparse.ArgumentParser):
+    def error(self, _message: str) -> None:
+        raise ProvisioningError("command arguments are invalid")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = _ClosedArgumentParser(add_help=True)
+    commands = parser.add_subparsers(dest="command", required=True)
+    start = commands.add_parser("start", add_help=True)
+    start.add_argument("--request", required=True, type=Path)
+    start.add_argument("--state-directory", required=True, type=Path)
+    resume = commands.add_parser("resume", add_help=True)
+    resume.add_argument("--state-directory", required=True, type=Path)
+    return parser
+
+
+def main() -> int:
+    try:
+        _install_signal_handlers()
+        arguments = _parser().parse_args()
+        outcome = (
+            _start(arguments) if arguments.command == "start" else _resume(arguments)
+        )
+    except ProvisioningInterrupted as interrupted:
+        print(_INTERRUPTED, file=sys.stderr)
+        return 128 + interrupted.signum
+    except ProvisioningStop as stopped:
+        if stopped.status == 20:
+            print(_RECONCILIATION, file=sys.stderr)
+        elif stopped.status == 21:
+            print(_CLEANUP_INCOMPLETE, file=sys.stderr)
+        else:
+            print(_FAILURE, file=sys.stderr)
+            return 1
+        return stopped.status
+    except (
+        ProvisioningError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        TypeError,
+        RecursionError,
+    ):
+        print(_FAILURE, file=sys.stderr)
+        return 1
+    print(outcome)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

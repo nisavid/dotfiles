@@ -1,0 +1,59 @@
+# Native Buildkite pipeline (dotfiles-native) for the portability test battery.
+# It runs the groups from scripts/ci-test-group in parallel on each OS, while
+# GitHub Actions remains the required gate. See docs/research/BUILDKITE_GHA_PR_BUILDS.md.
+steps:
+  - group: ":linux: Ubuntu"
+    key: linux
+    steps:
+      - label: ":linux: {{matrix}}"
+        command: .buildkite/run-group.sh "{{matrix}}"
+        agents:
+          queue: linux-medium
+        # The hosted host image is older than GitHub's ubuntu-24.04 runner
+        # (for example, Python 3.10), so run each group in that release.
+        plugins:
+          - docker#v5.14.0:
+              image: "ubuntu:24.04"
+              workdir: /work/dotfiles
+              mount-buildkite-agent: true
+        timeout_in_minutes: 25
+        matrix:
+          - shell-bindings
+          - proton-pass
+          - discover
+          - python-checks
+          - zsh-deployment
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+
+  - group: ":mac: macOS"
+    key: macos
+    steps:
+      - label: ":mac: {{matrix}}"
+        command: .buildkite/run-group.sh "{{matrix}}"
+        agents:
+          queue: macos-14-medium
+        # Remove this skip once the Buildkite plan includes macOS minutes again.
+        skip: "The trial's macOS minutes are used up (issue #321)"
+        timeout_in_minutes: 25
+        matrix:
+          - shell-bindings
+          - proton-pass
+          - discover
+          - python-checks
+          - zsh-deployment
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+
+  - label: ":stopwatch: Timings"
+    depends_on:
+      - linux
+      - macos
+    allow_dependency_failure: true
+    agents:
+      queue: linux-small
+    command: .buildkite/annotate-timings.sh

@@ -40,6 +40,8 @@
 - For executable Zsh scripts, use `set -euo pipefail`
 - In source-callable entrypoints and option-sensitive functions, including functions defined by sourced modules, start with `emulate -L zsh`; do not put top-level `emulate -L zsh` in sourced modules because it resets the caller's option state
 - Opt into options explicitly so caller state does not leak in; combine related options into one `setopt` when readable
+- In Zsh scripts, make failure helpers `exit`, not `return`: under `errexit`, zsh skips the script's top-level `trap ... EXIT` or `TRAPEXIT` when `errexit` fires inside a function's scope, including on the function's own `return 1`, and it never runs `zshexit` on an `errexit` exit; `exit` from inside a function runs the EXIT trap and `zshexit`
+- For other in-function command failures, turn `errexit` off with `emulate -L zsh` and set `err_return`, or an equivalent, in every function between the failure and top level, so `errexit` fires at top level and the EXIT trap runs; do not re-enable `errexit` in those functions, because `err_return` does not help while it is on, and `emulate -L zsh` without `err_return` continues past the failure
 - Declare variables with type and local scope by default: `local`, `integer`, `local -a`, and `local -A`
 - Prefer specific builtins: `readonly` instead of `local -r`, and `integer` instead of `local -i`
 - Use `typeset -g` only for intentional globals inside functions to avoid dynamic scoping surprises
@@ -103,7 +105,7 @@ The `r` glob qualifier checks the owner-readable permission bit. Use `[[ -r $fil
 
 - Check return codes of critical commands
 - Use consistent exit codes: `0` for success, `1` for general error, and `2+` for specific classes of failure
-- Clean up temporary files with traps
+- Clean up temporary files with traps; in Zsh, follow the [`errexit` rules](#zsh) so command failures inside functions do not skip the EXIT trap
 - Handle empty or missing files, malformed input, filesystem errors, and network failures deliberately
 - Check argument counts before access
 - Validate file and directory existence, type, and permissions; in Zsh, prefer specific tests (`[[ -r $file ]]`), glob qualifiers (`(N-.r)`, `(N/)`, `(N@)`), and `zstat` over bare existence checks

@@ -5,9 +5,10 @@ repo_root=${0:A:h:h}
 migrator=$repo_root/home/private_dot_local/bin/executable_secret-exec-migrate
 zsh_command=${commands[zsh]}
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
-  return 1
+  exit 1
 }
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-exec-migrate.XXXXXX")
@@ -101,6 +102,7 @@ for profile_template in "$repo_root"/home/dot_config/private_secret-exec/private
   profile_name=${${profile_template:t}#private_}
   profile_name=${profile_name%.tmpl}
   chezmoi -S "$repo_root/home" execute-template \
+    --override-data '{"chezmoi":{"hostname":"test-host"}}' \
     --override-data-file "$repo_root/tests/fixtures/secret-exec-public.toml" \
     < "$profile_template" > "$fixture_home/.config/secret-exec/profiles/$profile_name"
   chmod 600 "$fixture_home/.config/secret-exec/profiles/$profile_name"
@@ -438,6 +440,40 @@ set -e
 [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
   fail 'a missing command shim must preserve every plaintext source'
 mv "$test_dir/command-shim" "$first_shim"
+
+cp "$command_map" "$test_dir/commands.env"
+grep -Fqx 'tool-b=aws?' "$command_map" ||
+  fail 'the fixture command map must exercise a best-effort mapping'
+for malformed_mapping in 'tool-b=aws??' 'tool-b=?' 'tool-b=aws?x' 'tool-b=?aws'; do
+  print -r -- "tool-a=aws" > "$command_map"
+  print -r -- "$malformed_mapping" >> "$command_map"
+  set +e
+  zsh "$migrator" --retire-plaintext > "$test_dir/malformed-command-map.out" 2>&1
+  exit_code=$?
+  set -e
+  (( exit_code != 0 )) &&
+    [[ $(<"$test_dir/malformed-command-map.out") == *'secret-exec command mapping is malformed'* ]] ||
+    fail "retirement must reject a malformed command mapping: $malformed_mapping"
+done
+print -rl -- tool-a=aws tool-b=aws 'tool-b=aws?' > "$command_map"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/duplicate-command-map.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) &&
+  [[ $(<"$test_dir/duplicate-command-map.out") == *'duplicate secret-exec command mapping for tool-b'* ]] ||
+  fail 'retirement must reject a command mapped both ordinarily and best-effort'
+print -rl -- tool-a=aws 'tool-b=missing?' > "$command_map"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/unknown-best-effort.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) &&
+  [[ $(<"$test_dir/unknown-best-effort.out") == *'secret-exec command tool-b names an unknown profile'* ]] ||
+  fail 'retirement must resolve the profile of a best-effort mapping'
+[[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+  fail 'a rejected command map must preserve every plaintext source'
+cp "$test_dir/commands.env" "$command_map"
 
 context_reference=$(sed -n 's/^CONTEXT7_API_KEY=//p' \
   "$fixture_home/.config/secret-exec/profiles/"*.env)

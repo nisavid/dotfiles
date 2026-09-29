@@ -5,12 +5,15 @@ setopt errexit nounset pipefail
 repo_root=${0:A:h:h}
 ignore_template=$repo_root/home/.chezmoiignore
 workflow=$repo_root/.github/workflows/platform-portability.yml
+# The workflow runs these test groups; they hold the test commands.
+test_groups=$repo_root/scripts/ci-test-group
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/platform-portability.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "FAIL: $*"
-  return 1
+  exit 1
 }
 
 mode_of() {
@@ -57,34 +60,34 @@ grep -Fq 'python3 -m pip install uv==0.11.32' "$workflow" ||
   fail 'platform workflow does not install the pinned uv runtime'
 grep -Fq \
   "python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'" \
-  "$workflow" ||
-  fail 'platform workflow does not discover production agent-equipment tests'
+  "$test_groups" ||
+  fail 'platform test groups do not discover production agent-equipment tests'
 expected_pyrefly_type_gate=$(
   print -rl -- \
-    '          uvx --from pyrefly==1.2.0 pyrefly check \' \
-    '            --preset strict \' \
-    '            --min-severity warn \' \
-    '            --search-path home/private_dot_local/lib/agent-equipment \' \
-    '            --progress-bar no \' \
-    '            --summary=full \' \
-    '            home/private_dot_local/lib/agent-equipment/agent_equipment \' \
-    '            home/private_dot_local/bin/executable_agent-equipment'
+    '  uvx --from pyrefly==1.2.0 pyrefly check \' \
+    '    --preset strict \' \
+    '    --min-severity warn \' \
+    '    --search-path home/private_dot_local/lib/agent-equipment \' \
+    '    --progress-bar no \' \
+    '    --summary=full \' \
+    '    home/private_dot_local/lib/agent-equipment/agent_equipment \' \
+    '    home/private_dot_local/bin/executable_agent-equipment'
 )
 workflow_type_gate=$(
   awk '
     /uvx --from (mypy|pyrefly)==/ { in_gate = 1 }
     in_gate { print }
     in_gate && /home\/private_dot_local\/bin\/executable_agent-equipment/ { exit }
-  ' "$workflow"
+  ' "$test_groups"
 )
 [[ $workflow_type_gate == "$expected_pyrefly_type_gate" ]] ||
-  fail 'platform workflow does not run the exact pinned Pyrefly gate'
-! grep -Fq 'mypy' "$workflow" ||
-  fail 'platform workflow still runs the superseded Mypy gate'
+  fail 'platform test groups do not run the exact pinned Pyrefly gate'
+! grep -Fq 'mypy' "$workflow" "$test_groups" ||
+  fail 'platform CI still runs the superseded Mypy gate'
 grep -Fq \
   'home/private_dot_local/bin/executable_agent-equipment' \
-  "$workflow" ||
-  fail 'platform workflow does not statically type-check the installed launcher'
+  "$test_groups" ||
+  fail 'platform test groups do not statically type-check the installed launcher'
 workflow_path_filter_pattern='^[[:space:]]+paths(-ignore)?:'
 ! grep -Eq "$workflow_path_filter_pattern" "$workflow" ||
   fail 'platform workflow does not run the privacy gate for every change'
@@ -94,24 +97,24 @@ for filtered_trigger in '    paths:' '    paths-ignore:'; do
 done
 grep -Fq \
   'python3 scripts/privacy-scan --root . --require-age-manifest' \
-  "$workflow" ||
-  fail 'platform workflow does not enforce the age-envelope manifest'
+  "$test_groups" ||
+  fail 'platform test groups do not enforce the age-envelope manifest'
 required_age_modules=$(
   awk '
     /REQUIRE_AGE_TOOLING=1/ { required = 1; next }
     required && /python3 -m unittest/ { print; required = 0 }
-  ' "$workflow"
+  ' "$test_groups"
 )
 [[ $required_age_modules == *'tests/test_agent_equipment_public_data.py'* ]] ||
-  fail 'platform workflow may skip public-data age-inspect coverage'
+  fail 'platform test groups may skip public-data age-inspect coverage'
 [[ $required_age_modules == *'tests/test_privacy_age_envelopes.py'* ]] ||
-  fail 'platform workflow may skip age-envelope tooling coverage'
+  fail 'platform test groups may skip age-envelope tooling coverage'
 grep -Fq 'AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin' "$workflow" ||
   fail 'platform workflow does not anchor admission to the verified age install'
 grep -Fq -- \
   '--base-uri "file://$PWD/docs/agent-equipment/adapter-contract-v1.schema.json"' \
-  "$workflow" ||
-  fail 'platform workflow does not anchor adapter schema references to the local file'
+  "$test_groups" ||
+  fail 'platform test groups do not anchor adapter schema references to the local file'
 
 age_boundary_workflow=$repo_root/.github/workflows/privacy-age-integrity.yml
 admission_activation_marker=$(
@@ -293,13 +296,21 @@ chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"darwin"}}' \
   <"$ignore_template" >"$test_root/darwin-ignore"
 
-typeset -a linux_only_patterns=(
+typeset -a retired_patterns=(
   '.agents/skills/hindsight-*'
   '.config/hindsight-*'
-  '.docker'
   '.hindsight*'
   '.local/bin/hindsight-*'
   '.local/lib/hindsight-*'
+)
+
+for pattern in $retired_patterns; do
+  assert_line "$pattern" "$test_root/linux-ignore"
+  assert_line "$pattern" "$test_root/darwin-ignore"
+done
+
+typeset -a linux_only_patterns=(
+  '.docker'
   '.local/libexec'
   'Library'
 )
@@ -327,18 +338,24 @@ expected_gui_source_inventory=$(
 [[ $gui_source_inventory == $expected_gui_source_inventory ]] ||
   fail 'Darwin-only GUI source inventory changed without updating the Linux gate'
 
-provider_linux_source_inventory=$(
-  find "$repo_root/home/dot_config/systemd" -type f -print |
+assert_line '.local/share/applications' "$test_root/darwin-ignore"
+
+linux_source_inventory=$(
+  find \
+    "$repo_root/home/dot_config/systemd" \
+    "$repo_root/home/private_dot_local/private_share/applications" \
+    -type f -print |
     sed "s#^$repo_root/home/##" |
     LC_ALL=C sort
 )
-expected_provider_linux_source_inventory=$(
+expected_linux_source_inventory=$(
   printf '%s\n' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
-    'dot_config/systemd/user/proton-pass-ensure-ready.service'
+    'dot_config/systemd/user/proton-pass-ensure-ready.service' \
+    'private_dot_local/private_share/applications/proton-pass-url-handler.desktop'
 )
-[[ $provider_linux_source_inventory == $expected_provider_linux_source_inventory ]] ||
-  fail 'Linux provider-readiness source inventory changed without updating the non-Linux gate'
+[[ $linux_source_inventory == $expected_linux_source_inventory ]] ||
+  fail 'Linux-only source inventory changed without updating the non-Linux gate'
 
 fixture_source=$test_root/source
 fixture_home=$test_root/home
@@ -347,6 +364,7 @@ mkdir -p \
   "$fixture_source/private_dot_docker" \
   "$fixture_source/private_dot_local/libexec/fixture" \
   "$fixture_source/private_Library/private_LaunchAgents" \
+  "$fixture_source/private_dot_local/private_share/applications" \
   "$fixture_home"
 cp "$test_root/linux-ignore" "$fixture_source/.chezmoiignore"
 
@@ -364,7 +382,9 @@ done < <(find "$repo_root/home" -mindepth 1 -path '*hindsight*' -print)
 touch \
   "$fixture_source/private_dot_docker/private_config.json" \
   "$fixture_source/private_dot_local/libexec/fixture/executable_zsh-gui-path" \
-  "$fixture_source/private_Library/private_LaunchAgents/io.fixture.zsh-gui-path.plist"
+  "$fixture_source/private_Library/private_LaunchAgents/io.fixture.zsh-gui-path.plist" \
+  "$fixture_source/private_dot_local/private_share/applications/proton-pass-url-handler.desktop" \
+  "$fixture_source/run_onchange_after_register-proton-pass-url-handler.zsh.tmpl"
 touch "$fixture_config"
 
 managed=$(
@@ -383,6 +403,59 @@ for held_target in \
   [[ $managed != *"$held_target"* ]] ||
     fail "Linux manages the zsh GUI fixture: $held_target"
 done
+print -r -- "$managed" |
+  grep -Fqx -- '.local/share/applications/proton-pass-url-handler.desktop' ||
+  fail 'Linux does not manage the protonpass:// handler desktop entry'
+print -r -- "$managed" |
+  grep -Fqx -- 'register-proton-pass-url-handler.zsh' ||
+  fail 'Linux does not run the protonpass:// registration'
+
+handler_registration_template=$repo_root/home/run_onchange_after_register-proton-pass-url-handler.zsh.tmpl
+darwin_handler_registration=$(
+  chezmoi -S "$repo_root/home" execute-template \
+    --override-data '{"chezmoi":{"os":"darwin"}}' \
+    <"$handler_registration_template"
+)
+[[ $darwin_handler_registration == $'#!/bin/sh\nexit 0' ]] ||
+  fail 'the protonpass:// registration must be inert outside Linux'
+
+zsh_bin=${commands[zsh]}
+chezmoi_bin=${commands[chezmoi]}
+# lookPath reports a cleaned path; normalize the fixture to match it.
+handler_bin=${test_root:A}/handler-bin
+mkdir -p "$handler_bin" "$test_root/empty-bin"
+print -r -- '#!/bin/sh
+printf "%s\n" "$@" >"$XDG_MIME_ARGS"' >"$handler_bin/xdg-mime"
+chmod 700 "$handler_bin/xdg-mime"
+
+handler_registration=$test_root/register-proton-pass-url-handler
+PATH="$handler_bin:$PATH" "$chezmoi_bin" -S "$repo_root/home" execute-template \
+  --override-data '{"chezmoi":{"os":"linux"}}' \
+  <"$handler_registration_template" >"$handler_registration"
+handler_entry_digest=$(
+  chezmoi -S "$repo_root/home" execute-template \
+    '{{ include "private_dot_local/private_share/applications/proton-pass-url-handler.desktop" | sha256sum }}'
+)
+grep -Fq -- "$handler_entry_digest" "$handler_registration" ||
+  fail 'the protonpass:// registration must rerun when the handler entry changes'
+grep -Fqx -- "# xdg-mime: $handler_bin/xdg-mime" "$handler_registration" ||
+  fail 'the protonpass:// registration must rerun when xdg-mime appears'
+PATH="$test_root/empty-bin" "$chezmoi_bin" -S "$repo_root/home" execute-template \
+  --override-data '{"chezmoi":{"os":"linux"}}' \
+  <"$handler_registration_template" |
+  grep -Fqx -- '# xdg-mime: ' ||
+  fail 'the protonpass:// registration must record a missing xdg-mime'
+
+XDG_MIME_ARGS=$test_root/xdg-mime.args PATH="$handler_bin" \
+  "$zsh_bin" -f "$handler_registration"
+[[ $(<"$test_root/xdg-mime.args") == $'default\nproton-pass-url-handler.desktop\nx-scheme-handler/protonpass' ]] ||
+  fail 'the protonpass:// registration did not set the handler as the scheme default'
+
+PATH="$test_root/empty-bin" "$zsh_bin" -f "$handler_registration" \
+  2>"$test_root/handler-registration.err" ||
+  fail 'the protonpass:// registration failed without xdg-mime'
+grep -Fq 'xdg-mime is unavailable' "$test_root/handler-registration.err" ||
+  fail 'the protonpass:// registration did not report a missing xdg-mime'
 
 if [[ $(uname -s) == Linux ]]; then
   acl_home=$test_root/acl-home

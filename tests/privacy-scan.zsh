@@ -17,7 +17,8 @@ run_scan() {
 
 run_failed_scan() {
   run_scan "$@"
-  (( scan_status != 0 ))
+  # exit, not return: errexit inside a function skips zsh's EXIT trap.
+  (( scan_status != 0 )) || exit 1
 }
 
 expect_single_finding() {
@@ -33,9 +34,9 @@ expect_findings() {
   shift 2
   run_scan "$@"
   output_lines=("${(f)scan_output}")
-  (( scan_status != 0 ))
-  (( ${#output_lines[@]} == expected_count ))
-  [[ $scan_output == "$expected" ]]
+  (( scan_status != 0 )) || exit 1
+  (( ${#output_lines[@]} == expected_count )) || exit 1
+  [[ $scan_output == "$expected" ]] || exit 1
 }
 
 mkdir -p "$test_root/clean" "$test_root/unsafe"

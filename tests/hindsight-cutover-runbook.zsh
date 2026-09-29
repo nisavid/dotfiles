@@ -32,6 +32,7 @@ prepare_case() {
   /bin/mkdir -p \
     "$fake_home/.cache" \
     "$fake_home/.config/hindsight-control-plane" \
+    "$fake_home/.local" \
     "$fake_home/.fixture/bin" \
     "$helpers"
   /bin/chmod 700 \
@@ -101,8 +102,9 @@ assert_events() {
   local expected="$1"
   [[ "$(<"$events")" == "$expected" ]] || {
     print -ru2 -- "unexpected events for ${case_root:t}"
-    /bin/cat "$events" >&2
-    return 1
+    /bin/cat "$events" >&2 || true
+    # exit, not return: errexit inside a function skips zsh's EXIT trap.
+    exit 1
   }
 }
 

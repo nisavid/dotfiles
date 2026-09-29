@@ -9,9 +9,10 @@ fake_bin=$test_dir/bin
 state_dir=$test_dir/state
 mkdir -p -- "$fixture_home/.config/zsh" "$fake_bin" "$state_dir"
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -ru2 -- "$1"
-  return 1
+  exit 1
 }
 
 adapter_template=$repo_root/home/private_dot_local/libexec/nisavid/executable_zsh-gui-path.tmpl

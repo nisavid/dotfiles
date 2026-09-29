@@ -1,5 +1,8 @@
 #!/usr/bin/env zsh
 set -euo pipefail
+# The readiness helper rejects group- or world-writable commands, so fixtures
+# must not inherit a permissive caller umask such as a user-private-group 002.
+umask 022
 
 repo_root=${0:A:h:h}
 ensure_ready_source=${PROTON_PASS_ENSURE_READY_SOURCE:-$repo_root/home/private_dot_local/bin/executable_proton-pass-ensure-ready}
@@ -8,27 +11,32 @@ native_store_adapter_source=$repo_root/home/private_dot_local/bin/executable_sec
 proton_bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
 proton_bootstrap_field+=_TOKEN
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
-  return 1
+  exit 1
 }
 
 process_fixture_helper=$repo_root/tests/helpers/process-fixture.zsh
 [[ -r $process_fixture_helper ]] ||
   fail 'the shared process-fixture helper is required'
 source "$process_fixture_helper"
-if /bin/zsh -f -c '
-  source "$1"
-  test_process_fixture_init "$2"
-' -- "$process_fixture_helper" "$repo_root"; then
-  fail 'the process-fixture helper must reject recursive cleanup outside the temporary root'
-fi
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/proton-pass-session.XXXXXX")
 test_process_fixture_init "$test_dir" || fail 'could not initialize process-fixture cleanup'
 trap test_process_fixture_cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# Build both roots here: the checkout itself may live under TMPDIR, as it does
+# on Buildkite's GitHub Actions runner.
+containment_dir=$test_dir/containment
+mkdir -p -- "$containment_dir/temporary-root" "$containment_dir/outside"
+if TMPDIR=$containment_dir/temporary-root /bin/zsh -f -c '
+  source "$1"
+  test_process_fixture_init "$2"
+' -- "$process_fixture_helper" "$containment_dir/outside"; then
+  fail 'the process-fixture helper must reject recursive cleanup outside the temporary root'
+fi
 cleanup_diagnostic=$test_dir/cleanup-diagnostic
 : > "$cleanup_diagnostic"
 set +e
@@ -66,6 +74,90 @@ set -e
 [[ ! -e $escape_diagnostic ]] ||
   fail 'every non-returning child escape must remove captured diagnostics first'
 
+status_allowlist_state=$test_dir/status-allowlist-state
+status_allowlist_log=$test_dir/status-allowlist.log
+mkdir -p -- "$status_allowlist_state"
+/bin/zsh -f -c '
+  source_text=$(<"$1")
+  source_text=${source_text%$'"'"'\nmain "$@"'"'"'}
+  eval "$source_text"
+  trap - EXIT HUP INT TERM
+  XDG_STATE_HOME=$2
+  status_file=$XDG_STATE_HOME/secret-exec/proton-pass-readiness.status
+  for reason in \
+    existing-session concurrent-repair repaired \
+    unsafe-lock lock-timeout concurrent-repair-failed \
+    session-probe-timeout session-state-unknown \
+    native-store-timeout native-store-unavailable invalid-bootstrap-value \
+    logout-timeout logout-failed login-timeout login-failed \
+    login-already-authenticated login-token-rejected \
+    login-token-malformed login-session-refused \
+    verify-timeout verify-failed login-marker-failed \
+    bogus-reason $'"'"'login-failed\nreason=repaired'"'"'; do
+    write_status unavailable "$reason" unrecorded
+    while IFS= read -r status_line; do
+      [[ $status_line != reason=* ]] || print -r -- "${status_line#reason=}"
+    done < "$status_file"
+  done
+  write_status bogus-state repaired unrecorded
+  while IFS= read -r status_line; do
+    [[ $status_line != state=* ]] || print -r -- "${status_line#state=}"
+  done < "$status_file"
+' -- "$ensure_ready_source" "$status_allowlist_state" >"$status_allowlist_log"
+[[ $(<"$status_allowlist_log") == $'existing-session\nconcurrent-repair\nrepaired\nunsafe-lock\nlock-timeout\nconcurrent-repair-failed\nsession-probe-timeout\nsession-state-unknown\nnative-store-timeout\nnative-store-unavailable\ninvalid-bootstrap-value\nlogout-timeout\nlogout-failed\nlogin-timeout\nlogin-failed\nlogin-already-authenticated\nlogin-token-rejected\nlogin-token-malformed\nlogin-session-refused\nverify-timeout\nverify-failed\nlogin-marker-failed\nunrecorded\nunrecorded\nunavailable' ]] ||
+  fail "readiness status must admit only enumerated states and reasons: $(<"$status_allowlist_log")"
+
+# A specific failure stays visible after later generic outcomes and ready
+# writes; only enumerated values carry over from the previous file.
+last_failure_state=$test_dir/last-failure-state
+last_failure_log=$test_dir/last-failure.log
+mkdir -p -- "$last_failure_state"
+/bin/zsh -f -c '
+  source_text=$(<"$1")
+  source_text=${source_text%$'"'"'\nmain "$@"'"'"'}
+  eval "$source_text"
+  trap - EXIT HUP INT TERM
+  XDG_STATE_HOME=$2
+  status_file=$XDG_STATE_HOME/secret-exec/proton-pass-readiness.status
+  record_last_failure() {
+    local line reason=none at=none
+    while IFS= read -r line; do
+      case $line in
+        last-failure-reason=*) reason=${line#*=} ;;
+        last-failure-at=*) at=${line#*=} ;;
+      esac
+    done < "$status_file"
+    [[ $at == none || $at == <-> ]] || at=invalid
+    [[ $at == none || $at == invalid ]] || at=digits
+    print -r -- "$1 $reason $at"
+  }
+  write_status unavailable session-probe-timeout unrecorded
+  record_last_failure generic-first
+  write_status unavailable login-token-rejected child-status
+  record_last_failure specific
+  first_at=$(grep "^last-failure-at=" "$status_file")
+  write_status unavailable session-probe-timeout unrecorded
+  record_last_failure generic-after
+  write_status ready repaired unrecorded
+  record_last_failure ready-after
+  [[ $(grep "^last-failure-at=" "$status_file") == "$first_at" ]] ||
+    print -r -- "timestamp-changed"
+  write_status unavailable logout-failed child-status
+  record_last_failure replaced
+  write_status unavailable lock-timeout unrecorded
+  record_last_failure lock-timeout-after
+  print -rl -- state=unavailable reason=lock-timeout \
+    last-failure-reason=bogus-reason last-failure-at=12 >"$status_file"
+  write_status unavailable session-state-unknown unrecorded
+  record_last_failure bogus-reason-dropped
+  print -rl -- state=unavailable reason=lock-timeout \
+    last-failure-reason=login-failed "last-failure-at=12 34" >"$status_file"
+  write_status unavailable session-state-unknown unrecorded
+  record_last_failure bogus-time-dropped
+' -- "$ensure_ready_source" "$last_failure_state" >"$last_failure_log"
+[[ $(<"$last_failure_log") == $'generic-first none none\nspecific login-token-rejected digits\ngeneric-after login-token-rejected digits\nready-after login-token-rejected digits\nreplaced logout-failed digits\nlock-timeout-after logout-failed digits\nbogus-reason-dropped none none\nbogus-time-dropped none none' ]] ||
+  fail "readiness status must keep the latest specific failure: $(<"$last_failure_log")"
+
 survivor_probe_root=$test_dir/survivor-probe
 survivor_probe_error=$test_dir/survivor-probe.err
 mkdir -p -- "$survivor_probe_root"
@@ -90,6 +182,12 @@ cleanup_outside_canary=$cleanup_outside_root/canary
 cleanup_recheck_error=$test_dir/cleanup-recheck.err
 mkdir -p -- "$cleanup_registered_root" "$cleanup_outside_root"
 : > "$cleanup_outside_canary"
+if TMPDIR=$cleanup_temp_root /bin/zsh -f -c '
+  source "$1"
+  test_process_fixture_init "$2"
+' -- "$process_fixture_helper" "$cleanup_outside_root"; then
+  fail 'the process-fixture helper must reject recursive cleanup outside the temporary root'
+fi
 set +e
 TMPDIR=$cleanup_temp_root /bin/zsh -f -c '
   source "$1"
@@ -517,6 +615,9 @@ cat > "$fixture_local_bin/pass-cli" <<'EOF'
 set -euo pipefail
 
 (( ! ${+PROTON_PASS_LAST_WAITER_STAGE} )) || exit 72
+(( ! ${+PROTON_PASS_DIAGNOSTIC_TEXT} && ! ${+PROTON_PASS_DIAGNOSTIC_FILE} &&
+  ! ${+PROTON_PASS_DIAGNOSTIC_WRITE_FD} && ! ${+PROTON_PASS_DIAGNOSTIC_READ_FD} )) ||
+  exit 72
 print -r -- "$*" >> "$FAKE_PASS_LOG"
 fixture_token=pst_
 fixture_token+='fixture-token'
@@ -525,6 +626,8 @@ bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
 bootstrap_field+=_TOKEN
 hang_forever() {
   print -r -- $$ > "$FAKE_HANGING_CHILD_PID"
+  [[ -z ${FAKE_HANGING_CHILD_PIDS:-} ]] ||
+    print -r -- $$ >> "$FAKE_HANGING_CHILD_PIDS"
   zmodload zsh/zselect
   trap 'exit 143' TERM
   while true; do
@@ -596,11 +699,79 @@ ansi_invalidated_record=$(ansi_main_record "$fixture_timestamp" 231 "$invalidate
 ansi_second_invalidated_record=$(
   ansi_main_record "$alternate_timestamp" 232 "$invalidated_message"
 )
+orphaned_cause_lines=(
+  'Caused by:'
+  '    0: Error sending request'
+  '    1: failed to authenticate: non-existent session'
+  '    2: non-existent session'
+)
+orphaned_diagnostic_lines=(
+  'Error: Error getting personal access token name'
+  ''
+  "${orphaned_cause_lines[@]}"
+)
 case $1 in
   info)
     (( $# == 1 )) || exit 64
     [[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || exit 69
     [[ -z ${${(P)bootstrap_field}:-} ]] || exit 70
+    [[ ${PROTON_PASS_DISABLE_TELEMETRY:-} == 1 ]] || exit 80
+    if [[ -n ${FAKE_PASS_INFO_EXIT_LOG:-} ]]; then
+      zmodload zsh/datetime
+      trap 'print -r -- "$EPOCHREALTIME" >> "$FAKE_PASS_INFO_EXIT_LOG"' EXIT
+    fi
+    # These holds end by wall-clock time, not a poll count: a loaded runner
+    # can stretch every short sleep, and a counted hold could then outlast the
+    # helper's deadline for this check.
+    # Hold this check, well inside its three-second deadline, until a second
+    # check also runs, and record whether one did.
+    if [[ -n ${FAKE_PASS_INFO_BARRIER:-} ]]; then
+      zmodload zsh/datetime
+      zmodload zsh/zselect
+      : > "$FAKE_PASS_INFO_BARRIER/$$"
+      typeset -F barrier_deadline=$(( EPOCHREALTIME + 2 ))
+      barrier_arrivals=( "$FAKE_PASS_INFO_BARRIER"/<->(N) )
+      while (( EPOCHREALTIME < barrier_deadline && ${#barrier_arrivals} < 2 )); do
+        zselect -t 1 || true
+        barrier_arrivals=( "$FAKE_PASS_INFO_BARRIER"/<->(N) )
+      done
+      if (( ${#barrier_arrivals} >= 2 )); then
+        print -r -- met >> "$FAKE_PASS_INFO_BARRIER.log"
+      else
+        print -r -- alone >> "$FAKE_PASS_INFO_BARRIER.log"
+      fi
+    fi
+    # Hold this caller's first check, well inside its three-second deadline,
+    # until a concurrent login stores a session, and record whether it did.
+    # A check that saw one and has FAKE_PASS_INFO_HOLD_WHILE then waits until
+    # that path is gone and reports the session ready, as a check that read
+    # it before a repair's cleanup would.
+    if [[ -n ${FAKE_PASS_INFO_AWAIT_SESSION_ONCE:-} &&
+      ! -e $FAKE_PASS_INFO_AWAIT_SESSION_ONCE ]]; then
+      zmodload zsh/datetime
+      zmodload zsh/zselect
+      typeset -F await_session_deadline=$(( EPOCHREALTIME + 1.5 ))
+      while (( EPOCHREALTIME < await_session_deadline )) &&
+        [[ ! -e $FAKE_PASS_LOCAL_SESSION || ! -e $FAKE_PASS_REMOTE_SESSION ]]; do
+        zselect -t 1 || true
+      done
+      if [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]]; then
+        print -r -- seen > "$FAKE_PASS_INFO_AWAIT_SESSION_ONCE"
+        if [[ -n ${FAKE_PASS_INFO_HOLD_WHILE:-} ]]; then
+          typeset -F hold_deadline=$(( EPOCHREALTIME + 1 ))
+          while (( EPOCHREALTIME < hold_deadline )) &&
+            [[ -e $FAKE_PASS_INFO_HOLD_WHILE ]]; do
+            zselect -t 1 || true
+          done
+          print -r -- 'account-metadata-canary'
+          exit 0
+        fi
+      else
+        print -r -- missed > "$FAKE_PASS_INFO_AWAIT_SESSION_ONCE"
+      fi
+    fi
+    [[ -z ${FAKE_PASS_INFO_DELAY_SECONDS:-} ]] ||
+      /bin/sleep "$FAKE_PASS_INFO_DELAY_SECONDS"
     if [[ -e $FAKE_PASS_VERIFY_HANG && -e $FAKE_PASS_REMOTE_SESSION ]]; then
       hang_forever
     fi
@@ -736,9 +907,82 @@ case $1 in
           print_nul_terminated_record "$ansi_invalidated_record"
           print -u2 -rl -- "$invalidated_diagnostic" "$invalidated_guidance"
           ;;
+        plain-framed-orphaned)
+          print -u2 -rl -- "$plain_absent_record" "${orphaned_diagnostic_lines[@]}"
+          ;;
+        ansi-framed-orphaned)
+          print -u2 -rl -- "$ansi_absent_record" "${orphaned_diagnostic_lines[@]}"
+          ;;
+        trailing-orphaned)
+          print -u2 -rl -- "${orphaned_diagnostic_lines[@]}" ''
+          ;;
+        user-info-orphaned)
+          print -u2 -rl -- \
+            'Error: Error getting user info' '' "${orphaned_cause_lines[@]}"
+          ;;
+        no-active-session)
+          print -u2 -rl -- \
+            'Error: Error getting personal access token name' '' \
+            'Caused by:' '    No active session'
+          ;;
+        refresh-failed)
+          print -u2 -rl -- \
+            'Error: Error getting personal access token name' '' \
+            'Caused by:' \
+            '    0: Error sending request' \
+            '    1: failed to authenticate: refresh failed' \
+            '    2: refresh failed'
+          ;;
         *) exit 64 ;;
       esac
       exit 78
+    fi
+    # Captured from pass-cli 2.3.3 opening its database under another local key.
+    if [[ -e $FAKE_PASS_INFO_UNDECRYPTABLE ]]; then
+      store_detail='Failed to open encrypted database: file is not a database. '
+      store_detail+='The encryption key may not match or the database may be corrupted. '
+      store_detail+="Try running 'pass-cli logout --force' to reset local state."
+      core_records=(
+        '2026-09-24 16:12:00.774: ERROR CORE sqlcipher_page_cipher: hmac check failed for pgno=1'
+        '2026-09-24 16:12:00.774: ERROR CORE sqlite3Codec: error decrypting page 1 data: 1'
+        '2026-09-24 16:12:00.774: ERROR CORE sqlcipher_codec_ctx_set_error 1'
+      )
+      undecryptable_lines=(
+        'Error: Error creating client features'
+        ''
+        'Caused by:'
+        '    0: Failed to initialize database'
+        '    1: Failed to get database connection'
+        "    2: Error occurred while creating a new object: $store_detail"
+        "    3: $store_detail"
+        '    4: Error code 0: not an error'
+      )
+      case $(<"$FAKE_PASS_INFO_UNDECRYPTABLE") in
+        framed)
+          print -u2 -rl -- "${core_records[@]}" "${undecryptable_lines[@]}"
+          ;;
+        unframed)
+          print -u2 -rl -- "${undecryptable_lines[@]}"
+          ;;
+        main-record-framed)
+          print -u2 -rl -- "$plain_absent_record" "${undecryptable_lines[@]}"
+          ;;
+        styled-core-framed)
+          print -u2 -rl -- $'\e[31m'"${core_records[1]}"$'\e[0m' \
+            "${undecryptable_lines[@]}"
+          ;;
+        blank-framed)
+          print -u2 -rl -- "${core_records[1]}" '' "${undecryptable_lines[@]}"
+          ;;
+        trailing-blank)
+          print -u2 -rl -- "${core_records[@]}" "${undecryptable_lines[@]}" ''
+          ;;
+        truncated)
+          print -u2 -rl -- "${core_records[@]}" "${(@)undecryptable_lines[1,-2]}"
+          ;;
+        *) exit 64 ;;
+      esac
+      exit 1
     fi
     if [[ -e $FAKE_PASS_INFO_MULTI_RECORD && ! -e $FAKE_PASS_REMOTE_SESSION ]]; then
       case $(<"$FAKE_PASS_INFO_MULTI_RECORD") in
@@ -761,6 +1005,10 @@ case $1 in
       print -r -- 'account-metadata-canary'
       exit 0
     fi
+    if [[ -e $FAKE_PASS_INFO_ORPHANED && -e $FAKE_PASS_LOCAL_SESSION ]]; then
+      print -u2 -rl -- "${orphaned_diagnostic_lines[@]}"
+      exit 1
+    fi
     if [[ -e $FAKE_PASS_INFO_INVALIDATED ]]; then
       print -u2 -rl -- \
         "$ansi_invalidated_record" \
@@ -779,6 +1027,23 @@ case $1 in
     exit 78
     ;;
   login)
+    if [[ -n ${FAKE_PASS_LOGIN_STDERR_LOG:-} ]]; then
+      zmodload zsh/stat
+      typeset -A login_stderr_metadata
+      login_stderr_record=unknown
+      # Redirecting this zstat's own stderr would replace the audited descriptor.
+      if zstat -H login_stderr_metadata -f 2; then
+        login_stderr_record=other
+        (( (login_stderr_metadata[mode] & 8#170000) == 8#100000 )) &&
+          login_stderr_record=regular
+        login_stderr_record+=:$(printf '%o' $(( login_stderr_metadata[mode] & 8#7777 )))
+        login_stderr_record+=:links=$login_stderr_metadata[nlink]
+      fi
+      login_stderr_record+=:
+      [[ $OSTYPE != linux* ]] ||
+        login_stderr_record+=$(/usr/bin/readlink "/proc/$$/fd/2" 2>/dev/null || true)
+      print -r -- "$login_stderr_record" >> "$FAKE_PASS_LOGIN_STDERR_LOG"
+    fi
     (( $# == 1 )) || exit 65
     [[ ${${(P)bootstrap_field}:-} == $fixture_token ]] || exit 66
     if [[ $OSTYPE == darwin* ]]; then
@@ -786,8 +1051,108 @@ case $1 in
     else
       [[ ${PROTON_PASS_LINUX_KEYRING:-} == dbus ]] || exit 67
     fi
-    [[ ! -e $FAKE_PASS_REQUIRE_LOGOUT || ! -e $FAKE_PASS_LOCAL_SESSION ]] ||
-      exit 73
+    # pass-cli refuses login while local authentication remains stored.
+    if [[ -e $FAKE_PASS_REQUIRE_LOGOUT && -e $FAKE_PASS_LOCAL_SESSION ]]; then
+      print -r -- 'Client is already authenticated. Log out if you want to log in again'
+      print -u2 -r -- 'Error: Already authenticated'
+      exit 1
+    fi
+    # pass-cli writes local authentication before its private token key, so
+    # an interrupted login passes info while every item read fails.
+    if [[ -e $FAKE_PASS_LOGIN_PARTIAL_HANG ]]; then
+      : > "$FAKE_PASS_LOCAL_SESSION"
+      : > "$FAKE_PASS_REMOTE_SESSION"
+      hang_forever
+    fi
+    # The same partial session from a login that then fails, once
+    # FAKE_PASS_LOGIN_PARTIAL_GATE, when set, records an observation.
+    if [[ -e $FAKE_PASS_LOGIN_PARTIAL_FAIL ]]; then
+      : > "$FAKE_PASS_LOCAL_SESSION"
+      : > "$FAKE_PASS_REMOTE_SESSION"
+      if [[ -n ${FAKE_PASS_LOGIN_PARTIAL_GATE:-} ]]; then
+        zmodload zsh/datetime
+        zmodload zsh/zselect
+        typeset -F partial_gate_deadline=$(( EPOCHREALTIME + 3 ))
+        while (( EPOCHREALTIME < partial_gate_deadline )) &&
+          [[ ! -s $FAKE_PASS_LOGIN_PARTIAL_GATE ]]; do
+          zselect -t 1 || true
+        done
+      fi
+      exit 71
+    fi
+    if [[ -e $FAKE_PASS_LOGIN_DIAGNOSTIC ]]; then
+      login_flow_lines=(
+        'Error: Error in personal access token login flow'
+        ''
+        'Caused by:'
+      )
+      parse_failure_line='    0: Failed to parse personal access token token'
+      session_failure_line='    0: Error creating personal access token session'
+      case $(<"$FAKE_PASS_LOGIN_DIAGNOSTIC") in
+        token-rejected)
+          print -u2 -rl -- "${login_flow_lines[@]}" "$session_failure_line" \
+            '    1: This personal access token is invalid, expired or has been deleted.'
+          ;;
+        malformed-format)
+          print -u2 -rl -- "${login_flow_lines[@]}" "$parse_failure_line" \
+            '    1: Invalid personal access token token format. Expected format: pst_<token>::<key>'
+          ;;
+        malformed-prefix)
+          print -u2 -rl -- "${login_flow_lines[@]}" "$parse_failure_line" \
+            "    1: Personal access token token must start with 'pst_'"
+          ;;
+        malformed-length)
+          print -u2 -rl -- "${login_flow_lines[@]}" "$parse_failure_line" \
+            "    1: Personal access token token must have exactly 64 characters after 'pst_' prefix"
+          ;;
+        malformed-key)
+          print -u2 -rl -- "${login_flow_lines[@]}" "$parse_failure_line" \
+            '    1: Failed to decode personal access token key. Must be base64-urlsafe encoded' \
+            '    2: Invalid symbol 45, offset 3.'
+          ;;
+        session-refused)
+          print -u2 -rl -- "${login_flow_lines[@]}" "$session_failure_line" \
+            '    1: Error requesting personal access token session' \
+            '    2: failed to authenticate: non-existent session' \
+            '    3: non-existent session'
+          ;;
+        bad-response)
+          print -u2 -rl -- "${login_flow_lines[@]}" "$session_failure_line" \
+            '    1: Bad response when creating Personal Access Token session: 429'
+          ;;
+        already-authenticated-trailing-space)
+          print -u2 -r -- 'Error: Already authenticated '
+          ;;
+        already-authenticated-blank-line)
+          print -u2 -rl -- 'Error: Already authenticated' ''
+          ;;
+        already-authenticated-crlf)
+          print -u2 -r -- $'Error: Already authenticated\r'
+          ;;
+        already-authenticated-traced)
+          print -u2 -rl -- \
+            "$(plain_main_record "$fixture_timestamp" 300 'Login refused')" \
+            'Error: Already authenticated'
+          ;;
+        already-authenticated-backtrace)
+          print -u2 -rl -- 'Error: Already authenticated' '' \
+            'Stack backtrace:' '   0: std::backtrace::Backtrace::create'
+          ;;
+        already-authenticated-oversized)
+          print -u2 -r -- ${(l:4067::x:)}
+          print -u2 -r -- 'Error: Already authenticated'
+          ;;
+        already-authenticated-hang)
+          print -u2 -r -- 'Error: Already authenticated'
+          hang_forever
+          ;;
+        token-echo)
+          print -u2 -r -- "Error: rejected $fixture_token"
+          ;;
+        *) exit 64 ;;
+      esac
+      exit 1
+    fi
     [[ -z ${PROVIDER_PID_FILE:-} ]] || print -r -- $$ > "$PROVIDER_PID_FILE"
     [[ -z ${PROVIDER_START_MARKER:-} ]] ||
       print -r -- provider-started >> "$PROVIDER_START_MARKER"
@@ -812,8 +1177,12 @@ case $1 in
     (( $# == 1 )) || [[ $# == 2 && $2 == --force ]] || exit 74
     [[ -z ${${(P)bootstrap_field}:-} ]] || exit 75
     [[ ! -e $FAKE_PASS_LOGOUT_HANG ]] || hang_forever
+    [[ -z ${FAKE_PASS_LOGOUT_DELAY_SECONDS:-} ]] ||
+      /bin/sleep "$FAKE_PASS_LOGOUT_DELAY_SECONDS"
     [[ ! -e $FAKE_PASS_LOGOUT_FAIL ]] || exit 79
-    /bin/rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+    # Forced logout also removes the local database that could not be opened.
+    /bin/rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+      "$FAKE_PASS_INFO_UNDECRYPTABLE"
     ;;
   *)
     exit 68
@@ -832,6 +1201,8 @@ bootstrap_field+=_TOKEN
 unset "$bootstrap_field" 2>/dev/null || true
 [[ $* == proton-bootstrap ]] || exit 64
 [[ ! -e $FAKE_NATIVE_STORE_LOCKED ]] || exit 69
+[[ -z ${FAKE_NATIVE_STORE_DELAY_SECONDS:-} ]] ||
+  /bin/sleep "$FAKE_NATIVE_STORE_DELAY_SECONDS"
 fixture_token=pst_
 fixture_token+='fixture-token'
 fixture_token+='::fixture-key'
@@ -930,6 +1301,8 @@ export FAKE_PASS_LOGOUT_FAIL=$test_dir/logout-fail
 export FAKE_PASS_LOGOUT_HANG=$test_dir/logout-hang
 export FAKE_PASS_LOGIN_EXIT_124=$test_dir/login-exit-124
 export FAKE_PASS_LOGIN_HANG=$test_dir/login-hang
+export FAKE_PASS_LOGIN_PARTIAL_HANG=$test_dir/login-partial-hang
+export FAKE_PASS_LOGIN_PARTIAL_FAIL=$test_dir/login-partial-fail
 export FAKE_PASS_LOGIN_DESCENDANT=$test_dir/login-descendant
 export FAKE_PASS_LOCAL_SESSION=$test_dir/local-session
 export FAKE_PASS_REMOTE_SESSION=$test_dir/remote-session
@@ -940,12 +1313,18 @@ export FAKE_PASS_INFO_TRANSIENT=$test_dir/info-transient
 export FAKE_PASS_INFO_MALFORMED_FRAMING=$test_dir/info-malformed-framing
 export FAKE_PASS_INFO_MULTI_RECORD=$test_dir/info-multi-record
 export FAKE_PASS_INFO_INVALIDATED=$test_dir/info-invalidated
+export FAKE_PASS_INFO_ORPHANED=$test_dir/info-orphaned
+export FAKE_PASS_INFO_UNDECRYPTABLE=$test_dir/info-undecryptable
+export FAKE_PASS_LOGIN_DIAGNOSTIC=$test_dir/login-diagnostic
+export FAKE_PASS_LOGIN_STDERR_LOG=$test_dir/login-stderr.log
 export FAKE_PASS_INFO_ALTERNATE_ABSENT=$test_dir/info-alternate-absent
 export FAKE_SECRET_TOOL_LOG=$test_dir/secret-tool.log
 export FAKE_NATIVE_STORE_LOCKED=$test_dir/native-store-locked
 export FAKE_NATIVE_STORE_HANG=$test_dir/native-store-hang
 export FAKE_NATIVE_STORE_DESCENDANT=$test_dir/native-store-descendant
 export FAKE_HANGING_CHILD_PID=$test_dir/hanging-child.pid
+# Set only by tests that expect more than one hanging child in a call.
+export FAKE_HANGING_CHILD_PIDS=
 export FAKE_DESCENDANT_PID=$test_dir/descendant.pid
 export FAKE_DESCENDANT_TOKEN_MARKER=$test_dir/descendant-inherited-bootstrap
 export FAKE_NATIVE_STORE_BAD_VALUE=$test_dir/native-store-bad-value
@@ -960,10 +1339,23 @@ if [[ ${PROTON_PASS_WAITER_STAGE_RED_PROOF:-0} == 1 ]]; then
 else
   export PROTON_PASS_LAST_WAITER_STAGE=waiter-stage-canary
 fi
+# Inherited private diagnostic state must never reach provider children.
+export PROTON_PASS_DIAGNOSTIC_TEXT=diagnostic-text-canary
+export PROTON_PASS_DIAGNOSTIC_FILE=$test_dir/inherited-diagnostic-file
+export PROTON_PASS_DIAGNOSTIC_WRITE_FD=1 PROTON_PASS_DIAGNOSTIC_READ_FD=0
+: > "$PROTON_PASS_DIAGNOSTIC_FILE"
 /bin/mkdir -p -- "$FAKE_UTILITY_MARKER_DIR"
 fixture_token=pst_
 fixture_token+='fixture-token'
 fixture_token+='::fixture-key'
+
+assert_no_private_diagnostics() {
+  local -a leftovers=(
+    "$state_home/secret-exec"/.proton-pass-{session-probe,login-diagnostic}.*(N)
+  )
+  (( ! ${#leftovers} )) ||
+    fail "$1 must remove its private provider diagnostic files"
+}
 
 run_waiter_stage_mapping() {
   emulate -L zsh
@@ -1052,8 +1444,12 @@ run_waiter_stage_mapping() {
     fail "the $mode waiter-stage fixture must prove its exact trigger"
   [[ $(<"$provider_start") == provider-started ]] ||
     fail "the $mode waiter-stage fixture must prove provider execution"
-  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin' ]] ||
-    fail "the $mode waiter-stage fixture must target the direct login waiter"
+  # The helper cannot tell how far a login got past a failed waiter, so it
+  # forces out whatever local authentication that login stored.
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+    fail "the $mode waiter-stage fixture must target the direct login waiter and clear its local state"
+  [[ ! -e $FAKE_PASS_LOCAL_SESSION ]] ||
+    fail "the $mode waiter-stage fixture must not leave the failed login's local authentication"
   case $completion_expectation in
     completed)
       [[ $(<"$provider_completion") == provider-completed ]] ||
@@ -1155,7 +1551,7 @@ typeset -F info_hang_started=$EPOCHREALTIME
 "$ensure_ready" >"$test_dir/info-hang.out" 2>"$test_dir/info-hang.err" &
 info_hang_entrypoint_pid=$!
 test_process_fixture_track_pid $info_hang_entrypoint_pid
-typeset -F info_hang_deadline=$(( info_hang_started + 7.5 ))
+typeset -F info_hang_deadline=$(( info_hang_started + 9.5 ))
 integer info_hang_timed_out=0
 while kill -0 $info_hang_entrypoint_pid 2>/dev/null; do
   if (( EPOCHREALTIME >= info_hang_deadline )); then
@@ -1176,8 +1572,10 @@ fi
 test_process_fixture_untrack_pid $info_hang_entrypoint_pid
 typeset -F info_hang_elapsed=$(( EPOCHREALTIME - info_hang_started ))
 rm -f -- "$FAKE_PASS_INFO_HANG"
-(( ! info_hang_timed_out && info_hang_status == 1 && info_hang_elapsed < 7.5 )) ||
+(( ! info_hang_timed_out && info_hang_status == 1 && info_hang_elapsed < 9.5 )) ||
   fail 'the whole readiness entrypoint must bound initial and locked session probes'
+(( info_hang_elapsed >= 7.8 )) ||
+  fail "the locked session probe must allow its full classification deadline: elapsed=$info_hang_elapsed"
 [[ $(<"$test_dir/info-hang.err") ==
   'proton-pass-ensure-ready: provider-session readiness check timed out' ]] ||
   fail 'a timed-out locked session probe must report one fixed diagnostic'
@@ -1193,8 +1591,18 @@ test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
+: > "$FAKE_PASS_LOGIN_STDERR_LOG"
 
 zsh "$ensure_ready"
+login_stderr_record=$(<"$FAKE_PASS_LOGIN_STDERR_LOG")
+[[ $login_stderr_record == regular:600:links=0:* ]] ||
+  fail "provider login diagnostics must go to a private unlinked regular file: $login_stderr_record"
+if [[ $OSTYPE == linux* ]]; then
+  [[ ${login_stderr_record#regular:600:links=0:} ==
+    "$state_home/secret-exec/.proton-pass-login-diagnostic."??????' (deleted)' ]] ||
+    fail "provider login diagnostics must stay in the private state directory: $login_stderr_record"
+fi
+assert_no_private_diagnostics 'a successful repair'
 [[ ! -e $FAKE_EXTERNAL_FLOCK_MARKER ]] ||
   fail 'readiness locking must not invoke an external flock executable'
 [[ -e $FAKE_PASS_REMOTE_SESSION ]] ||
@@ -1205,6 +1613,9 @@ zsh "$ensure_ready"
   'proton-bootstrap' ]] ||
   fail 'ensure-ready must resolve the fixed native bootstrap item'
 status_file=$state_home/secret-exec/proton-pass-readiness.status
+login_marker=$state_home/secret-exec/proton-pass-login.pending
+[[ ! -e $login_marker ]] ||
+  fail 'a verified repair must clear its login marker'
 if [[ -n $status_fragment_library ]]; then
   run_waiter_stage_mapping record \
     $'login-controller-targeted\nrecord-corrupted' completed ''
@@ -1263,7 +1674,9 @@ for malformed_framing in \
   non-sgr-csi-invalidated ansi-only-invalidated \
   misplaced-sgr-invalidated trailing-sgr-invalidated \
   split-line-colon-sgr-invalidated mixed-invalidated \
-  nul-plain-invalidated nul-ansi-invalidated; do
+  nul-plain-invalidated nul-ansi-invalidated \
+  plain-framed-orphaned ansi-framed-orphaned trailing-orphaned \
+  user-info-orphaned no-active-session refresh-failed; do
   print -r -- "$malformed_framing" >"$FAKE_PASS_INFO_MALFORMED_FRAMING"
   : >"$FAKE_PASS_LOG"
   : >"$FAKE_SECRET_TOOL_LOG"
@@ -1319,9 +1732,7 @@ rm -f -- "$FAKE_PASS_INFO_TRANSIENT"
   fail 'an unclassified readiness failure must not mutate provider authentication'
 [[ ! -s $FAKE_SECRET_TOOL_LOG ]] ||
   fail 'an unclassified readiness failure must not read the bootstrap item'
-probe_artifacts=( "$state_home/secret-exec"/.proton-pass-session-probe.*(N) )
-(( ! ${#probe_artifacts} )) ||
-  fail 'a classified readiness check must remove its private diagnostic file'
+assert_no_private_diagnostics 'a classified readiness check'
 
 rm -f -- "$FAKE_PASS_REMOTE_SESSION"
 : >"$FAKE_PASS_REQUIRE_LOGOUT"
@@ -1374,6 +1785,10 @@ rm -f -- \
   fail 'a failed stale-session cleanup must not attempt provider login'
 grep -Fqx 'reason=logout-failed' "$status_file" ||
   fail 'a failed stale-session cleanup must record its value-free reason'
+# The marker covers the forced logout too, so a failed one leaves it behind.
+[[ -f $login_marker ]] ||
+  fail 'a failed stale-session cleanup must keep the login marker'
+rm -f -- "$login_marker"
 
 rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$FAKE_HANGING_CHILD_PID"
 : > "$FAKE_PASS_REQUIRE_LOGOUT"
@@ -1401,10 +1816,167 @@ rm -f -- \
   fail 'a stale-session cleanup timeout must not attempt provider login'
 grep -Fqx 'reason=logout-timeout' "$status_file" ||
   fail 'a stale-session cleanup timeout must record its value-free reason'
+[[ -f $login_marker ]] ||
+  fail 'a stale-session cleanup timeout must keep the login marker'
+rm -f -- "$login_marker"
 hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
 ! kill -0 $hanging_child_pid 2>/dev/null ||
   fail 'a timed-out stale-session cleanup child must be terminated and reaped'
 test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+
+# The live pass-cli 2.3.3 incident: the provider dropped the session while local
+# authentication remains, so login is refused until forced local cleanup.
+rm -f -- "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_REQUIRE_LOGOUT"
+: > "$FAKE_PASS_INFO_ORPHANED"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+set +e
+orphaned_output=$(zsh "$ensure_ready" 2>&1)
+orphaned_status=$?
+set -e
+(( orphaned_status == 0 )) ||
+  fail "an orphaned provider session must be repaired: $orphaned_output"
+[[ -e $FAKE_PASS_REMOTE_SESSION ]] ||
+  fail 'an orphaned provider session repair must establish remote readiness'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout --force\nlogin\ninfo' ]] ||
+  fail 'an orphaned provider session must be cleaned up before one repair login'
+[[ $(<"$FAKE_SECRET_TOOL_LOG") == proton-bootstrap ]] ||
+  fail 'an orphaned provider session must use the fixed bootstrap item'
+grep -Fqx 'state=ready' "$status_file" &&
+  grep -Fqx 'reason=repaired' "$status_file" ||
+  fail 'an orphaned provider session repair must record its value-free reason'
+assert_no_private_diagnostics 'an orphaned repair'
+
+rm -f -- "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_LOGOUT_FAIL"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+set +e
+orphaned_logout_output=$(zsh "$ensure_ready" 2>&1)
+orphaned_logout_status=$?
+set -e
+rm -f -- "$FAKE_PASS_LOGOUT_FAIL"
+(( orphaned_logout_status != 0 )) ||
+  fail 'a failed orphaned-session cleanup must fail readiness'
+[[ $orphaned_logout_output ==
+  'proton-pass-ensure-ready: provider-session cleanup failed' ]] ||
+  fail 'a failed orphaned-session cleanup must report one fixed diagnostic'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout --force' ]] ||
+  fail 'a failed orphaned-session cleanup must not attempt provider login'
+grep -Fqx 'reason=logout-failed' "$status_file" ||
+  fail 'a failed orphaned-session cleanup must record its value-free reason'
+# The marker covers the forced logout too, so a failed one leaves it behind.
+[[ -f $login_marker ]] ||
+  fail 'a failed orphaned-session cleanup must keep the login marker'
+rm -f -- "$login_marker"
+assert_no_private_diagnostics 'a failed orphaned-session cleanup'
+
+rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$FAKE_HANGING_CHILD_PID"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_LOGOUT_HANG"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+typeset -F orphaned_logout_timeout_started=$EPOCHREALTIME
+set +e
+orphaned_logout_timeout_output=$(zsh "$ensure_ready" 2>&1)
+orphaned_logout_timeout_status=$?
+set -e
+typeset -F orphaned_logout_timeout_elapsed=$((
+  EPOCHREALTIME - orphaned_logout_timeout_started ))
+rm -f -- "$FAKE_PASS_LOGOUT_HANG"
+(( orphaned_logout_timeout_status != 0 &&
+  orphaned_logout_timeout_elapsed < 4.5 )) ||
+  fail 'a hanging orphaned-session cleanup must fail within its production deadline'
+[[ $orphaned_logout_timeout_output ==
+  'proton-pass-ensure-ready: provider-session cleanup timed out' ]] ||
+  fail 'an orphaned-session cleanup timeout must report one fixed diagnostic'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout --force' ]] ||
+  fail 'an orphaned-session cleanup timeout must not attempt provider login'
+grep -Fqx 'reason=logout-timeout' "$status_file" ||
+  fail 'an orphaned-session cleanup timeout must record its value-free reason'
+[[ -f $login_marker ]] ||
+  fail 'a timed-out orphaned-session cleanup must keep the login marker'
+rm -f -- "$login_marker"
+assert_no_private_diagnostics 'a timed-out orphaned-session cleanup'
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+! kill -0 $hanging_child_pid 2>/dev/null ||
+  fail 'a timed-out orphaned-session cleanup child must be terminated and reaped'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+
+rm -f -- "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_NATIVE_STORE_LOCKED"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+set +e
+orphaned_locked_output=$(zsh "$ensure_ready" 2>&1)
+orphaned_locked_status=$?
+set -e
+rm -f -- "$FAKE_NATIVE_STORE_LOCKED" "$FAKE_PASS_REQUIRE_LOGOUT" \
+  "$FAKE_PASS_INFO_ORPHANED"
+(( orphaned_locked_status != 0 )) ||
+  fail 'an orphaned session with a locked native store must fail readiness'
+[[ $orphaned_locked_output ==
+  'proton-pass-ensure-ready: the native bootstrap item is unavailable or locked' ]] ||
+  fail 'an orphaned session with a locked native store must report the store failure'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo' ]] ||
+  fail 'an orphaned session must not be cleaned up before the bootstrap item is read'
+[[ -e $FAKE_PASS_LOCAL_SESSION ]] ||
+  fail 'an orphaned session must keep local authentication while the native store is locked'
+grep -Fqx 'reason=native-store-unavailable' "$status_file" ||
+  fail 'an orphaned session with a locked native store must record its reason'
+
+# The 2026-09-24 incident: the local database no longer matched the stored
+# local key, so every info failed and nothing repaired it. The exact chain,
+# optionally after the database engine's plain records, forces a local reset.
+for undecryptable_variant in framed unframed; do
+  rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+  print -r -- "$undecryptable_variant" >"$FAKE_PASS_INFO_UNDECRYPTABLE"
+  : > "$FAKE_PASS_LOG"
+  : > "$FAKE_SECRET_TOOL_LOG"
+  set +e
+  undecryptable_output=$(zsh "$ensure_ready" 2>&1)
+  undecryptable_status=$?
+  set -e
+  (( undecryptable_status == 0 )) ||
+    fail "an undecryptable $undecryptable_variant local store must be repaired: $undecryptable_output"
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout --force\nlogin\ninfo' ]] ||
+    fail "an undecryptable $undecryptable_variant local store must be reset before one login"
+  [[ $(<"$FAKE_SECRET_TOOL_LOG") == proton-bootstrap ]] ||
+    fail 'an undecryptable local store repair must use the fixed bootstrap item'
+  grep -Fqx 'reason=repaired' "$status_file" ||
+    fail 'an undecryptable local store repair must record its value-free reason'
+  assert_no_private_diagnostics "an undecryptable $undecryptable_variant local store"
+done
+
+for undecryptable_variant in main-record-framed styled-core-framed \
+  blank-framed trailing-blank truncated; do
+  rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+  print -r -- "$undecryptable_variant" >"$FAKE_PASS_INFO_UNDECRYPTABLE"
+  : > "$FAKE_PASS_LOG"
+  : > "$FAKE_SECRET_TOOL_LOG"
+  set +e
+  undecryptable_output=$(zsh "$ensure_ready" 2>&1)
+  undecryptable_status=$?
+  set -e
+  rm -f -- "$FAKE_PASS_INFO_UNDECRYPTABLE"
+  (( undecryptable_status != 0 )) ||
+    fail "a $undecryptable_variant store diagnostic must not be classified"
+  [[ $undecryptable_output ==
+    'proton-pass-ensure-ready: provider-session readiness could not be classified' ]] ||
+    fail "a $undecryptable_variant store diagnostic must remain unknown: $undecryptable_output"
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo' ]] ||
+    fail "a $undecryptable_variant store diagnostic must not reset local state"
+  [[ ! -s $FAKE_SECRET_TOOL_LOG ]] ||
+    fail "a $undecryptable_variant store diagnostic must not read the bootstrap item"
+  grep -Fqx 'reason=session-state-unknown' "$status_file" ||
+    fail "a $undecryptable_variant store diagnostic must record session-state-unknown"
+  assert_no_private_diagnostics "a $undecryptable_variant store diagnostic"
+done
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
@@ -1433,19 +2005,54 @@ login_count=$(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG")
 (( login_count == 1 )) ||
   fail 'concurrent ensure-ready invocations must perform exactly one login'
 
+# Healthy readers share the lock: their first checks run side by side rather
+# than in turn, and each reports the existing session.
+reader_barrier=$test_dir/reader-barrier
+rm -rf -- "$reader_barrier" "$reader_barrier.log"
+mkdir -- "$reader_barrier"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOG"
+typeset -a shared_reader_pids=()
+for attempt in 1 2; do
+  FAKE_PASS_INFO_BARRIER=$reader_barrier zsh "$ensure_ready" \
+    >"$test_dir/shared-reader-$attempt.out" 2>&1 &
+  shared_reader_pids+=($!)
+  test_process_fixture_track_pid $!
+done
+integer shared_reader_failures=0
+for readiness_pid in $shared_reader_pids; do
+  wait $readiness_pid || (( ++shared_reader_failures ))
+  test_process_fixture_untrack_pid $readiness_pid
+done
+(( shared_reader_failures == 0 )) ||
+  fail "concurrent healthy readers must both report ready: $(<"$test_dir/shared-reader-1.out") $(<"$test_dir/shared-reader-2.out")"
+[[ $(<"$reader_barrier.log") == $'met\nmet' ]] ||
+  fail "concurrent healthy readers must check side by side: $(<"$reader_barrier.log")"
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo' ]] ||
+  fail "concurrent healthy readers must each take only the first check: $(<"$FAKE_PASS_LOG")"
+grep -Fqx 'reason=existing-session' "$status_file" ||
+  fail 'concurrent healthy readers must record the existing session'
+rm -rf -- "$reader_barrier" "$reader_barrier.log"
+
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
 : > "$FAKE_PASS_LOGIN_DELAY"
 slow_repair_started=$test_dir/slow-repair-started
+# From the owner's login, its login and verification outlast the waiter's
+# shared wait and 6-second takeover window by about two seconds, so the waiter
+# ends in the extended wait. Each delayed stage keeps about one second of
+# headroom below its own deadline.
 /usr/bin/env \
-  FAKE_PASS_LOGIN_DELAY_SECONDS=6 \
+  FAKE_PASS_LOGIN_DELAY_SECONDS=7 \
+  FAKE_PASS_INFO_DELAY_SECONDS=2 \
   PROVIDER_START_MARKER="$slow_repair_started" \
   zsh "$ensure_ready" >"$test_dir/slow-repair-owner.out" \
   2>"$test_dir/slow-repair-owner.err" &
 slow_repair_owner_pid=$!
 test_process_fixture_track_pid $slow_repair_owner_pid
-integer slow_repair_start_polls=200
+integer slow_repair_start_polls=1000
 while [[ ! -s $slow_repair_started && slow_repair_start_polls -gt 0 ]]; do
   (( --slow_repair_start_polls ))
   zselect -t 1 2>/dev/null || true
@@ -1480,8 +2087,11 @@ rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOGIN_DELAY"
 : > "$FAKE_PASS_LOGIN_FAIL"
 failed_repair_started=$test_dir/failed-repair-started
+# Same margins as the valid slow repair, with the cleanup after the failed
+# login in place of verification.
 /usr/bin/env \
-  FAKE_PASS_LOGIN_DELAY_SECONDS=6 \
+  FAKE_PASS_LOGIN_DELAY_SECONDS=7 \
+  FAKE_PASS_LOGOUT_DELAY_SECONDS=2 \
   PROVIDER_START_MARKER="$failed_repair_started" \
   zsh "$ensure_ready" >"$test_dir/failed-repair-owner.out" \
   2>"$test_dir/failed-repair-owner.err" &
@@ -1522,6 +2132,131 @@ rm -f -- "$FAKE_PASS_LOGIN_DELAY" "$FAKE_PASS_LOGIN_FAIL"
   fail 'a failed slow concurrent repair must not repeat the bootstrap lookup'
 grep -Fqx 'reason=concurrent-repair-failed' "$status_file" ||
   fail 'a failed concurrent repair must record its value-free reason'
+
+# A slow but healthy cleanup repair holds the lock longer than the old
+# five-plus-thirteen-second wait; the waiter must still observe its success.
+# Each delayed stage keeps one second of headroom below its own deadline.
+info_call_count() {
+  /usr/bin/grep -Fxc info "$FAKE_PASS_LOG" || true
+}
+rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$test_dir/slow-cleanup-owner.exits"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_REQUIRE_LOGOUT"
+: > "$FAKE_PASS_INFO_ORPHANED"
+: > "$FAKE_PASS_LOGIN_DELAY"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+/usr/bin/env \
+  FAKE_PASS_INFO_DELAY_SECONDS=4.0 \
+  FAKE_NATIVE_STORE_DELAY_SECONDS=2.0 \
+  FAKE_PASS_LOGOUT_DELAY_SECONDS=2.0 \
+  FAKE_PASS_LOGIN_DELAY_SECONDS=7.0 \
+  FAKE_PASS_INFO_EXIT_LOG="$test_dir/slow-cleanup-owner.exits" \
+  zsh "$ensure_ready" >"$test_dir/slow-cleanup-owner.out" \
+  2>"$test_dir/slow-cleanup-owner.err" &
+slow_cleanup_owner_pid=$!
+test_process_fixture_track_pid $slow_cleanup_owner_pid
+integer slow_cleanup_classify_polls=1000
+while (( slow_cleanup_classify_polls-- > 0 &&
+  $(info_call_count) < 2 )); do
+  zselect -t 1 2>/dev/null || true
+done
+(( $(info_call_count) >= 2 )) ||
+  fail 'the slow cleanup owner must reach its locked classification'
+typeset -F slow_cleanup_waiter_started=$EPOCHREALTIME
+set +e
+zsh "$ensure_ready" >"$test_dir/slow-cleanup-waiter.out" \
+  2>"$test_dir/slow-cleanup-waiter.err"
+slow_cleanup_waiter_status=$?
+set -e
+if wait $slow_cleanup_owner_pid; then
+  slow_cleanup_owner_status=0
+else
+  slow_cleanup_owner_status=$?
+fi
+test_process_fixture_untrack_pid $slow_cleanup_owner_pid
+rm -f -- "$FAKE_PASS_LOGIN_DELAY" "$FAKE_PASS_REQUIRE_LOGOUT" \
+  "$FAKE_PASS_INFO_ORPHANED"
+(( slow_cleanup_owner_status == 0 )) ||
+  fail "a slow healthy cleanup repair must establish readiness: $(<"$test_dir/slow-cleanup-owner.err")"
+(( slow_cleanup_waiter_status == 0 )) ||
+  fail "a waiter must outlast a slow healthy cleanup repair: $(<"$test_dir/slow-cleanup-waiter.err")"
+# The waiter starts once the owner holds the lock to classify, and the owner
+# holds it through its verification, so this bounds the waiter's lock wait.
+slow_cleanup_owner_exits=("${(@f)$(<"$test_dir/slow-cleanup-owner.exits")}")
+typeset -F slow_cleanup_lock_wait=$((
+  slow_cleanup_owner_exits[-1] - slow_cleanup_waiter_started ))
+(( slow_cleanup_lock_wait >= 18.5 )) ||
+  fail "the slow cleanup fixture must hold the lock beyond the former wait: lock-wait=$slow_cleanup_lock_wait"
+grep -Fqx 'reason=concurrent-repair' "$status_file" ||
+  fail 'the waiter must record the concurrent repair it observed'
+[[ $(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG") == 1 &&
+  $(/usr/bin/grep -Fxc 'logout --force' "$FAKE_PASS_LOG") == 1 ]] ||
+  fail 'a slow healthy cleanup repair must clean up and log in exactly once'
+[[ $(<"$FAKE_SECRET_TOOL_LOG") == proton-bootstrap ]] ||
+  fail 'a slow healthy cleanup repair must read the bootstrap item once'
+[[ ! -s $test_dir/slow-cleanup-owner.err &&
+  ! -s $test_dir/slow-cleanup-waiter.err ]] ||
+  fail 'a slow healthy cleanup repair must not emit diagnostics'
+
+# A timed-out classifying probe must release the lock inside the takeover
+# window of a caller that began waiting as the lock was taken, so that caller
+# can still repair instead of failing as a concurrent waiter. The successor
+# starts once the stalled owner holds the lock to classify, so its shared wait
+# expires and it goes to the exclusive path without a first check.
+takeover_values=("${(@f)$(<"$ensure_ready_source")}")
+integer takeover_seconds=${${(M)takeover_values:#readonly PROTON_PASS_LOCK_TAKEOVER_SECONDS=*}#*=}
+integer classify_seconds=${${(M)takeover_values:#readonly PROTON_PASS_CLASSIFY_PROBE_TIMEOUT_SECONDS=*}#*=}
+(( classify_seconds > 0 && takeover_seconds >= classify_seconds + 1 )) ||
+  fail "the takeover window must outlast a timed-out classifying probe: takeover=$takeover_seconds classify=$classify_seconds"
+rm -f -- "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_REQUIRE_LOGOUT"
+: > "$FAKE_PASS_INFO_ORPHANED"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+/usr/bin/env FAKE_PASS_INFO_DELAY_SECONDS=30 \
+  zsh "$ensure_ready" >"$test_dir/takeover-stalled.out" \
+  2>"$test_dir/takeover-stalled.err" &
+takeover_stalled_pid=$!
+test_process_fixture_track_pid $takeover_stalled_pid
+integer takeover_classify_polls=1000
+while (( takeover_classify_polls-- > 0 &&
+  $(info_call_count) < 2 )); do
+  zselect -t 1 2>/dev/null || true
+done
+(( $(info_call_count) >= 2 )) ||
+  fail 'the stalled lock owner must reach its classifying probe'
+set +e
+zsh "$ensure_ready" >"$test_dir/takeover-successor.out" \
+  2>"$test_dir/takeover-successor.err"
+takeover_successor_status=$?
+set -e
+if wait $takeover_stalled_pid; then
+  takeover_stalled_status=0
+else
+  takeover_stalled_status=$?
+fi
+test_process_fixture_untrack_pid $takeover_stalled_pid
+rm -f -- "$FAKE_PASS_REQUIRE_LOGOUT" "$FAKE_PASS_INFO_ORPHANED"
+(( takeover_stalled_status != 0 )) &&
+  [[ $(<"$test_dir/takeover-stalled.err") ==
+    'proton-pass-ensure-ready: provider-session readiness check timed out' ]] ||
+  fail 'the stalled lock owner must fail its classifying probe'
+(( takeover_successor_status == 0 )) ||
+  fail "a caller waiting behind a timed-out classification must take over: $(<"$test_dir/takeover-successor.err")"
+[[ ! -s $test_dir/takeover-successor.err ]] ||
+  fail 'a takeover repair must not emit diagnostics'
+[[ $(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG") == 1 &&
+  $(/usr/bin/grep -Fxc 'logout --force' "$FAKE_PASS_LOG") == 1 ]] ||
+  fail 'a takeover repair must clean up and log in exactly once'
+# The owner's two checks, then only the successor's classification and
+# verification.
+[[ $(info_call_count) == 4 ]] ||
+  fail "a successor whose shared wait expires must skip the first check: $(<"$FAKE_PASS_LOG")"
+grep -Fqx 'reason=repaired' "$status_file" ||
+  fail 'a takeover repair must record its value-free reason'
+assert_no_private_diagnostics 'a takeover repair'
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
@@ -1654,6 +2389,485 @@ grep -Fqx 'reason=login-failed' "$status_file" ||
 grep -Fqx 'waiter-stage=child-status' "$status_file" ||
   fail 'provider-reported status 124 must record child-status'
 rm -f -- "$FAKE_PASS_LOGIN_EXIT_124"
+assert_no_private_diagnostics 'a failed provider login'
+
+# Classic absent info with stale local authentication: login refuses locally.
+rm -f -- "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_REQUIRE_LOGOUT"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+set +e
+already_authenticated_output=$(zsh "$ensure_ready" 2>&1)
+already_authenticated_status=$?
+set -e
+rm -f -- "$FAKE_PASS_REQUIRE_LOGOUT"
+(( already_authenticated_status != 0 )) ||
+  fail 'a login refused for stored local authentication must fail readiness'
+[[ $already_authenticated_output ==
+  'proton-pass-ensure-ready: provider login refused: a local provider session is still authenticated' ]] ||
+  fail "a refused login must report its fixed diagnostic: $already_authenticated_output"
+grep -Fqx 'reason=login-already-authenticated' "$status_file" ||
+  fail 'a refused login must record its value-free reason'
+grep -Fqx 'waiter-stage=child-status' "$status_file" ||
+  fail 'a refused login must record child-status'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin' ]] ||
+  fail 'a classified absent session must never be logged out'
+[[ -e $FAKE_PASS_LOCAL_SESSION ]] ||
+  fail 'a refused login must preserve local authentication'
+assert_no_private_diagnostics 'a refused login'
+
+typeset -A login_diagnostic_reasons=(
+  token-rejected login-token-rejected
+  malformed-format login-token-malformed
+  malformed-prefix login-token-malformed
+  malformed-length login-token-malformed
+  session-refused login-session-refused
+  malformed-key login-failed
+  bad-response login-failed
+  already-authenticated-trailing-space login-failed
+  already-authenticated-blank-line login-failed
+  already-authenticated-crlf login-failed
+  already-authenticated-traced login-failed
+  already-authenticated-backtrace login-failed
+  already-authenticated-oversized login-failed
+  token-echo login-failed
+)
+typeset -A login_reason_messages=(
+  login-token-rejected 'the provider rejected the bootstrap token as invalid, expired, or deleted'
+  login-token-malformed 'the bootstrap token is not a well-formed personal access token'
+  login-session-refused 'the provider refused to open a login session'
+  login-failed 'provider-session repair failed'
+)
+for login_diagnostic in ${(ko)login_diagnostic_reasons}; do
+  expected_login_reason=${login_diagnostic_reasons[$login_diagnostic]}
+  rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+  print -r -- "$login_diagnostic" >"$FAKE_PASS_LOGIN_DIAGNOSTIC"
+  : >"$FAKE_PASS_LOG"
+  set +e
+  login_diagnostic_output=$(zsh "$ensure_ready" 2>&1)
+  login_diagnostic_status=$?
+  set -e
+  (( login_diagnostic_status != 0 )) ||
+    fail "the $login_diagnostic login diagnostic must fail readiness"
+  [[ $login_diagnostic_output ==
+    "proton-pass-ensure-ready: ${login_reason_messages[$expected_login_reason]}" ]] ||
+    fail "the $login_diagnostic login diagnostic must report its fixed message: $login_diagnostic_output"
+  grep -Fqx "reason=$expected_login_reason" "$status_file" ||
+    fail "the $login_diagnostic login diagnostic must record $expected_login_reason"
+  grep -Fqx 'waiter-stage=child-status' "$status_file" ||
+    fail "the $login_diagnostic login diagnostic must record child-status"
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+    fail "the $login_diagnostic login diagnostic must follow one absent repair and clear the failed login"
+  assert_no_private_diagnostics "the $login_diagnostic login diagnostic"
+  ! print -r -- "$login_diagnostic_output" |
+    /usr/bin/grep -F -e "$fixture_token" -e 'Already authenticated' >/dev/null ||
+    fail "the $login_diagnostic login diagnostic must not echo provider output"
+done
+! /usr/bin/grep -RF -e "$fixture_token" -e 'Already authenticated' \
+  "$state_home" "$FAKE_PASS_LOG" >/dev/null ||
+  fail 'provider login diagnostics must never persist in state or logs'
+
+# An interrupted login leaves local authentication that passes info while item
+# reads fail. The helper must force it out, or every later readiness check
+# reports the unusable session as ready and repair never runs again.
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$FAKE_HANGING_CHILD_PID" "$FAKE_PASS_LOGIN_DIAGNOSTIC"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+set +e
+partial_login_output=$(zsh "$ensure_ready" 2>&1)
+partial_login_status=$?
+set -e
+rm -f -- "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+  fail 'a timed-out partial login child must be terminated and reaped'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+(( partial_login_status != 0 )) ||
+  fail 'a timed-out partial login must fail readiness'
+[[ $partial_login_output ==
+  'proton-pass-ensure-ready: provider-session repair timed out' ]] ||
+  fail "a timed-out partial login must report its timeout: $partial_login_output"
+grep -Fqx 'reason=login-timeout' "$status_file" ||
+  fail 'a timed-out partial login must record login-timeout'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+  fail 'a timed-out login must force out its partial local authentication'
+[[ ! -e $FAKE_PASS_LOCAL_SESSION ]] ||
+  fail 'a timed-out login must not leave partial local authentication'
+[[ ! -e $login_marker ]] ||
+  fail 'a login whose cleanup succeeded must clear its login marker'
+assert_no_private_diagnostics 'a timed-out partial login'
+: > "$FAKE_PASS_LOG"
+zsh "$ensure_ready" ||
+  fail 'readiness must recover once a partial login has been forced out'
+grep -Fqx 'reason=repaired' "$status_file" ||
+  fail 'the call after a forced-out partial login must repair, not reuse it'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\ninfo' ]] ||
+  fail 'the call after a forced-out partial login must log in again'
+
+# When that cleanup fails, the unusable session may survive, so the cleanup
+# failure is the reported reason.
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$FAKE_HANGING_CHILD_PID"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+: > "$FAKE_PASS_LOGOUT_FAIL"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+set +e
+partial_cleanup_output=$(zsh "$ensure_ready" 2>&1)
+partial_cleanup_status=$?
+set -e
+rm -f -- "$FAKE_PASS_LOGIN_PARTIAL_HANG" "$FAKE_PASS_LOGOUT_FAIL"
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+  fail 'a partial login child must be reaped when its cleanup fails'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+(( partial_cleanup_status != 0 )) ||
+  fail 'a failed partial-login cleanup must fail readiness'
+[[ $partial_cleanup_output ==
+  'proton-pass-ensure-ready: provider-session cleanup failed' ]] ||
+  fail "a failed partial-login cleanup must report it: $partial_cleanup_output"
+grep -Fqx 'reason=logout-failed' "$status_file" ||
+  fail 'a failed partial-login cleanup must record logout-failed'
+# The recorded stage is the cleanup's reported exit, not the login's timeout.
+grep -Fqx 'waiter-stage=child-status' "$status_file" ||
+  fail 'a failed partial-login cleanup must record its own waiter stage'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+  fail 'a failed partial-login cleanup must run exactly once after login'
+[[ -e $FAKE_PASS_LOCAL_SESSION ]] ||
+  fail 'the fixture must model the unusable session surviving a failed cleanup'
+[[ -f $login_marker ]] ||
+  fail 'a failed partial-login cleanup must keep its login marker'
+assert_no_private_diagnostics 'a failed partial-login cleanup'
+# The next call forces out what the failed cleanup left, then logs in again.
+: > "$FAKE_PASS_LOG"
+zsh "$ensure_ready" ||
+  fail 'readiness must recover behind a login marker left by a failed cleanup'
+[[ $(<"$FAKE_PASS_LOG") == $'info\nlogout --force\nlogin\ninfo' ]] ||
+  fail "a login marker must skip the shared first check and force a local reset: $(<"$FAKE_PASS_LOG")"
+grep -Fqx 'reason=repaired' "$status_file" ||
+  fail 'the call behind a login marker must record a repair'
+[[ ! -e $login_marker ]] ||
+  fail 'the verified repair behind a login marker must clear it'
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+
+# When login and its cleanup both hang, the cleanup timeout is reported, both
+# children are reaped, and the call ends within the two production deadlines.
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$FAKE_HANGING_CHILD_PID"
+export FAKE_HANGING_CHILD_PIDS=$test_dir/hanging-children.pids
+: > "$FAKE_HANGING_CHILD_PIDS"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+: > "$FAKE_PASS_LOGOUT_HANG"
+test_process_fixture_track_pid_list_file "$FAKE_HANGING_CHILD_PIDS"
+typeset -F partial_cleanup_hang_started=$EPOCHREALTIME
+set +e
+partial_cleanup_hang_output=$(zsh "$ensure_ready" 2>&1)
+partial_cleanup_hang_status=$?
+set -e
+typeset -F partial_cleanup_hang_elapsed=$((
+  EPOCHREALTIME - partial_cleanup_hang_started ))
+rm -f -- "$FAKE_PASS_LOGIN_PARTIAL_HANG" "$FAKE_PASS_LOGOUT_HANG"
+typeset -a partial_cleanup_hang_pids=(${(f)"$(<"$FAKE_HANGING_CHILD_PIDS")"})
+(( ${#partial_cleanup_hang_pids} == 2 )) ||
+  fail 'a hanging login and its hanging cleanup must each start one child'
+for hanging_child_pid in $partial_cleanup_hang_pids; do
+  test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+    fail 'a hanging login and its hanging cleanup must both be reaped'
+done
+(( partial_cleanup_hang_status != 0 )) ||
+  fail 'a hanging partial-login cleanup must fail readiness'
+(( partial_cleanup_hang_elapsed >= 10.5 &&
+  partial_cleanup_hang_elapsed < 14.0 )) ||
+  fail "a hanging login and cleanup must use both production deadlines: elapsed=$partial_cleanup_hang_elapsed"
+[[ $partial_cleanup_hang_output ==
+  'proton-pass-ensure-ready: provider-session cleanup timed out' ]] ||
+  fail "a hanging partial-login cleanup must report it: $partial_cleanup_hang_output"
+grep -Fqx 'reason=logout-timeout' "$status_file" ||
+  fail 'a hanging partial-login cleanup must record logout-timeout'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+  fail 'a hanging partial-login cleanup must run exactly once after login'
+[[ -f $login_marker ]] ||
+  fail 'a hanging partial-login cleanup must keep its login marker'
+rm -f -- "$login_marker"
+assert_no_private_diagnostics 'a hanging partial-login cleanup'
+rm -f -- "$FAKE_HANGING_CHILD_PIDS"
+export FAKE_HANGING_CHILD_PIDS=
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+
+# Stored local authentication that info already reported absent is not usable,
+# so a failed login forces it out along with anything the login stored.
+rm -f -- "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_LOGIN_FAIL"
+: > "$FAKE_PASS_LOG"
+set +e
+absent_stored_output=$(zsh "$ensure_ready" 2>&1)
+absent_stored_status=$?
+set -e
+rm -f -- "$FAKE_PASS_LOGIN_FAIL"
+(( absent_stored_status != 0 )) ||
+  fail 'a failed login over absent stored authentication must fail readiness'
+[[ $absent_stored_output ==
+  'proton-pass-ensure-ready: provider-session repair failed' ]] ||
+  fail "a failed login over absent stored authentication must report it: $absent_stored_output"
+grep -Fqx 'reason=login-failed' "$status_file" ||
+  fail 'a failed login over absent stored authentication must record login-failed'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+  fail 'a failed login over absent stored authentication must force it out'
+[[ ! -e $FAKE_PASS_LOCAL_SESSION ]] ||
+  fail 'a failed login must not leave absent stored authentication behind'
+[[ ! -e $login_marker ]] ||
+  fail 'a failed login whose cleanup succeeded must clear its login marker'
+assert_no_private_diagnostics 'a failed login over absent stored authentication'
+
+# A recognized refusal is not classified when the waiter times out.
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$FAKE_HANGING_CHILD_PID"
+print -r -- already-authenticated-hang >"$FAKE_PASS_LOGIN_DIAGNOSTIC"
+: > "$FAKE_PASS_LOG"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+typeset -F recognized_hang_started=$EPOCHREALTIME
+set +e
+recognized_hang_output=$(zsh "$ensure_ready" 2>&1)
+recognized_hang_status=$?
+set -e
+typeset -F recognized_hang_elapsed=$(( EPOCHREALTIME - recognized_hang_started ))
+rm -f -- "$FAKE_PASS_LOGIN_DIAGNOSTIC"
+# The login deadline; the instant forced cleanup adds well under a second.
+(( recognized_hang_status != 0 && recognized_hang_elapsed < 9.5 )) ||
+  fail 'a hanging login must fail within its production deadlines'
+[[ $recognized_hang_output ==
+  'proton-pass-ensure-ready: provider-session repair timed out' ]] ||
+  fail 'a hanging login must remain a timeout despite recognized diagnostics'
+grep -Fqx 'reason=login-timeout' "$status_file" ||
+  fail 'a hanging login must record login-timeout'
+grep -Fqx 'waiter-stage=unrecorded' "$status_file" ||
+  fail 'a hanging login must not classify its captured diagnostics'
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+! kill -0 $hanging_child_pid 2>/dev/null ||
+  fail 'a timed-out login child must be terminated and reaped'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+assert_no_private_diagnostics 'a timed-out login'
+
+# A signal during login releases the private diagnostic capture before
+# teardown; the capture is unlinked before login starts, so no name remains.
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$FAKE_HANGING_CHILD_PID"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_STDERR_LOG"
+: > "$FAKE_PASS_LOGIN_HANG"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+zsh "$ensure_ready" >"$test_dir/login-signal.out" \
+  2>"$test_dir/login-signal.err" &
+login_signal_pid=$!
+test_process_fixture_track_pid $login_signal_pid
+integer login_signal_polls=500
+while (( login_signal_polls-- > 0 )) && [[ ! -s $FAKE_HANGING_CHILD_PID ]]; do
+  zselect -t 1 2>/dev/null || true
+done
+login_signal_artifacts=(
+  "$state_home/secret-exec"/.proton-pass-login-diagnostic.*(N)
+)
+kill -TERM $login_signal_pid 2>/dev/null || true
+if wait $login_signal_pid; then
+  login_signal_status=0
+else
+  login_signal_status=$?
+fi
+test_process_fixture_untrack_pid $login_signal_pid
+rm -f -- "$FAKE_PASS_LOGIN_HANG"
+(( ${#login_signal_artifacts} == 0 )) ||
+  fail 'a hanging login must not leave its private diagnostics under a name'
+[[ $(<"$FAKE_PASS_LOGIN_STDERR_LOG") == regular:600:links=0:* ]] ||
+  fail 'a hanging login must write diagnostics to one private unlinked file'
+(( login_signal_status == 143 )) ||
+  fail "TERM during login must preserve status 143: status=$login_signal_status"
+# A signalled login may have stored a partial session, so its marker stays.
+zmodload zsh/stat
+typeset -A login_marker_metadata
+[[ -f $login_marker && ! -L $login_marker ]] &&
+  zstat -H login_marker_metadata -- "$login_marker" &&
+  (( (login_marker_metadata[mode] & 8#777) == 8#600 )) ||
+  fail 'a signalled login must keep one private login marker'
+[[ $(<"$login_marker") == started_at=<-> ]] ||
+  fail 'the login marker must hold only its value-free start time'
+rm -f -- "$login_marker"
+assert_no_private_diagnostics 'a signal during login'
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+  fail 'TERM during login must terminate and reap the login child'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+
+# An uncatchable kill during login cannot run cleanup traps, so the private
+# diagnostic capture must already have no name in the state directory.
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$FAKE_HANGING_CHILD_PID"
+[[ ! -e $login_marker ]] ||
+  fail 'the killed-login fixture must start without a login marker'
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_HANG"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+zsh "$ensure_ready" >"$test_dir/login-kill.out" \
+  2>"$test_dir/login-kill.err" &
+login_kill_pid=$!
+test_process_fixture_track_pid $login_kill_pid
+integer login_kill_polls=500
+while (( login_kill_polls-- > 0 )) && [[ ! -s $FAKE_HANGING_CHILD_PID ]]; do
+  zselect -t 1 2>/dev/null || true
+done
+[[ -s $FAKE_HANGING_CHILD_PID ]] ||
+  fail 'the killed-login fixture must reach the provider login'
+kill -KILL $login_kill_pid 2>/dev/null || true
+wait $login_kill_pid 2>/dev/null || true
+test_process_fixture_untrack_pid $login_kill_pid
+rm -f -- "$FAKE_PASS_LOGIN_HANG"
+assert_no_private_diagnostics 'a killed readiness helper'
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+  fail 'a killed readiness helper must not leave its login child running'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+[[ -f $login_marker ]] ||
+  fail 'a killed readiness helper must leave its login marker for the next call'
+
+# The #316 case: the killed login stored a session that info accepts while its
+# private token key is missing. The marker makes the next call reset it.
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOG"
+zsh "$ensure_ready" ||
+  fail 'readiness must repair a partial session left by a killed helper'
+[[ $(<"$FAKE_PASS_LOG") == $'info\nlogout --force\nlogin\ninfo' ]] ||
+  fail "a partial session behind a login marker must be reset, not reused: $(<"$FAKE_PASS_LOG")"
+grep -Fqx 'reason=repaired' "$status_file" ||
+  fail 'a partial session behind a login marker must record a repair'
+[[ ! -e $login_marker ]] ||
+  fail 'the repair of a partial session must clear its login marker'
+: > "$FAKE_PASS_LOG"
+zsh "$ensure_ready" ||
+  fail 'the repaired session must stay ready'
+[[ $(<"$FAKE_PASS_LOG") == info ]] ||
+  fail 'without a login marker, a ready session must take the shared first check'
+
+# An unclassified check behind a marker keeps both the session and the marker.
+rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$FAKE_HANGING_CHILD_PID"
+print -r -- started_at=1 >"$login_marker"
+: > "$FAKE_PASS_INFO_HANG"
+: > "$FAKE_PASS_LOG"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+set +e
+marker_timeout_output=$(zsh "$ensure_ready" 2>&1)
+marker_timeout_status=$?
+set -e
+rm -f -- "$FAKE_PASS_INFO_HANG"
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+  fail 'a timed-out check behind a login marker must reap its child'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+(( marker_timeout_status != 0 )) ||
+  fail 'a timed-out check behind a login marker must fail readiness'
+[[ $marker_timeout_output ==
+  'proton-pass-ensure-ready: provider-session readiness check timed out' ]] ||
+  fail "a timed-out check behind a login marker must report the timeout: $marker_timeout_output"
+[[ $(<"$FAKE_PASS_LOG") == info ]] ||
+  fail 'a timed-out check behind a login marker must not reset local state'
+[[ -f $login_marker && -e $FAKE_PASS_LOCAL_SESSION ]] ||
+  fail 'a timed-out check must keep the login marker and the local session'
+rm -f -- "$login_marker" "$FAKE_PASS_LOCAL_SESSION"
+
+# An unusable marker is never followed or replaced, and it stops the call
+# before any check or reset touches a working session.
+login_marker_target=$test_dir/login-marker-target
+print -r -- untouched >"$login_marker_target"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_REMOTE_SESSION"
+for marker_kind in symlink directory; do
+  case $marker_kind in
+    symlink) ln -s -- "$login_marker_target" "$login_marker" ;;
+    directory) mkdir -- "$login_marker" ;;
+  esac
+  : > "$FAKE_PASS_LOG"
+  : > "$FAKE_SECRET_TOOL_LOG"
+  set +e
+  marker_unusable_output=$(zsh "$ensure_ready" 2>&1)
+  marker_unusable_status=$?
+  set -e
+  (( marker_unusable_status != 0 )) ||
+    fail "a $marker_kind login marker must fail readiness"
+  [[ $marker_unusable_output ==
+    'proton-pass-ensure-ready: the login marker must be a regular file' ]] ||
+    fail "a $marker_kind login marker must report it: $marker_unusable_output"
+  [[ ! -s $FAKE_PASS_LOG && ! -s $FAKE_SECRET_TOOL_LOG ]] ||
+    fail "a $marker_kind login marker must stop before any provider or store call"
+  [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]] ||
+    fail "a $marker_kind login marker must leave the session untouched"
+  grep -Fqx 'reason=login-marker-failed' "$status_file" &&
+    grep -Fqx 'last-failure-reason=login-marker-failed' "$status_file" ||
+    fail "a $marker_kind login marker must record login-marker-failed"
+  case $marker_kind in
+    symlink)
+      [[ -L $login_marker && $(<"$login_marker_target") == untouched ]] ||
+        fail 'a symbolic-link login marker must not be followed'
+      rm -f -- "$login_marker"
+      ;;
+    directory)
+      [[ -d $login_marker && -z $(print -r -- "$login_marker"/*(DN)) ]] ||
+        fail 'a directory login marker must be left as found'
+      rmdir -- "$login_marker"
+      ;;
+  esac
+done
+rm -f -- "$login_marker_target" "$FAKE_PASS_LOCAL_SESSION" \
+  "$FAKE_PASS_REMOTE_SESSION"
+
+# A failed repair stores a partial session, then forces it out and clears its
+# marker. A fast check that runs beside it can read that session before the
+# cleanup and finish after the marker is gone, so a marker check cannot catch
+# it. The reader's check starts first and waits for a session; the repair's
+# login stores one and fails once the reader records what it saw. The reader
+# must never report that session ready.
+partial_race_window=$test_dir/partial-race-window
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$partial_race_window"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_PARTIAL_FAIL"
+/usr/bin/env \
+  FAKE_PASS_INFO_AWAIT_SESSION_ONCE="$partial_race_window" \
+  FAKE_PASS_INFO_HOLD_WHILE="$login_marker" \
+  zsh "$ensure_ready" >"$test_dir/partial-race-reader.out" 2>&1 &
+partial_race_reader_pid=$!
+test_process_fixture_track_pid $partial_race_reader_pid
+zmodload zsh/zselect
+integer partial_race_polls=500
+# The reader's check is running once its info call is logged.
+while (( partial_race_polls-- > 0 )) && [[ ! -s $FAKE_PASS_LOG ]]; do
+  zselect -t 1 2>/dev/null || true
+done
+[[ -s $FAKE_PASS_LOG ]] || fail 'the racing reader must start its check'
+set +e
+/usr/bin/env FAKE_PASS_LOGIN_PARTIAL_GATE="$partial_race_window" \
+  zsh "$ensure_ready" >"$test_dir/partial-race-repair.out" 2>&1
+partial_race_repair_status=$?
+wait $partial_race_reader_pid
+partial_race_reader_status=$?
+set -e
+test_process_fixture_untrack_pid $partial_race_reader_pid
+rm -f -- "$FAKE_PASS_LOGIN_PARTIAL_FAIL"
+(( partial_race_repair_status != 0 )) ||
+  fail 'the racing repair fixture must fail its login'
+(( partial_race_reader_status != 0 )) &&
+  ! grep -Fqx 'reason=existing-session' "$status_file" ||
+  fail "a check beside a failed repair must not report its partial session ready: status=$partial_race_reader_status check=$(<"$partial_race_window") output=$(<"$test_dir/partial-race-reader.out")"
+[[ $(<"$partial_race_window") == missed ]] ||
+  fail 'a fast check must not overlap a repair that stores a partial session'
+[[ $(<"$test_dir/partial-race-reader.out") ==
+  'proton-pass-ensure-ready: provider-session repair failed' ]] ||
+  fail "the reader must repair after the failed repair, not reuse it: $(<"$test_dir/partial-race-reader.out")"
+[[ ! -e $FAKE_PASS_LOCAL_SESSION && ! -e $login_marker ]] ||
+  fail 'failed repairs must leave neither a partial session nor a marker'
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
   "$FAKE_DESCENDANT_PID" "$FAKE_DESCENDANT_TOKEN_MARKER"
@@ -1677,8 +2891,9 @@ test_process_fixture_untrack_pid_file "$FAKE_DESCENDANT_PID"
 rm -f -- "$FAKE_PASS_LOGIN_DESCENDANT"
 (( login_timeout_status != 0 )) ||
   fail 'a provider login with a surviving descendant must fail readiness'
-(( login_timeout_elapsed < 9.0 )) ||
-  fail 'a provider-login process group must fail within the production deadline'
+# The login deadline; the instant forced cleanup adds well under a second.
+(( login_timeout_elapsed < 9.5 )) ||
+  fail 'a provider-login process group must fail within the production deadlines'
 [[ $login_timeout_output ==
   'proton-pass-ensure-ready: provider-session repair timed out' ]] ||
   fail 'a provider-login timeout must report one value-free error'
@@ -1704,30 +2919,41 @@ set -e
   fail 'a failed verification must report one value-free error'
 grep -Fqx 'reason=verify-failed' "$status_file" ||
   fail 'a failed verification must record its value-free reason'
-rm -f -- "$FAKE_PASS_SKIP_REMOTE_SESSION"
+[[ -f $login_marker ]] ||
+  fail 'a login that fails verification must keep its login marker'
+rm -f -- "$FAKE_PASS_SKIP_REMOTE_SESSION" "$login_marker"
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
   "$FAKE_HANGING_CHILD_PID"
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_PASS_VERIFY_HANG"
 test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+typeset -F verify_timeout_started=$EPOCHREALTIME
 set +e
 verify_timeout_output=$(zsh "$ensure_ready" 2>&1)
 verify_timeout_status=$?
 set -e
+typeset -F verify_timeout_elapsed=$(( EPOCHREALTIME - verify_timeout_started ))
 (( verify_timeout_status != 0 )) ||
   fail 'a hanging repaired-session verification must fail readiness'
+(( verify_timeout_elapsed >= 5.0 && verify_timeout_elapsed < 7.5 )) ||
+  fail "a hanging verification must use its full production deadline: elapsed=$verify_timeout_elapsed"
 [[ $verify_timeout_output ==
   'proton-pass-ensure-ready: repaired provider-session verification timed out' ]] ||
   fail 'a provider-verification timeout must report one value-free error'
 grep -Fqx 'reason=verify-timeout' "$status_file" ||
   fail 'a provider-verification timeout must record its value-free reason'
+[[ -f $login_marker ]] ||
+  fail 'a login whose verification times out must keep its login marker'
+rm -f -- "$login_marker"
 hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
 ! kill -0 $hanging_child_pid 2>/dev/null ||
   fail 'a timed-out provider-verification child must be terminated and reaped'
 test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
 rm -f -- "$FAKE_PASS_VERIFY_HANG"
 
+# A holder that keeps the lock past every wait: the first check's shared wait
+# expires, then the exclusive path's takeover window and extended wait.
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
 lock_file=$state_home/secret-exec/proton-pass-readiness.lock
@@ -1740,7 +2966,7 @@ zsh -f -c '
   integer lock_fd
   zsystem flock -t 1 -f lock_fd "$1"
   : > "$2"
-  zselect -t 1850 || true
+  zselect -t 6000 || true
 ' -- "$lock_file" "$lock_ready" &
 lock_holder_pid=$!
 test_process_fixture_track_pid $lock_holder_pid
@@ -1748,20 +2974,25 @@ zmodload zsh/zselect
 while [[ ! -e $lock_ready ]]; do
   zselect -t 1 || true
 done
+typeset -F lock_timeout_started=$EPOCHREALTIME
 set +e
 lock_output=$(zsh "$ensure_ready" 2>&1)
 lock_status=$?
 set -e
-wait $lock_holder_pid
+typeset -F lock_timeout_elapsed=$(( EPOCHREALTIME - lock_timeout_started ))
+kill $lock_holder_pid 2>/dev/null || true
+wait $lock_holder_pid 2>/dev/null || true
 test_process_fixture_untrack_pid $lock_holder_pid
 (( lock_status != 0 )) || fail 'a repair lock timeout must fail readiness'
+(( lock_timeout_elapsed >= 26.5 )) ||
+  fail "a lock timeout must cover the shared wait, takeover window, and extended concurrent wait: elapsed=$lock_timeout_elapsed"
 [[ $lock_output ==
   'proton-pass-ensure-ready: timed out waiting for provider-session repair' ]] ||
   fail 'a lock timeout must report one value-free error'
 grep -Fqx 'reason=lock-timeout' "$status_file" ||
   fail 'a lock timeout must record its value-free reason'
-! /usr/bin/grep -Fqx login "$FAKE_PASS_LOG" ||
-  fail 'a lock timeout must not attempt provider login'
+[[ ! -s $FAKE_PASS_LOG ]] ||
+  fail "a caller whose lock waits expire must not call the provider: $(<"$FAKE_PASS_LOG")"
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
@@ -1881,6 +3112,13 @@ grep -Fqx 'waiter-stage=unrecorded' "$status_file" ||
   fail 'readiness must suppress provider account metadata'
 ! /usr/bin/grep -F 'waiter-stage-canary' "$test_dir"/*.log "$status_file" >/dev/null ||
   fail 'readiness must not persist an inherited waiter-stage canary'
+! /usr/bin/grep -RF "$fixture_token" "$state_home" >/dev/null ||
+  fail 'readiness state must not contain the bootstrap token'
+! /usr/bin/grep -F 'diagnostic-text-canary' "$test_dir"/*.log "$status_file" >/dev/null ||
+  fail 'readiness must not persist inherited diagnostic text'
+[[ -e $PROTON_PASS_DIAGNOSTIC_FILE ]] ||
+  fail 'readiness must never remove an inherited diagnostic path'
+assert_no_private_diagnostics 'the readiness suite'
 
 symlink_state_home=$test_dir/symlink-state-home
 symlink_state_target=$test_dir/symlink-state-target
