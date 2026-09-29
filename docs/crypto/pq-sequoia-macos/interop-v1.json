@@ -131,8 +131,20 @@
     "rule": "The seven finite cryptographic transfer artifacts are the complete reciprocal map. Both peers can observe all seven before phase C. Transport envelopes, result JSON files, and SHA256SUMS are indexed separately because including a container's own digest inside itself is impossible. macOS rejects any missing, extra, or unequal Hatchery record."
   },
   "relay_binding": {
-    "selection": "The relay run title contains the exact qualifier run ID and phase-B envelope digest. The qualifier requires exactly one successful run with that title, then validates its exact database ID, event, status, conclusion, and head SHA against the reviewed qualifier commit before download.",
-    "retention": "The validated relay metadata is copied into results/macos-ci.json and the final evidence artifact."
+    "selection": "The relay run title contains the exact session ID, qualifier run ID, and phase-B envelope digest. The qualifier observes every returned workflow-dispatch run without filtering by state, rejects more than one exact title match, waits until the sole match is completed successfully, then validates its exact database ID, event, status, conclusion, and head SHA against the reviewed qualifier commit before download.",
+    "final_check": "Immediately after closing the live exchange and before final evidence indexing, the qualifier repeats the same bounded observation and requires the sole exact title match to be the selected successful run.",
+    "duplicate_rule": "Any second exact title match observed at either check rejects the session, including a queued, pending, in-progress, completed unsuccessful, or completed successful run.",
+    "observation_coverage": {
+      "workflow": "pq-sequoia-macos.yml",
+      "event": "workflow_dispatch",
+      "requested_limit": 1000,
+      "provider_result_cap": 1000,
+      "accepted_maximum": 999,
+      "failure": "A failed or malformed query rejects the session. A response containing 1,000 records reaches the documented provider search cap and is treated as potentially truncated, so it also rejects instead of producing an accepted observation."
+    },
+    "retained_observations": ["relay-observation-selection.json", "relay-observation-final.json"],
+    "retention": "Each retained observation records its stage, exact exchange binding, selected run ID, bounded query coverage, and every exact title match. The validated relay metadata remains copied into results/macos-ci.json.",
+    "temporal_limit": "Submissions after the final check are outside the guarantee. The two bounded observations are not a permanent or global uniqueness guarantee and do not form an atomic provider snapshot."
   },
   "phase_b_closure_artifact": {
     "files": ["macos-ci-phase-b.json", "runtime-closure.json"],

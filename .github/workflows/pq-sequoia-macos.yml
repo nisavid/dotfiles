@@ -466,19 +466,27 @@ jobs:
             gh run list \
               --workflow pq-sequoia-macos.yml \
               --event workflow_dispatch \
-              --limit 100 \
+              --limit 1000 \
               --json databaseId,displayTitle,event,headSha,status,conclusion \
-              >"$PQ_SCRATCH/public/relay-runs.json"
-            jq --arg target "$target" \
-              '[.[] | select(.displayTitle == $target and .status == "completed" and .conclusion == "success")]' \
-              "$PQ_SCRATCH/public/relay-runs.json" \
-              >"$PQ_SCRATCH/public/matching-relay-runs.json"
-            count=$(jq 'length' "$PQ_SCRATCH/public/matching-relay-runs.json")
-            (( count <= 1 ))
-            if (( count == 1 )); then
-              jq '.[0]' "$PQ_SCRATCH/public/matching-relay-runs.json" \
+              >"$PQ_SCRATCH/public/relay-runs-selection.json"
+            scripts/pq-sequoia-macos record-relay-observation \
+              --runs "$PQ_SCRATCH/public/relay-runs-selection.json" \
+              --stage selection \
+              --session-id "$PQ_SESSION_ID" \
+              --qualifier-run-id "$GITHUB_RUN_ID" \
+              --phase-b-sha256 "$PQ_PHASE_B_SHA256" \
+              --expected-commit "$PQ_CANDIDATE_COMMIT" \
+              --output "$PQ_SCRATCH/public/relay-observation-selection.json"
+            if [[ "$(jq -r '.selection_ready' \
+              "$PQ_SCRATCH/public/relay-observation-selection.json")" == true ]]
+            then
+              response_run=$(jq -r '.exchange_binding.selected_run_id' \
+                "$PQ_SCRATCH/public/relay-observation-selection.json")
+              cp "$PQ_SCRATCH/public/relay-observation-selection.json" \
+                "$PQ_SCRATCH/evidence/relay-observation-selection.json"
+              jq '.matching_runs[0]' \
+                "$PQ_SCRATCH/public/relay-observation-selection.json" \
                 >"$PQ_SCRATCH/public/relay-run.json"
-              response_run=$(jq -r '.databaseId' "$PQ_SCRATCH/public/relay-run.json")
             fi
             [[ -z "$response_run" ]] || break
             sleep 30
@@ -518,6 +526,32 @@ jobs:
             --expected-relay-title "pq-sequoia-publish-peer-response-$PQ_SESSION_ID-$GITHUB_RUN_ID-$PQ_PHASE_B_SHA256" \
             --candidate-commit "$PQ_CANDIDATE_COMMIT" \
             --output "$PQ_SCRATCH/evidence/results/macos-ci.json"
+
+      - name: Check relay again before final evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PQ_SESSION_ID: ${{ inputs.session_id }}
+          PQ_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+        run: |
+          set -euo pipefail
+          response_run=$(jq -r '.databaseId' \
+            "$PQ_SCRATCH/evidence/relay-run.json")
+          gh run list \
+            --workflow pq-sequoia-macos.yml \
+            --event workflow_dispatch \
+            --limit 1000 \
+            --json databaseId,displayTitle,event,headSha,status,conclusion \
+            >"$PQ_SCRATCH/public/relay-runs-final.json"
+          scripts/pq-sequoia-macos record-relay-observation \
+            --runs "$PQ_SCRATCH/public/relay-runs-final.json" \
+            --stage final \
+            --session-id "$PQ_SESSION_ID" \
+            --qualifier-run-id "$GITHUB_RUN_ID" \
+            --phase-b-sha256 "$PQ_PHASE_B_SHA256" \
+            --expected-commit "$PQ_CANDIDATE_COMMIT" \
+            --selected-run-id "$response_run" \
+            --output "$PQ_SCRATCH/evidence/relay-observation-final.json"
 
       - name: Finalize value-free evidence
         shell: bash

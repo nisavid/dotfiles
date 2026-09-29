@@ -19,7 +19,7 @@ revision and receives separate acceptance.
   the Homebrew/core formula revision, and the Apple Silicon Sequoia bottle.
 - [`interop-v1.json`](interop-v1.json) defines the four-phase exchange with
   dotfiles #148. Its review-candidate SHA-256 is
-  `0a542bed779baa5ec0ce98fbd80611819f44913b8e878cfaf66e677e831fc2e0`.
+  `83e4fa6419aa3e8d30152c6c56f9fd6a1c1780f51cede5b796255f43df3e5f6e`.
   Its fixed [message](fixtures/v1/message.bin) is exactly 51 bytes and has SHA-256
   `6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337`.
 - [`pq-sequoia-macos`](../../../scripts/pq-sequoia-macos) validates those
@@ -27,7 +27,8 @@ revision and receives separate acceptance.
   pre-patch archives, binds Homebrew's active OpenSSL formula, commits and
   verifies the ephemeral tap, inspects key-packet versions, controls exact-keg
   selection, records the Mach-O and runtime closures, and opens and closes the
-  live exchange.
+  live exchange. Its `record-relay-observation` command validates and records
+  the bounded selection and final relay checks from inert workflow-run JSON.
 - [`pq-sequoia-macos.yml`](../../../.github/workflows/pq-sequoia-macos.yml) is
   manual-only. It has no push, pull-request, schedule, or release trigger.
 
@@ -261,16 +262,50 @@ gh workflow run pq-sequoia-macos.yml \
   -f parent_envelope_sha256="$phase_b_sha256"
 ```
 
-The relay run title and artifact name contain the exact qualifier run ID and
-phase-B digest. The original job requires exactly one successful run with that
-title, validates its database ID and head SHA against the reviewed qualifier
-commit, and retains that metadata before downloading. It then authenticates
-phase C under the phase-A certificate, reconciles every Hatchery artifact-map
-entry with its own observation, decrypts with its still-local secret, runs the
-tamper-negative check, writes both public results, and removes the secret
-workspace. The relay window is 45 minutes. Timeout, ambiguity, revision drift,
-or any mismatch rejects the session and cleans up; a later job cannot resume it
-because the required secret no longer exists.
+The relay run title and artifact name contain the exact session ID, qualifier
+run ID, and phase-B digest. At selection, the original job asks for up to 1,000
+workflow-dispatch runs from `pq-sequoia-macos.yml` and passes the unchanged JSON
+to the maintained validator:
+
+```sh
+scripts/pq-sequoia-macos record-relay-observation \
+  --runs relay-runs-selection.json \
+  --stage selection \
+  --session-id "$session_id" \
+  --qualifier-run-id "$qualifier_run_id" \
+  --phase-b-sha256 "$phase_b_sha256" \
+  --expected-commit "$reviewed_commit" \
+  --output relay-observation-selection.json
+```
+
+The command matches the exact title before considering state. More than one
+match rejects immediately, whether the second run is queued, pending,
+in-progress, completed unsuccessfully, or completed successfully. Zero matches
+or one unfinished or unsuccessful match produces `selection_ready=false`, so
+the workflow continues polling. One completed successful match is selected and
+still must pass the exact relay metadata validator before download. Unrelated
+titles are retained in the observation count but do not become duplicates.
+
+After phase C is authenticated and the live exchange closes, the workflow
+queries again and invokes the same command with `--stage final` and
+`--selected-run-id`. Final evidence proceeds only when the sole title match is
+the selected completed-successful run. The selection and final records are
+retained as `relay-observation-selection.json` and
+`relay-observation-final.json`; each contains the structured exchange binding,
+selected run ID, returned-record count, query limit, and exact matching rows.
+
+The provider documents a 1,000-result cap for this filtered workflow-run
+search. The workflow requests that full bound, and the validator accepts at
+most 999 returned records. A failed query, malformed response, absent selected
+run at the final check, or 1,000-record response rejects without leaving an
+accepted observation, because the claimed view may be incomplete. The relay
+window remains 45 minutes. Timeout, ambiguity, revision drift, or any mismatch
+rejects the session and cleans up; a later job cannot resume it because the
+required secret no longer exists.
+
+Submissions after the final check are outside the guarantee. These two bounded
+observations are not a permanent or global uniqueness guarantee and are not an
+atomic provider snapshot.
 
 Revocation packets do not cross platforms. The accepted contract requires
 each side's emergency certificate, retired certificate, retired signing
@@ -283,11 +318,12 @@ diagnostics.
 
 The final macOS artifact contains the candidate and protocol, fixed message,
 source-verification receipt, all three envelopes, both peer results with
-identical seven-artifact maps, exact relay-run metadata, local results, bottle
-metadata, the tap closure, the runtime closure, and `SHA256SUMS`. The runtime
-closure does not contain its own digest; phase B and the peer results bind that
-digest. Envelope, result, closure, and index digests remain separate from the
-reciprocal map because a container cannot contain its own digest.
+identical seven-artifact maps, exact relay-run metadata, both bounded relay
+observation records, local results, bottle metadata, the tap closure, the
+runtime closure, and `SHA256SUMS`. The runtime closure does not contain its own
+digest; phase B and the peer results bind that digest. Envelope, result,
+closure, observation, and index digests remain separate from the reciprocal map
+because a container cannot contain its own digest.
 Acceptance still requires #258 to reconcile the #147 and #148 evidence, a
 fresh independent review tied to the executed revision, the exact workflow
 run and runner image, and a fresh #149 decision.

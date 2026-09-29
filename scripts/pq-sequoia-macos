@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 MESSAGE_SHA256 = "6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337"
-PROTOCOL_SHA256 = "0a542bed779baa5ec0ce98fbd80611819f44913b8e878cfaf66e677e831fc2e0"
+PROTOCOL_SHA256 = "83e4fa6419aa3e8d30152c6c56f9fd6a1c1780f51cede5b796255f43df3e5f6e"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 FINGERPRINT_RE = re.compile(r"[0-9A-F]{40}")
 IDENTITY_RE = re.compile(r"sha256:[0-9a-f]{64}")
@@ -28,6 +28,7 @@ SESSION_RE = re.compile(r"[0-9a-f]{64}")
 MAX_ENVELOPE_BYTES = 2 * 1024 * 1024
 MAX_PAYLOAD_BYTES = 1024 * 1024
 DISPATCH_ENVELOPE_MAX_BYTES = 46000
+RELAY_QUERY_LIMIT = 1000
 STATE_MARKER = ".pq-sequoia-disposable-state"
 STATE_MARKER_CONTENT = "pq-sequoia-disposable-state/v1\n"
 PHASE_PAYLOADS = {
@@ -829,6 +830,117 @@ def validate_relay_metadata(
     ):
         raise ProcedureError("relay execution metadata mismatch")
     return value
+
+
+def read_relay_runs(path: Path) -> list[dict[str, Any]]:
+    try:
+        if path.stat().st_size > MAX_ENVELOPE_BYTES:
+            raise ProcedureError("relay observation exceeds the size limit")
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=unique_json_object,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ProcedureError("invalid relay observation JSON") from error
+    if not isinstance(value, list):
+        raise ProcedureError("relay observation must be an array")
+    required = {
+        "databaseId",
+        "displayTitle",
+        "event",
+        "headSha",
+        "status",
+        "conclusion",
+    }
+    for run in value:
+        if not isinstance(run, dict) or set(run) != required:
+            raise ProcedureError("relay observation fields mismatch")
+        if (
+            isinstance(run.get("databaseId"), bool)
+            or not isinstance(run.get("databaseId"), int)
+            or run["databaseId"] <= 0
+            or not all(
+                isinstance(run.get(field), str)
+                for field in ("displayTitle", "event", "headSha", "status")
+            )
+            or not (
+                run.get("conclusion") is None
+                or isinstance(run.get("conclusion"), str)
+            )
+        ):
+            raise ProcedureError("relay observation field types mismatch")
+    return value
+
+
+def record_relay_observation(arguments: argparse.Namespace) -> None:
+    arguments.output.unlink(missing_ok=True)
+    if not SESSION_RE.fullmatch(arguments.session_id):
+        raise ProcedureError("relay session identifier is invalid")
+    if not arguments.qualifier_run_id.isdecimal():
+        raise ProcedureError("relay qualifier run identifier is invalid")
+    if not SHA256_RE.fullmatch(arguments.phase_b_sha256):
+        raise ProcedureError("relay phase-B digest is invalid")
+    expected_title = (
+        "pq-sequoia-publish-peer-response-"
+        f"{arguments.session_id}-{arguments.qualifier_run_id}-"
+        f"{arguments.phase_b_sha256}"
+    )
+    runs = read_relay_runs(arguments.runs)
+    if len(runs) >= RELAY_QUERY_LIMIT:
+        raise ProcedureError("relay observation reached the provider result limit")
+    matches = [
+        run for run in runs if run["displayTitle"] == expected_title
+    ]
+    if len(matches) > 1:
+        raise ProcedureError("matching relay duplicate observed")
+
+    selected = None
+    if matches:
+        match = matches[0]
+        if (
+            match["event"] != "workflow_dispatch"
+            or match["headSha"] != arguments.expected_commit
+        ):
+            raise ProcedureError("matching relay binding mismatch")
+        if match["status"] == "completed" and match["conclusion"] == "success":
+            selected = match
+
+    if arguments.stage == "final":
+        if selected is None:
+            raise ProcedureError("selected relay run absent from final observation")
+        if str(selected["databaseId"]) != arguments.selected_run_id:
+            raise ProcedureError("selected relay run changed before final evidence")
+
+    record = {
+        "schema_version": "pq-sequoia-relay-observation/v1",
+        "stage": arguments.stage,
+        "exchange_binding": {
+            "relay_title": expected_title,
+            "session_id": arguments.session_id,
+            "qualifier_run_id": arguments.qualifier_run_id,
+            "phase_b_sha256": arguments.phase_b_sha256,
+            "candidate_commit": arguments.expected_commit,
+            "selected_run_id": (
+                str(selected["databaseId"]) if selected is not None else None
+            ),
+        },
+        "coverage": {
+            "workflow": "pq-sequoia-macos.yml",
+            "event": "workflow_dispatch",
+            "provider_result_cap": RELAY_QUERY_LIMIT,
+            "requested_result_limit": RELAY_QUERY_LIMIT,
+            "observed_result_count": len(runs),
+            "result_limit_reached": False,
+        },
+        "matching_runs": matches,
+        "selection_ready": selected is not None,
+        "temporal_limit": (
+            "Submissions after the final check are outside the guarantee; the "
+            "two observations are not a permanent or global uniqueness claim "
+            "and are not an atomic provider snapshot."
+        ),
+    }
+    write_json(arguments.output, record)
 
 
 def validate_envelope(
@@ -2339,6 +2451,18 @@ def build_parser() -> argparse.ArgumentParser:
     relay_parser.add_argument("--expected-commit", required=True)
     relay_parser.add_argument("--output", type=Path, required=True)
 
+    observation_parser = subparsers.add_parser("record-relay-observation")
+    observation_parser.add_argument("--runs", type=Path, required=True)
+    observation_parser.add_argument(
+        "--stage", choices=("selection", "final"), required=True
+    )
+    observation_parser.add_argument("--session-id", required=True)
+    observation_parser.add_argument("--qualifier-run-id", required=True)
+    observation_parser.add_argument("--phase-b-sha256", required=True)
+    observation_parser.add_argument("--expected-commit", required=True)
+    observation_parser.add_argument("--selected-run-id")
+    observation_parser.add_argument("--output", type=Path, required=True)
+
     cleanup_parser = subparsers.add_parser("cleanup")
     cleanup_parser.add_argument("--state-dir", type=Path, required=True)
     return parser
@@ -2387,6 +2511,8 @@ def main() -> int:
             inspect_certificate_command(arguments)
         elif arguments.command == "validate-relay":
             validate_relay(arguments)
+        elif arguments.command == "record-relay-observation":
+            record_relay_observation(arguments)
         elif arguments.command == "cleanup":
             cleanup(arguments)
         else:
