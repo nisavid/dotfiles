@@ -30,6 +30,7 @@ class InstallationCommandTests(unittest.TestCase):
             "XDG_DATA_HOME": str(self.home / ".local/share"),
             "XDG_STATE_HOME": str(self.home / ".local/state"),
             "XDG_CACHE_HOME": str(self.home / ".cache"),
+            "PROVINGKIT_TEST_LOCAL_ARTIFACTS": "1",
         }
 
     def run_command(self, command: str) -> tuple[int, dict]:
@@ -87,6 +88,16 @@ class InstallationCommandTests(unittest.TestCase):
         code, report = self.run_command("validate")
 
         self.assertEqual((code, report["outcome"]), (64, "invalid_selection"))
+
+    def test_local_artifact_urls_require_explicit_fixture_mode(self) -> None:
+        self.selection.write_text(json.dumps(fixture_selection(self.home)))
+        self.environment.pop("PROVINGKIT_TEST_LOCAL_ARTIFACTS")
+
+        code, report = self.run_command("validate")
+
+        self.assertEqual((code, report["outcome"]), (64, "invalid_selection"))
+        self.assertIn("HTTPS", report["message"])
+        self.assertFalse((self.home / ".cursor").exists())
 
     def test_status_verifies_artifact_but_not_cursor_enablement(self) -> None:
         self.selection.write_text(json.dumps(fixture_selection(self.home)))
@@ -193,6 +204,7 @@ class InstallationCommandTests(unittest.TestCase):
             "TMPDIR": str(self.home / "tmp"),
             "PATH": str(binary_dir) + ":/usr/bin:/bin:/usr/local/bin",
             "LANG": "C.UTF-8",
+            "PROVINGKIT_TEST_LOCAL_ARTIFACTS": "1",
         }
 
     def test_native_fresh_install_observes_bytes_scopes_and_enablement(self) -> None:
@@ -234,6 +246,13 @@ class InstallationCommandTests(unittest.TestCase):
         ] = False
         self.selection.write_text(json.dumps(selection))
         _, before = self.run_command("reconcile")
+        replaced = {
+            client: (
+                Path(before["clients"][client]["members"]["proseweaving"]["path"])
+                / "skills/fixture/SKILL.md"
+            ).read_bytes()
+            for client in ("codex", "claude")
+        }
         marker = self.home / ".claude/plugins/data/proseweaving-provingkit/keep.txt"
         marker.parent.mkdir(parents=True)
         marker.write_text("persistent plugin data\n")
@@ -266,6 +285,20 @@ class InstallationCommandTests(unittest.TestCase):
                 )
             )
         self.assertEqual(marker.read_text(), "persistent plugin data\n")
+        receipt = json.loads(
+            (self.home / ".local/state/provingkit/installations.json").read_text()
+        )
+        for client in ("codex", "claude"):
+            backups = [
+                item
+                for item in receipt.get("native_backups", [])
+                if item["client"] == client and item["member"] == "proseweaving"
+            ]
+            self.assertTrue(backups, f"missing {client} recovery copy")
+            self.assertEqual(
+                (Path(backups[-1]["path"]) / "skills/fixture/SKILL.md").read_bytes(),
+                replaced[client],
+            )
         for choice in selection["profile"]["clients"].values():
             choice["members"]["versionkeeping"] = {"enabled": True}
         selection["profile"]["clients"]["claude"]["members"]["versionkeeping"][
@@ -313,6 +346,9 @@ class InstallationCommandTests(unittest.TestCase):
         selected["profile"]["clients"]["codex"]["members"]["versionkeeping"] = {
             "enabled": True
         }
+        self.selection.write_text(json.dumps(original))
+        code, baseline = self.run_command("reconcile")
+        self.assertEqual((code, baseline["outcome"]), (0, "converged"), baseline)
         self.selection.write_text(json.dumps(selected))
         code, adopted = self.run_command("reconcile")
         self.assertEqual((code, adopted["outcome"]), (0, "converged"), adopted)
@@ -370,6 +406,20 @@ class InstallationCommandTests(unittest.TestCase):
             member: {"enabled": True}
             for member in ("proseweaving", "versionkeeping", "mergecraft")
         }
+        self.selection.write_text(json.dumps(desired))
+
+        code, unrecognized = self.run_command("reconcile")
+        self.assertEqual(code, 2, unrecognized)
+        self.assertIn(
+            "unrecognized selected cache", unrecognized["clients"]["claude"]["message"]
+        )
+        self.assertEqual(unrecognized["clients"]["claude"]["actions"], [])
+        original["profile"]["clients"]["claude"]["members"] = desired["profile"][
+            "clients"
+        ]["claude"]["members"]
+        self.selection.write_text(json.dumps(original))
+        code, baseline = self.run_command("reconcile")
+        self.assertEqual((code, baseline["outcome"]), (0, "converged"), baseline)
         self.selection.write_text(json.dumps(desired))
 
         code, report = self.run_command("reconcile")
@@ -515,6 +565,36 @@ class InstallationCommandTests(unittest.TestCase):
                 for value in repaired["clients"].values()
             )
         )
+
+    def test_changed_selected_cache_is_preserved_with_or_without_prior_receipt(self):
+        self.use_native_clients()
+        self.selection.write_text(
+            json.dumps(fixture_selection(self.home, clients=("codex", "claude")))
+        )
+        code, installed = self.run_command("reconcile")
+        self.assertEqual(code, 0, installed)
+        changed = []
+        for client in ("codex", "claude"):
+            path = Path(installed["clients"][client]["members"]["proseweaving"]["path"])
+            skill = path / "skills/fixture/SKILL.md"
+            skill.write_text("Unexplained local edits must survive.\n")
+            changed.append(skill)
+        for retained_receipt in (True, False):
+            with self.subTest(retained_receipt=retained_receipt):
+                if not retained_receipt:
+                    (self.home / ".local/state/provingkit/installations.json").unlink()
+                code, report = self.run_command("reconcile")
+                self.assertEqual(code, 2, report)
+                for client in ("codex", "claude"):
+                    self.assertIn(
+                        "unrecognized selected cache",
+                        report["clients"][client]["message"],
+                    )
+                    self.assertEqual(report["clients"][client]["actions"], [])
+                for skill in changed:
+                    self.assertEqual(
+                        skill.read_text(), "Unexplained local edits must survive.\n"
+                    )
 
     def test_native_generated_adapter_drift_is_unavailable(self) -> None:
         self.use_native_clients()

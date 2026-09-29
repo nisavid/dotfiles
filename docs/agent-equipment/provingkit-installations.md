@@ -63,7 +63,9 @@ members from different snapshots into a newly authored marketplace.
    the chosen source commit. The installer never builds from a working checkout
    or resolves a moving branch. Publishing those inputs is a separate step.
 2. Record the reviewed URLs and digests in one profile. Production selections
-   use durable HTTPS URLs; the tests use public synthetic `file:` fixtures.
+   require durable HTTPS URLs. The command and acquisition template reject
+   local URLs unless `PROVINGKIT_TEST_LOCAL_ARTIFACTS=1` explicitly enables
+   disposable synthetic fixtures; never enable that mode for a host deployment.
    Keep the complete artifact slate separate from each client's selected members.
    The archive root name records the producer's single root; chezmoi strips one
    component and the reconciler verifies the extracted tree.
@@ -124,11 +126,23 @@ with reconciliation and inspect an interrupted run before changing its selection
 
 For steady-state changes, replace the owned stable marketplace copy, refresh
 Claude's directory marketplace, and compare each selected installed subtree.
-A changed, registered member is removed and reinstalled through native commands;
+A changed, registered member is removed and reinstalled through native commands
+only when its current files and modes match the last verified installation
+inventory. Before removal, retain and verify a complete recovery copy under
+`~/.local/state/provingkit/backups/`, including native-generated files. Record
+the copy and its original path in `native_backups` in the observation receipt;
 Claude removal always uses `--scope user --keep-data`. A missing cache is
 installed again. Unchanged members receive no install action. Claude's declared
 enabled state is restored with its scoped native enable/disable commands.
 Codex's persistent disable control is unavailable through the measured CLI.
+
+For first adoption, declare an artifact that matches the installed content and
+reconcile that baseline before selecting newer bytes. A missing inventory or
+unexplained local edit stops replacement before native changes. Keep the
+installed files intact and resolve their identity with the adoption owner;
+do not edit the observation receipt to make an unknown installation appear
+recognized. This also applies to installations recorded by older versions of
+this procedure that lack the `native_files` inventory.
 
 An initial source rebind differs by client:
 

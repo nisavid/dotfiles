@@ -155,8 +155,14 @@ def validate(selection: dict) -> dict | None:
             require(is_digest(artifact[kind]["sha256"]), f"invalid {kind} digest")
             require(
                 isinstance(artifact[kind]["url"], str)
-                and artifact[kind]["url"].startswith(("https://", "file:///")),
-                f"invalid {kind} URL",
+                and (
+                    artifact[kind]["url"].startswith("https://")
+                    or (
+                        os.environ.get("PROVINGKIT_TEST_LOCAL_ARTIFACTS") == "1"
+                        and artifact[kind]["url"].startswith("file:///")
+                    )
+                ),
+                f"{kind} URL must use HTTPS (local files require explicit fixture mode)",
             )
     require(
         profile["retirements"] == [],
@@ -317,6 +323,7 @@ class NativeClient:
         native_require(self.executable is not None, f"{name} executable is unavailable")
         self.actions = []
         self.install_paths = {}
+        self.replacement_files = {}
         self.config = Path(
             os.environ.get(
                 "CODEX_HOME" if name == "codex" else "CLAUDE_CONFIG_DIR",
@@ -510,6 +517,31 @@ class NativeClient:
             self.install_paths[member] = str(path)
 
     def uninstall(self, member: str) -> None:
+        _, rows = self.observe()
+        path = self.installed_path(member, rows[member], self.receipt)
+        if path.exists() or path.is_symlink():
+            actual = files(path)
+            native_require(
+                self.replacement_files.get(member) == actual,
+                f"selected cache changed before removal: {member}",
+            )
+            parent = self.home / ".local/state/provingkit/backups"
+            parent.mkdir(parents=True, exist_ok=True)
+            backup = (
+                Path(tempfile.mkdtemp(prefix=f"{self.name}-{member}-", dir=parent))
+                / "previous"
+            )
+            shutil.copytree(path, backup)
+            native_require(files(backup) == actual, "native recovery copy differs")
+            self.receipt.setdefault("native_backups", []).append(
+                {
+                    "client": self.name,
+                    "member": member,
+                    "path": str(backup),
+                    "previous_path": str(path),
+                    "files": actual,
+                }
+            )
         self.call(
             "plugin",
             "remove" if self.name == "codex" else "uninstall",
@@ -657,6 +689,15 @@ def native_reconcile(
     native.receipt = receipt
     native.sentinels = native.snapshot(rows, unselected)
     current = native_status(native, choice, root, marketplace, rows, receipt)
+    for member, observed in current["members"].items():
+        if observed["content"] != "absent":
+            native.replacement_files[member] = files(Path(observed["path"]))
+        if observed["content"] == "different":
+            previous = receipt.get("native_files", {}).get(native.name, {}).get(member)
+            native_require(
+                previous == files(Path(observed["path"])),
+                f"unrecognized selected cache for {member}; reconcile its contents with the owner before replacement",
+            )
     changed = project_directory(root, stable, home, receipt)
     if rebind:
         receipt.setdefault("source_transitions", []).append(
@@ -741,6 +782,8 @@ def load_receipt(home: Path) -> dict:
     )
     native_require(
         isinstance(receipt.get("native_paths", {}), dict)
+        and isinstance(receipt.get("native_files", {}), dict)
+        and isinstance(receipt.get("native_backups", []), list)
         and isinstance(receipt.get("source_transitions", []), list),
         "unrecognized observation history",
     )
@@ -930,6 +973,16 @@ def main() -> int:
                             native, choice, root, marketplace, rows, receipt
                         )
                     report["clients"][client] = observation
+                    if native is not None and args.command == "reconcile":
+                        inventories = receipt.setdefault("native_files", {}).setdefault(
+                            client, {}
+                        )
+                        for member, observed in observation["members"].items():
+                            if (
+                                observed["content"] == "match"
+                                and observed["registered"]
+                            ):
+                                inventories[member] = files(Path(observed["path"]))
                     if client == "codex" and args.command == "reconcile":
                         for member, observed in observation["members"].items():
                             if (

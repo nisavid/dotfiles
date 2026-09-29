@@ -47,6 +47,7 @@ class ProvingkitDeploymentTests(unittest.TestCase):
             "XDG_CACHE_HOME": str(self.base / "cache"),
             "PATH": os.environ["PATH"],
             "LANG": "C.UTF-8",
+            "PROVINGKIT_TEST_LOCAL_ARTIFACTS": "1",
         }
 
     def chezmoi(self, *args: str):
@@ -178,6 +179,19 @@ class ProvingkitDeploymentTests(unittest.TestCase):
         )
         self.assertEqual(opted_out.returncode, 0, opted_out.stderr)
         self.assertIsNone(json.loads(opted_out.stdout)["profile"])
+
+    @unittest.skipUnless(
+        os.uname().sysname == "Linux", "active materialization targets Linux"
+    )
+    def test_local_urls_are_rejected_before_acquiring_artifacts(self):
+        self.select_fixture()
+        self.environment.pop("PROVINGKIT_TEST_LOCAL_ARTIFACTS")
+
+        result = self.chezmoi("apply", "--force")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("HTTPS", result.stderr)
+        self.assertFalse((self.home / ".local/share/provingkit").exists())
 
     @unittest.skipUnless(
         os.uname().sysname == "Linux", "active materialization targets Linux"

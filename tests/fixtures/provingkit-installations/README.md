@@ -18,6 +18,11 @@ materialize the literal artifacts and package them into temporary `file:` URLs;
 no test downloads or installs real plugin content. The default dotfiles profile
 is inactive and contains no fixture pins.
 
+The test environments explicitly set `PROVINGKIT_TEST_LOCAL_ARTIFACTS=1` to
+permit these local fixture URLs. Without it, both the command and chezmoi
+acquisition template require HTTPS. Keep the fixture setting out of host
+deployment environments.
+
 To reproduce the artifact oracle with a public checkout containing the frozen
 producer commit:
 
@@ -62,3 +67,17 @@ verify parsing only; the recorded probes and the opt-in tests provide the
 native lifecycle evidence. `tests/test_provingkit_deployment.py` performs fresh
 and repeated public-only chezmoi applies, including modes and missing-directory
 repair. It does not load the repository's private source.
+
+The 2026-09-29 rerun passed all 34 installation, deployment, and source-ownership
+tests, including the eight opt-in native cases, with these binaries:
+
+| Client | Version | SHA-256 |
+| --- | --- | --- |
+| Codex | 0.159.0 | `d2752c52353401f7f6efbfcea68796f4f7a3d3e4769f5d1da53fa49d4856b72f` |
+| Claude Code | 2.1.284 | `5cd90aabd83f8a15136c35aa37bb1d92b348993573316643dc3fe4e04afbf88f` |
+
+These tests include refusal to replace unexplained selected cache edits, first
+adoption through a matching artifact, and recovery copies before same-version
+replacement. They establish synthetic native lifecycle behavior, not live
+account adoption or interactive discovery. The earlier probe transcript remains
+unchanged and retains its original version bindings.
