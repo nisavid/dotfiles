@@ -19,7 +19,7 @@ revision and receives separate acceptance.
   the Homebrew/core formula revision, and the Apple Silicon Sequoia bottle.
 - [`interop-v1.json`](interop-v1.json) defines the four-phase exchange with
   dotfiles #148. Its review-candidate SHA-256 is
-  `83e4fa6419aa3e8d30152c6c56f9fd6a1c1780f51cede5b796255f43df3e5f6e`.
+  `bd5be95a7731def6b38f15b1794091acdd9ead1caa952d85ffcedd68e1cf76a5`.
   Its fixed [message](fixtures/v1/message.bin) is exactly 51 bytes and has SHA-256
   `6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337`.
 - [`pq-sequoia-macos`](../../../scripts/pq-sequoia-macos) validates those
@@ -28,7 +28,7 @@ revision and receives separate acceptance.
   verifies the ephemeral tap, inspects key-packet versions, controls exact-keg
   selection, records the Mach-O and runtime closures, and opens and closes the
   live exchange. Its `record-relay-observation` command validates and records
-  the bounded selection and final relay checks from inert workflow-run JSON.
+  complete paginated selection and final relay checks.
 - [`pq-sequoia-macos.yml`](../../../.github/workflows/pq-sequoia-macos.yml) is
   manual-only. It has no push, pull-request, schedule, or release trigger.
 
@@ -263,13 +263,12 @@ gh workflow run pq-sequoia-macos.yml \
 ```
 
 The relay run title and artifact name contain the exact session ID, qualifier
-run ID, and phase-B digest. At selection, the original job asks for up to 1,000
-workflow-dispatch runs from `pq-sequoia-macos.yml` and passes the unchanged JSON
-to the maintained validator:
+run ID, and phase-B digest. At selection, the original job asks the maintained
+validator to traverse the workflow-scoped REST endpoint:
 
 ```sh
 scripts/pq-sequoia-macos record-relay-observation \
-  --runs relay-runs-selection.json \
+  --repository "$GITHUB_REPOSITORY" \
   --stage selection \
   --session-id "$session_id" \
   --qualifier-run-id "$qualifier_run_id" \
@@ -278,13 +277,21 @@ scripts/pq-sequoia-macos record-relay-observation \
   --output relay-observation-selection.json
 ```
 
+The command uses `GET`, `per_page=100`, and `gh api --paginate` on
+`/repos/{owner}/{repo}/actions/workflows/pq-sequoia-macos.yml/runs`. It sends
+none of the named search filters. It validates and normalizes each projected
+page as it arrives, retaining unrelated run identities and normalized records
+only in a temporary on-disk index. Identical repeats of one positive database
+ID count once and increment the repeated-record count; conflicting values for
+one database ID reject the traversal.
+
 The command matches the exact title before considering state. More than one
-match rejects immediately, whether the second run is queued, pending,
-in-progress, completed unsuccessfully, or completed successfully. Zero matches
-or one unfinished or unsuccessful match produces `selection_ready=false`, so
-the workflow continues polling. One completed successful match is selected and
-still must pass the exact relay metadata validator before download. Unrelated
-titles are retained in the observation count but do not become duplicates.
+distinct match rejects, whether the second run is queued, pending, in-progress,
+completed unsuccessfully, or completed successfully. Zero matches or one
+unfinished or unsuccessful match produces `selection_ready=false`, so the
+workflow continues polling. One completed successful match is selected and
+still must pass the exact relay metadata validator before download. The event
+and commit restrictions are applied locally to that sole match.
 
 After phase C is authenticated and the live exchange closes, the workflow
 queries again and invokes the same command with `--stage final` and
@@ -292,20 +299,22 @@ queries again and invokes the same command with `--stage final` and
 the selected completed-successful run. The selection and final records are
 retained as `relay-observation-selection.json` and
 `relay-observation-final.json`; each contains the structured exchange binding,
-selected run ID, returned-record count, query limit, and exact matching rows.
+selected run ID, endpoint, page size, successful pagination completion, page
+and record counts, unique and repeated record counts, absence of named search
+filters, and every distinct exact-title match.
 
-The provider documents a 1,000-result cap for this filtered workflow-run
-search. The workflow requests that full bound, and the validator accepts at
-most 999 returned records. A failed query, malformed response, absent selected
-run at the final check, or 1,000-record response rejects without leaving an
-accepted observation, because the claimed view may be incomplete. The relay
-window remains 45 minutes. Timeout, ambiguity, revision drift, or any mismatch
-rejects the session and cleans up; a later job cannot resume it because the
-required secret no longer exists.
+Successful end of pagination and exit zero from `gh api` are mandatory. A
+provider or CLI error, timeout, interruption, malformed page, malformed run,
+conflicting observation, absent selected run at the final check, or incomplete
+traversal rejects without leaving an accepted observation. The 60-second query
+timeout is an operational fail-closed bound, not an accepted page or record
+cutoff. The relay window remains 45 minutes. Ambiguity, revision drift, or any
+mismatch rejects the session and cleans up; a later job cannot resume it because
+the required secret no longer exists.
 
-Submissions after the final check are outside the guarantee. These two bounded
-observations are not a permanent or global uniqueness guarantee and are not an
-atomic provider snapshot.
+Submissions after the final check are outside the guarantee. These traversals
+are not a permanent or global uniqueness guarantee, are not an atomic provider
+snapshot, and make no claim about runs the provider does not return.
 
 Revocation packets do not cross platforms. The accepted contract requires
 each side's emergency certificate, retired certificate, retired signing

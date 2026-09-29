@@ -93,8 +93,13 @@ class InteroperabilityProtocolTests(unittest.TestCase):
         )
         relay = protocol["relay_binding"]
         self.assertIn("phase-B envelope digest", relay["selection"])
-        self.assertEqual(1000, relay["observation_coverage"]["requested_limit"])
-        self.assertEqual(999, relay["observation_coverage"]["accepted_maximum"])
+        coverage = relay["observation_coverage"]
+        self.assertEqual("GET", coverage["method"])
+        self.assertEqual(100, coverage["per_page"])
+        self.assertEqual([], coverage["named_search_filters"])
+        self.assertIn("--paginate", coverage["pagination"])
+        self.assertNotIn("requested_limit", coverage)
+        self.assertNotIn("accepted_maximum", coverage)
         self.assertEqual(
             ["relay-observation-selection.json", "relay-observation-final.json"],
             relay["retained_observations"],
@@ -198,6 +203,69 @@ class QualificationProcedureTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+
+    def fake_gh(
+        self,
+        root: Path,
+        pages: list[object],
+        *,
+        exit_code: int = 0,
+        pause_seconds: float = 0,
+    ) -> tuple[Path, Path]:
+        fixture = root / "gh-pages.json"
+        invocation = root / "gh-invocation.json"
+        executable = root / "gh"
+        _write_json(fixture, pages)
+        executable.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import sys\n"
+            "import time\n"
+            "from pathlib import Path\n"
+            f"fixture = Path({str(fixture)!r})\n"
+            f"invocation = Path({str(invocation)!r})\n"
+            "invocation.write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n"
+            "for page in json.loads(fixture.read_text(encoding='utf-8')):\n"
+            "    print(json.dumps(page), flush=True)\n"
+            f"time.sleep({pause_seconds!r})\n"
+            f"raise SystemExit({exit_code})\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        return executable, invocation
+
+    def relay_arguments(
+        self,
+        root: Path,
+        gh: Path,
+        *,
+        stage: str = "selection",
+        selected_run_id: str | None = None,
+        timeout: str = "5",
+    ) -> list[str]:
+        arguments = [
+            "record-relay-observation",
+            "--repository",
+            "example/project",
+            "--gh",
+            str(gh),
+            "--query-timeout-seconds",
+            timeout,
+            "--stage",
+            stage,
+            "--session-id",
+            "c" * 64,
+            "--qualifier-run-id",
+            "987",
+            "--phase-b-sha256",
+            "d" * 64,
+            "--expected-commit",
+            "a" * 40,
+        ]
+        if selected_run_id is not None:
+            arguments.extend(("--selected-run-id", selected_run_id))
+        arguments.extend(("--output", str(root / f"{stage}.json")))
+        return arguments
 
     def test_repo_local_command_validates_the_frozen_public_surface(self) -> None:
         result = self.run_cli("validate-static", "--root", str(ROOT))
@@ -715,10 +783,12 @@ class QualificationProcedureTests(unittest.TestCase):
         self.assertIn("runs-on: macos-15", workflow)
         self.assertIn("RUNNER_ENVIRONMENT", workflow)
         self.assertIn("GITHUB_WORKFLOW_SHA", workflow)
-        self.assertIn("databaseId,displayTitle,event,headSha,status,conclusion", workflow)
         self.assertIn("validate-relay", workflow)
         self.assertEqual(2, workflow.count("record-relay-observation"))
-        self.assertEqual(2, workflow.count("--limit 1000"))
+        self.assertEqual(2, workflow.count('--repository "$GITHUB_REPOSITORY"'))
+        self.assertNotIn("gh run list", workflow)
+        self.assertNotIn("--event workflow_dispatch", workflow)
+        self.assertNotIn("--limit 1000", workflow)
         self.assertIn("relay-observation-selection.json", workflow)
         self.assertIn("relay-observation-final.json", workflow)
         self.assertNotIn(
@@ -1650,12 +1720,77 @@ class QualificationProcedureTests(unittest.TestCase):
             self.assertEqual(1, rejected.returncode)
             self.assertFalse(output.exists())
 
+    def test_relay_selection_finds_a_match_after_page_ten(self) -> None:
+        title = (
+            "pq-sequoia-publish-peer-response-"
+            f"{'c' * 64}-987-{'d' * 64}"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pages = []
+            for page_number in range(11):
+                pages.append(
+                    [
+                        {
+                            "databaseId": page_number * 100 + offset + 1,
+                            "displayTitle": "unrelated",
+                            "event": "push",
+                            "headSha": "b" * 40,
+                            "status": "completed",
+                            "conclusion": "success",
+                        }
+                        for offset in range(100)
+                    ]
+                )
+            pages[-1][-1] = {
+                "databaseId": 1100,
+                "displayTitle": title,
+                "event": "workflow_dispatch",
+                "headSha": "a" * 40,
+                "status": "completed",
+                "conclusion": "success",
+            }
+            gh, invocation = self.fake_gh(root, pages)
+
+            result = self.run_cli(*self.relay_arguments(root, gh))
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            record = json.loads((root / "selection.json").read_text())
+            self.assertTrue(record["selection_ready"])
+            self.assertEqual([1100], [run["databaseId"] for run in record["matching_runs"]])
+            self.assertEqual(
+                {
+                    "endpoint": "/repos/example/project/actions/workflows/pq-sequoia-macos.yml/runs",
+                    "method": "GET",
+                    "named_search_filters": [],
+                    "page_count": 11,
+                    "pagination_complete": True,
+                    "per_page": 100,
+                    "raw_record_count": 1100,
+                    "repeated_record_count": 0,
+                    "unique_run_count": 1100,
+                },
+                record["coverage"],
+            )
+            self.assertEqual(
+                [
+                    "api",
+                    "--method",
+                    "GET",
+                    "--paginate",
+                    "--raw-field",
+                    "per_page=100",
+                    "--jq",
+                    ".workflow_runs | map({databaseId: .id, displayTitle: .display_title, event: .event, headSha: .head_sha, status: .status, conclusion: .conclusion})",
+                    "/repos/example/project/actions/workflows/pq-sequoia-macos.yml/runs",
+                ],
+                json.loads(invocation.read_text()),
+            )
+
     def test_relay_selection_rejects_every_observed_matching_duplicate(
         self,
     ) -> None:
-        session_id = "c" * 64
-        phase_b_sha256 = "d" * 64
-        title = f"pq-sequoia-publish-peer-response-{session_id}-987-{phase_b_sha256}"
+        title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
         selected = {
             "databaseId": 321,
             "displayTitle": title,
@@ -1666,14 +1801,8 @@ class QualificationProcedureTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "runs.json"
             output = root / "selection.json"
-            for status, conclusion in (
-                ("queued", None),
-                ("pending", None),
-                ("in_progress", None),
-                ("completed", "failure"),
-            ):
+            for status, conclusion in (("queued", None), ("completed", "failure")):
                 with self.subTest(status=status):
                     duplicate = {
                         **selected,
@@ -1681,23 +1810,9 @@ class QualificationProcedureTests(unittest.TestCase):
                         "status": status,
                         "conclusion": conclusion,
                     }
-                    _write_json(source, [selected, duplicate])
+                    gh, _ = self.fake_gh(root, [[selected], [duplicate]])
                     rejected = self.run_cli(
-                        "record-relay-observation",
-                        "--runs",
-                        str(source),
-                        "--stage",
-                        "selection",
-                        "--session-id",
-                        session_id,
-                        "--qualifier-run-id",
-                        "987",
-                        "--phase-b-sha256",
-                        phase_b_sha256,
-                        "--expected-commit",
-                        "a" * 40,
-                        "--output",
-                        str(output),
+                        *self.relay_arguments(root, gh)
                     )
                     self.assertEqual(1, rejected.returncode)
                     self.assertIn(
@@ -1705,12 +1820,8 @@ class QualificationProcedureTests(unittest.TestCase):
                     )
                     self.assertFalse(output.exists())
 
-    def test_relay_observations_retain_both_checks_and_reject_a_late_duplicate(
-        self,
-    ) -> None:
-        session_id = "c" * 64
-        phase_b_sha256 = "d" * 64
-        title = f"pq-sequoia-publish-peer-response-{session_id}-987-{phase_b_sha256}"
+    def test_relay_observation_normalizes_identical_overlap(self) -> None:
+        title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
         selected = {
             "databaseId": 321,
             "displayTitle": title,
@@ -1719,178 +1830,185 @@ class QualificationProcedureTests(unittest.TestCase):
             "status": "completed",
             "conclusion": "success",
         }
-        unrelated = {**selected, "databaseId": 111, "displayTitle": "unrelated"}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "runs.json"
-            selection_output = root / "selection.json"
-            final_output = root / "final.json"
-            arguments = (
-                "--session-id",
-                session_id,
-                "--qualifier-run-id",
-                "987",
-                "--phase-b-sha256",
-                phase_b_sha256,
-                "--expected-commit",
-                "a" * 40,
-            )
-            _write_json(source, [selected, unrelated])
-            selection = self.run_cli(
-                "record-relay-observation",
-                "--runs",
-                str(source),
-                "--stage",
-                "selection",
-                *arguments,
-                "--output",
-                str(selection_output),
-            )
-            self.assertEqual(0, selection.returncode, selection.stderr)
-            selection_record = json.loads(selection_output.read_text())
-            self.assertEqual("selection", selection_record["stage"])
-            self.assertEqual([selected], selection_record["matching_runs"])
-            self.assertEqual(
-                {
-                    "session_id": session_id,
-                    "qualifier_run_id": "987",
-                    "phase_b_sha256": phase_b_sha256,
-                    "relay_title": title,
-                    "candidate_commit": "a" * 40,
-                    "selected_run_id": "321",
-                },
-                selection_record["exchange_binding"],
-            )
-            self.assertEqual(2, selection_record["coverage"]["observed_result_count"])
-            self.assertEqual(
-                1000, selection_record["coverage"]["provider_result_cap"]
-            )
-            self.assertIn(
-                "not a permanent or global uniqueness claim",
-                selection_record["temporal_limit"],
+            gh, _ = self.fake_gh(root, [[selected], [selected]])
+
+            result = self.run_cli(*self.relay_arguments(root, gh))
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            record = json.loads((root / "selection.json").read_text())
+            self.assertEqual([selected], record["matching_runs"])
+            self.assertEqual(2, record["coverage"]["raw_record_count"])
+            self.assertEqual(1, record["coverage"]["unique_run_count"])
+            self.assertEqual(1, record["coverage"]["repeated_record_count"])
+
+    def test_relay_observation_rejects_conflicting_run_identity(self) -> None:
+        title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
+        queued = {
+            "databaseId": 321,
+            "displayTitle": title,
+            "event": "workflow_dispatch",
+            "headSha": "a" * 40,
+            "status": "queued",
+            "conclusion": None,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh, _ = self.fake_gh(
+                root,
+                [[queued], [{**queued, "status": "completed", "conclusion": "success"}]],
             )
 
+            result = self.run_cli(*self.relay_arguments(root, gh))
+
+            self.assertEqual(1, result.returncode)
+            self.assertIn("conflicting relay observations", result.stderr)
+            self.assertFalse((root / "selection.json").exists())
+
+    def test_relay_observation_rejects_wrong_event_or_commit(self) -> None:
+        title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
+        selected = {
+            "databaseId": 321,
+            "displayTitle": title,
+            "event": "workflow_dispatch",
+            "headSha": "a" * 40,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        for name, changed in (
+            ("event", {**selected, "event": "push"}),
+            ("commit", {**selected, "headSha": "b" * 40}),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                gh, _ = self.fake_gh(root, [[changed]])
+
+                result = self.run_cli(*self.relay_arguments(root, gh))
+
+                self.assertEqual(1, result.returncode)
+                self.assertIn("matching relay binding mismatch", result.stderr)
+                self.assertFalse((root / "selection.json").exists())
+
+    def test_relay_observation_rejects_malformed_page_and_run(self) -> None:
+        malformed_cases = (
+            ("page", {"workflow_runs": []}, "page must be an array"),
+            ("run", [{"databaseId": 1}], "fields mismatch"),
+        )
+        for name, page, message in malformed_cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                gh, _ = self.fake_gh(root, [page])
+
+                result = self.run_cli(*self.relay_arguments(root, gh))
+
+                self.assertEqual(1, result.returncode)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((root / "selection.json").exists())
+
+    def test_relay_empty_traversal_is_not_ready_and_cannot_finalize(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh, _ = self.fake_gh(root, [[]])
+
+            selection = self.run_cli(*self.relay_arguments(root, gh))
+
+            self.assertEqual(0, selection.returncode, selection.stderr)
+            record = json.loads((root / "selection.json").read_text())
+            self.assertFalse(record["selection_ready"])
+            self.assertEqual([], record["matching_runs"])
+
+            gh, _ = self.fake_gh(root, [[]])
             final = self.run_cli(
-                "record-relay-observation",
-                "--runs",
-                str(source),
-                "--stage",
-                "final",
-                *arguments,
-                "--selected-run-id",
-                "321",
-                "--output",
-                str(final_output),
+                *self.relay_arguments(
+                    root, gh, stage="final", selected_run_id="321"
+                )
+            )
+
+            self.assertEqual(1, final.returncode)
+            self.assertIn("selected relay run absent", final.stderr)
+            self.assertFalse((root / "final.json").exists())
+
+    def test_relay_provider_failure_and_timeout_leave_no_observation(self) -> None:
+        title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
+        selected = {
+            "databaseId": 321,
+            "displayTitle": title,
+            "event": "workflow_dispatch",
+            "headSha": "a" * 40,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh, _ = self.fake_gh(root, [[selected]], exit_code=1)
+            failed = self.run_cli(*self.relay_arguments(root, gh))
+            self.assertEqual(1, failed.returncode)
+            self.assertIn("provider traversal failed", failed.stderr)
+            self.assertFalse((root / "selection.json").exists())
+
+            gh, _ = self.fake_gh(root, [[]], pause_seconds=0.5)
+            timed_out = self.run_cli(
+                *self.relay_arguments(root, gh, timeout="0.05")
+            )
+            self.assertEqual(1, timed_out.returncode)
+            self.assertIn("provider traversal timed out", timed_out.stderr)
+            self.assertFalse((root / "selection.json").exists())
+
+    def test_relay_unsuccessful_match_is_retained_but_not_ready(self) -> None:
+        title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
+        unsuccessful = {
+            "databaseId": 321,
+            "displayTitle": title,
+            "event": "workflow_dispatch",
+            "headSha": "a" * 40,
+            "status": "completed",
+            "conclusion": "failure",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh, _ = self.fake_gh(root, [[unsuccessful]])
+
+            result = self.run_cli(*self.relay_arguments(root, gh))
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            record = json.loads((root / "selection.json").read_text())
+            self.assertFalse(record["selection_ready"])
+            self.assertEqual([unsuccessful], record["matching_runs"])
+
+    def test_relay_final_observation_requires_selected_id_continuity(self) -> None:
+        title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
+        selected = {
+            "databaseId": 321,
+            "displayTitle": title,
+            "event": "workflow_dispatch",
+            "headSha": "a" * 40,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh, _ = self.fake_gh(root, [[selected]])
+            final = self.run_cli(
+                *self.relay_arguments(
+                    root, gh, stage="final", selected_run_id="321"
+                )
             )
             self.assertEqual(0, final.returncode, final.stderr)
-            self.assertEqual("final", json.loads(final_output.read_text())["stage"])
+            record = json.loads((root / "final.json").read_text())
+            self.assertEqual("final", record["stage"])
+            self.assertEqual("321", record["exchange_binding"]["selected_run_id"])
 
-            final_output.unlink()
-            _write_json(
-                source,
-                [
-                    selected,
-                    unrelated,
-                    {
-                        **selected,
-                        "databaseId": 654,
-                        "status": "queued",
-                        "conclusion": None,
-                    },
-                ],
+            (root / "final.json").unlink()
+            gh, _ = self.fake_gh(root, [[selected]])
+            changed = self.run_cli(
+                *self.relay_arguments(
+                    root, gh, stage="final", selected_run_id="654"
+                )
             )
-            rejected = self.run_cli(
-                "record-relay-observation",
-                "--runs",
-                str(source),
-                "--stage",
-                "final",
-                *arguments,
-                "--selected-run-id",
-                "321",
-                "--output",
-                str(final_output),
-            )
-            self.assertEqual(1, rejected.returncode)
-            self.assertIn("matching relay duplicate observed", rejected.stderr)
-            self.assertFalse(final_output.exists())
-
-    def test_relay_final_observation_fails_closed_without_a_complete_record(
-        self,
-    ) -> None:
-        session_id = "c" * 64
-        phase_b_sha256 = "d" * 64
-        arguments = (
-            "--stage",
-            "final",
-            "--session-id",
-            session_id,
-            "--qualifier-run-id",
-            "987",
-            "--phase-b-sha256",
-            phase_b_sha256,
-            "--expected-commit",
-            "a" * 40,
-            "--selected-run-id",
-            "321",
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "runs.json"
-            output = root / "final.json"
-
-            output.write_text('{"stale": true}\n', encoding="utf-8")
-            source.write_text("not JSON\n", encoding="utf-8")
-            malformed = self.run_cli(
-                "record-relay-observation",
-                "--runs",
-                str(source),
-                *arguments,
-                "--output",
-                str(output),
-            )
-            self.assertEqual(1, malformed.returncode)
-            self.assertIn("invalid relay observation JSON", malformed.stderr)
-            self.assertFalse(output.exists())
-
-            _write_json(source, [])
-            absent = self.run_cli(
-                "record-relay-observation",
-                "--runs",
-                str(source),
-                *arguments,
-                "--output",
-                str(output),
-            )
-            self.assertEqual(1, absent.returncode)
-            self.assertIn(
-                "selected relay run absent from final observation", absent.stderr
-            )
-            self.assertFalse(output.exists())
-
-            run = {
-                "databaseId": 1,
-                "displayTitle": "unrelated",
-                "event": "workflow_dispatch",
-                "headSha": "a" * 40,
-                "status": "completed",
-                "conclusion": "success",
-            }
-            _write_json(
-                source,
-                [{**run, "databaseId": run_id} for run_id in range(1, 1001)],
-            )
-            truncated = self.run_cli(
-                "record-relay-observation",
-                "--runs",
-                str(source),
-                *arguments,
-                "--output",
-                str(output),
-            )
-            self.assertEqual(1, truncated.returncode)
-            self.assertIn("provider result limit", truncated.stderr)
-            self.assertFalse(output.exists())
+            self.assertEqual(1, changed.returncode)
+            self.assertIn("selected relay run changed", changed.stderr)
+            self.assertFalse((root / "final.json").exists())
 
     def test_non_system_unresolved_macho_dependency_fails_closed(self) -> None:
         module = _load_cli()

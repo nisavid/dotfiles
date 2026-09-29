@@ -6,21 +6,25 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import codecs
 import hashlib
 import json
 import os
 import re
+import select
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 MESSAGE_SHA256 = "6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337"
-PROTOCOL_SHA256 = "83e4fa6419aa3e8d30152c6c56f9fd6a1c1780f51cede5b796255f43df3e5f6e"
+PROTOCOL_SHA256 = "bd5be95a7731def6b38f15b1794091acdd9ead1caa952d85ffcedd68e1cf76a5"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 FINGERPRINT_RE = re.compile(r"[0-9A-F]{40}")
 IDENTITY_RE = re.compile(r"sha256:[0-9a-f]{64}")
@@ -28,7 +32,23 @@ SESSION_RE = re.compile(r"[0-9a-f]{64}")
 MAX_ENVELOPE_BYTES = 2 * 1024 * 1024
 MAX_PAYLOAD_BYTES = 1024 * 1024
 DISPATCH_ENVELOPE_MAX_BYTES = 46000
-RELAY_QUERY_LIMIT = 1000
+RELAY_PAGE_SIZE = 100
+RELAY_QUERY_TIMEOUT_SECONDS = 60.0
+RELAY_WORKFLOW = "pq-sequoia-macos.yml"
+RELAY_PROJECTION = (
+    ".workflow_runs | map({databaseId: .id, displayTitle: .display_title, "
+    "event: .event, headSha: .head_sha, status: .status, "
+    "conclusion: .conclusion})"
+)
+RELAY_NAMED_SEARCH_FILTERS = {
+    "actor",
+    "branch",
+    "check_suite_id",
+    "created",
+    "event",
+    "head_sha",
+    "status",
+}
 STATE_MARKER = ".pq-sequoia-disposable-state"
 STATE_MARKER_CONTENT = "pq-sequoia-disposable-state/v1\n"
 PHASE_PAYLOADS = {
@@ -143,6 +163,7 @@ def validate_static(root: Path) -> None:
     message_path = surface / "fixtures/v1/message.bin"
     protocol_path = surface / "interop-v1.json"
     candidate_path = root / "packaging/homebrew/pq-sequoia-macos/v1/candidate.json"
+    workflow_path = root / ".github/workflows/pq-sequoia-macos.yml"
     message = message_path.read_bytes()
     protocol = read_json(protocol_path)
     candidate = read_json(candidate_path)
@@ -155,6 +176,81 @@ def validate_static(root: Path) -> None:
         raise ProcedureError("protocol identity mismatch")
     if protocol.get("message", {}).get("sha256") != MESSAGE_SHA256:
         raise ProcedureError("protocol message binding mismatch")
+    relay_binding = protocol.get("relay_binding")
+    coverage = (
+        relay_binding.get("observation_coverage")
+        if isinstance(relay_binding, dict)
+        else None
+    )
+    expected_coverage_fields = {
+        "endpoint",
+        "method",
+        "per_page",
+        "pagination",
+        "named_search_filters",
+        "projected_run_fields",
+        "retained_coverage_fields",
+        "failure",
+    }
+    if not isinstance(coverage, dict) or set(coverage) != expected_coverage_fields:
+        raise ProcedureError("relay protocol coverage fields mismatch")
+    if (
+        coverage.get("endpoint")
+        != "/repos/{owner}/{repo}/actions/workflows/pq-sequoia-macos.yml/runs"
+        or coverage.get("method") != "GET"
+        or coverage.get("per_page") != RELAY_PAGE_SIZE
+        or coverage.get("named_search_filters") != []
+        or coverage.get("projected_run_fields")
+        != [
+            "databaseId",
+            "displayTitle",
+            "event",
+            "headSha",
+            "status",
+            "conclusion",
+        ]
+        or set(coverage.get("retained_coverage_fields", []))
+        != {
+            "endpoint",
+            "method",
+            "per_page",
+            "named_search_filters",
+            "pagination_complete",
+            "page_count",
+            "raw_record_count",
+            "unique_run_count",
+            "repeated_record_count",
+        }
+    ):
+        raise ProcedureError("relay protocol coverage mismatch")
+
+    query, endpoint = relay_query_command("gh", "owner/repo")
+    raw_fields = [
+        query[index + 1]
+        for index, value in enumerate(query[:-1])
+        if value == "--raw-field"
+    ]
+    field_names = {field.partition("=")[0] for field in raw_fields}
+    if (
+        endpoint != "/repos/owner/repo/actions/workflows/pq-sequoia-macos.yml/runs"
+        or query.count("--paginate") != 1
+        or "--slurp" in query
+        or query[query.index("--method") + 1] != "GET"
+        or raw_fields != [f"per_page={RELAY_PAGE_SIZE}"]
+        or field_names & RELAY_NAMED_SEARCH_FILTERS
+        or query[query.index("--jq") + 1] != RELAY_PROJECTION
+    ):
+        raise ProcedureError("relay provider query coverage mismatch")
+
+    workflow = workflow_path.read_text(encoding="utf-8")
+    if (
+        workflow.count("record-relay-observation") != 2
+        or workflow.count('--repository "$GITHUB_REPOSITORY"') != 2
+        or "gh run list" in workflow
+        or "--event workflow_dispatch" in workflow
+        or "--limit 1000" in workflow
+    ):
+        raise ProcedureError("workflow relay observation calls mismatch")
     if candidate.get("schema_version") != "pq-sequoia-macos-candidate/v1":
         raise ProcedureError("candidate version mismatch")
     openssl = candidate.get("openssl", {})
@@ -832,18 +928,7 @@ def validate_relay_metadata(
     return value
 
 
-def read_relay_runs(path: Path) -> list[dict[str, Any]]:
-    try:
-        if path.stat().st_size > MAX_ENVELOPE_BYTES:
-            raise ProcedureError("relay observation exceeds the size limit")
-        value = json.loads(
-            path.read_text(encoding="utf-8"),
-            object_pairs_hook=unique_json_object,
-        )
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ProcedureError("invalid relay observation JSON") from error
-    if not isinstance(value, list):
-        raise ProcedureError("relay observation must be an array")
+def validate_relay_run(value: object) -> dict[str, Any]:
     required = {
         "databaseId",
         "displayTitle",
@@ -852,24 +937,179 @@ def read_relay_runs(path: Path) -> list[dict[str, Any]]:
         "status",
         "conclusion",
     }
-    for run in value:
-        if not isinstance(run, dict) or set(run) != required:
-            raise ProcedureError("relay observation fields mismatch")
-        if (
-            isinstance(run.get("databaseId"), bool)
-            or not isinstance(run.get("databaseId"), int)
-            or run["databaseId"] <= 0
-            or not all(
-                isinstance(run.get(field), str)
-                for field in ("displayTitle", "event", "headSha", "status")
-            )
-            or not (
-                run.get("conclusion") is None
-                or isinstance(run.get("conclusion"), str)
-            )
-        ):
-            raise ProcedureError("relay observation field types mismatch")
+    if not isinstance(value, dict) or set(value) != required:
+        raise ProcedureError("relay observation fields mismatch")
+    if (
+        isinstance(value.get("databaseId"), bool)
+        or not isinstance(value.get("databaseId"), int)
+        or value["databaseId"] <= 0
+        or not all(
+            isinstance(value.get(field), str)
+            for field in ("displayTitle", "event", "headSha", "status")
+        )
+        or not (
+            value.get("conclusion") is None
+            or isinstance(value.get("conclusion"), str)
+        )
+    ):
+        raise ProcedureError("relay observation field types mismatch")
     return value
+
+
+def relay_query_command(gh: str, repository: str) -> tuple[list[str], str]:
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None:
+        raise ProcedureError("relay repository identifier is invalid")
+    endpoint = (
+        f"/repos/{repository}/actions/workflows/{RELAY_WORKFLOW}/runs"
+    )
+    command = [
+        gh,
+        "api",
+        "--method",
+        "GET",
+        "--paginate",
+        "--raw-field",
+        f"per_page={RELAY_PAGE_SIZE}",
+        "--jq",
+        RELAY_PROJECTION,
+        endpoint,
+    ]
+    return command, endpoint
+
+
+def observe_relay_runs(
+    *,
+    gh: str,
+    repository: str,
+    timeout_seconds: float,
+    expected_title: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if timeout_seconds <= 0:
+        raise ProcedureError("relay query timeout is invalid")
+    command, endpoint = relay_query_command(gh, repository)
+    deadline = time.monotonic() + timeout_seconds
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    json_decoder = json.JSONDecoder(object_pairs_hook=unique_json_object)
+    buffer = ""
+    page_count = 0
+    raw_record_count = 0
+    repeated_record_count = 0
+    unique_run_count = 0
+    matches: list[dict[str, Any]] = []
+
+    with tempfile.TemporaryDirectory(prefix="pq-sequoia-relay-") as directory:
+        database = sqlite3.connect(Path(directory) / "runs.sqlite3")
+        database.execute(
+            "CREATE TABLE runs (database_id INTEGER PRIMARY KEY, record BLOB NOT NULL)"
+        )
+
+        def consume_page(page: object) -> None:
+            nonlocal page_count
+            nonlocal raw_record_count
+            nonlocal repeated_record_count
+            nonlocal unique_run_count
+            if not isinstance(page, list):
+                raise ProcedureError("relay provider page must be an array")
+            page_count += 1
+            for value in page:
+                raw_record_count += 1
+                run = validate_relay_run(value)
+                run_id = run["databaseId"]
+                normalized = json.dumps(
+                    run, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+                ).encode("utf-8")
+                prior = database.execute(
+                    "SELECT record FROM runs WHERE database_id = ?", (run_id,)
+                ).fetchone()
+                if prior is not None:
+                    if bytes(prior[0]) != normalized:
+                        raise ProcedureError(
+                            "conflicting relay observations for one run identifier"
+                        )
+                    repeated_record_count += 1
+                    continue
+                database.execute(
+                    "INSERT INTO runs (database_id, record) VALUES (?, ?)",
+                    (run_id, normalized),
+                )
+                unique_run_count += 1
+                if run["displayTitle"] == expected_title:
+                    matches.append(run)
+
+        def consume_buffer(*, final: bool) -> None:
+            nonlocal buffer
+            while True:
+                buffer = buffer.lstrip()
+                if not buffer:
+                    return
+                try:
+                    page, end = json_decoder.raw_decode(buffer)
+                except json.JSONDecodeError as error:
+                    if not final:
+                        if len(buffer.encode("utf-8")) > MAX_ENVELOPE_BYTES:
+                            raise ProcedureError(
+                                "relay provider page exceeds the size limit"
+                            ) from error
+                        return
+                    raise ProcedureError("invalid relay provider page JSON") from error
+                consume_page(page)
+                buffer = buffer[end:]
+
+        with tempfile.TemporaryFile() as provider_errors:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=provider_errors,
+            )
+            if process.stdout is None:
+                process.kill()
+                process.wait()
+                raise ProcedureError("relay provider output is unavailable")
+            try:
+                descriptor = process.stdout.fileno()
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout_seconds)
+                    ready, _, _ = select.select([descriptor], [], [], remaining)
+                    if not ready:
+                        raise subprocess.TimeoutExpired(command, timeout_seconds)
+                    chunk = os.read(descriptor, 65536)
+                    if not chunk:
+                        break
+                    buffer += decoder.decode(chunk)
+                    consume_buffer(final=False)
+                buffer += decoder.decode(b"", final=True)
+                consume_buffer(final=True)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout_seconds)
+                return_code = process.wait(timeout=remaining)
+            except BaseException:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
+                raise
+            finally:
+                process.stdout.close()
+        database.close()
+
+    if return_code != 0:
+        raise ProcedureError("relay provider traversal failed")
+    if page_count == 0:
+        raise ProcedureError("relay provider traversal returned no pages")
+    coverage = {
+        "endpoint": endpoint,
+        "method": "GET",
+        "named_search_filters": [],
+        "page_count": page_count,
+        "pagination_complete": True,
+        "per_page": RELAY_PAGE_SIZE,
+        "raw_record_count": raw_record_count,
+        "repeated_record_count": repeated_record_count,
+        "unique_run_count": unique_run_count,
+    }
+    return matches, coverage
 
 
 def record_relay_observation(arguments: argparse.Namespace) -> None:
@@ -885,12 +1125,15 @@ def record_relay_observation(arguments: argparse.Namespace) -> None:
         f"{arguments.session_id}-{arguments.qualifier_run_id}-"
         f"{arguments.phase_b_sha256}"
     )
-    runs = read_relay_runs(arguments.runs)
-    if len(runs) >= RELAY_QUERY_LIMIT:
-        raise ProcedureError("relay observation reached the provider result limit")
-    matches = [
-        run for run in runs if run["displayTitle"] == expected_title
-    ]
+    try:
+        matches, coverage = observe_relay_runs(
+            gh=arguments.gh,
+            repository=arguments.repository,
+            timeout_seconds=arguments.query_timeout_seconds,
+            expected_title=expected_title,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ProcedureError("relay provider traversal timed out") from error
     if len(matches) > 1:
         raise ProcedureError("matching relay duplicate observed")
 
@@ -924,14 +1167,7 @@ def record_relay_observation(arguments: argparse.Namespace) -> None:
                 str(selected["databaseId"]) if selected is not None else None
             ),
         },
-        "coverage": {
-            "workflow": "pq-sequoia-macos.yml",
-            "event": "workflow_dispatch",
-            "provider_result_cap": RELAY_QUERY_LIMIT,
-            "requested_result_limit": RELAY_QUERY_LIMIT,
-            "observed_result_count": len(runs),
-            "result_limit_reached": False,
-        },
+        "coverage": coverage,
         "matching_runs": matches,
         "selection_ready": selected is not None,
         "temporal_limit": (
@@ -2452,7 +2688,13 @@ def build_parser() -> argparse.ArgumentParser:
     relay_parser.add_argument("--output", type=Path, required=True)
 
     observation_parser = subparsers.add_parser("record-relay-observation")
-    observation_parser.add_argument("--runs", type=Path, required=True)
+    observation_parser.add_argument("--repository", required=True)
+    observation_parser.add_argument("--gh", default="gh")
+    observation_parser.add_argument(
+        "--query-timeout-seconds",
+        type=float,
+        default=RELAY_QUERY_TIMEOUT_SECONDS,
+    )
     observation_parser.add_argument(
         "--stage", choices=("selection", "final"), required=True
     )

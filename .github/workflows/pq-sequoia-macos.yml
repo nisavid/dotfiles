@@ -463,14 +463,8 @@ jobs:
           target="pq-sequoia-publish-peer-response-$PQ_SESSION_ID-$GITHUB_RUN_ID-$PQ_PHASE_B_SHA256"
           response_run=
           for _ in {1..90}; do
-            gh run list \
-              --workflow pq-sequoia-macos.yml \
-              --event workflow_dispatch \
-              --limit 1000 \
-              --json databaseId,displayTitle,event,headSha,status,conclusion \
-              >"$PQ_SCRATCH/public/relay-runs-selection.json"
             scripts/pq-sequoia-macos record-relay-observation \
-              --runs "$PQ_SCRATCH/public/relay-runs-selection.json" \
+              --repository "$GITHUB_REPOSITORY" \
               --stage selection \
               --session-id "$PQ_SESSION_ID" \
               --qualifier-run-id "$GITHUB_RUN_ID" \
@@ -537,14 +531,8 @@ jobs:
           set -euo pipefail
           response_run=$(jq -r '.databaseId' \
             "$PQ_SCRATCH/evidence/relay-run.json")
-          gh run list \
-            --workflow pq-sequoia-macos.yml \
-            --event workflow_dispatch \
-            --limit 1000 \
-            --json databaseId,displayTitle,event,headSha,status,conclusion \
-            >"$PQ_SCRATCH/public/relay-runs-final.json"
           scripts/pq-sequoia-macos record-relay-observation \
-            --runs "$PQ_SCRATCH/public/relay-runs-final.json" \
+            --repository "$GITHUB_REPOSITORY" \
             --stage final \
             --session-id "$PQ_SESSION_ID" \
             --qualifier-run-id "$GITHUB_RUN_ID" \
