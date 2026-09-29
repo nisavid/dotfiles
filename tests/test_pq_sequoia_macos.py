@@ -641,6 +641,72 @@ class QualificationProcedureTests(unittest.TestCase):
             self.assertEqual(1, bounded.returncode)
             self.assertIn("protocol size limit", bounded.stderr)
 
+    def test_openssl_preflight_consumes_output_and_preserves_failures(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        start = workflow.index("          openssl_prefix=$(brew --prefix openssl@3.5)")
+        end = workflow.index("          printf 'PQ_OPENSSL_PREFIX=", start)
+        preflight = "\n".join(line[10:] for line in workflow[start:end].splitlines())
+        with tempfile.TemporaryDirectory(prefix="pq-openssl-preflight-") as temporary:
+            root = Path(temporary)
+            tools = root / "bin"
+            tools.mkdir()
+            brew = tools / "brew"
+            brew.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$FAKE_OPENSSL_PREFIX"\n',
+                encoding="utf-8",
+            )
+            brew.chmod(0o755)
+            openssl = tools / "openssl"
+            openssl.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os, signal, sys\n"
+                "signal.signal(signal.SIGPIPE, signal.SIG_DFL)\n"
+                "if sys.argv[1:] == ['version']:\n"
+                "    print('OpenSSL 3.5.8 fixture')\n"
+                "    raise SystemExit(0)\n"
+                "algorithms = {'-signature-algorithms': 'ML-DSA-65', "
+                "'-kem-algorithms': 'ML-KEM-768'}\n"
+                "argument = sys.argv[2]\n"
+                "mode = os.environ['FAKE_MODE'] if argument == "
+                "os.environ['FAKE_ARGUMENT'] else 'present'\n"
+                "print('unrelated' if mode == 'absent' else algorithms[argument], "
+                "flush=True)\n"
+                "if mode == 'continued-output':\n"
+                "    for _ in range(1024):\n"
+                "        os.write(1, b'continued output\\n' * 256)\n"
+                "if mode == 'producer-failure':\n"
+                "    raise SystemExit(23)\n",
+                encoding="utf-8",
+            )
+            openssl.chmod(0o755)
+            for argument in ("-signature-algorithms", "-kem-algorithms"):
+                for mode, expected in (
+                    ("continued-output", 0),
+                    ("absent", 1),
+                    ("producer-failure", 23),
+                ):
+                    with self.subTest(argument=argument, mode=mode):
+                        environment = {
+                            **os.environ,
+                            "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+                            "FAKE_OPENSSL_PREFIX": str(root),
+                            "FAKE_ARGUMENT": argument,
+                            "FAKE_MODE": mode,
+                        }
+                        result = subprocess.run(
+                            [
+                                "bash", "--noprofile", "--norc", "-euo",
+                                "pipefail", "-c", preflight,
+                            ],
+                            cwd=root,
+                            env=environment,
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=10,
+                        )
+                        self.assertEqual(expected, result.returncode, result.stderr)
+
     def test_manual_workflow_binds_revision_runner_and_live_relay(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)

@@ -322,8 +322,8 @@ jobs:
           brew install "$PQ_SCRATCH/downloads/openssl@3.5--3.5.8.arm64_sequoia.bottle.tar.gz"
           openssl_prefix=$(brew --prefix openssl@3.5)
           [[ "$("$openssl_prefix/bin/openssl" version)" == "OpenSSL 3.5.8 "* ]]
-          "$openssl_prefix/bin/openssl" list -signature-algorithms | grep -Fq ML-DSA-65
-          "$openssl_prefix/bin/openssl" list -kem-algorithms | grep -Fq ML-KEM-768
+          "$openssl_prefix/bin/openssl" list -signature-algorithms | grep -F ML-DSA-65 >/dev/null
+          "$openssl_prefix/bin/openssl" list -kem-algorithms | grep -F ML-KEM-768 >/dev/null
           printf 'PQ_OPENSSL_PREFIX=%s\n' "$openssl_prefix" >>"$GITHUB_ENV"
 
       - name: Run complete upstream suites with the reviewed locks
