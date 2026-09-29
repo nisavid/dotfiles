@@ -196,6 +196,44 @@ class ProvingkitDeploymentTests(unittest.TestCase):
     @unittest.skipUnless(
         os.uname().sysname == "Linux", "active materialization targets Linux"
     )
+    def test_unknown_artifact_target_is_rejected_before_acquisition(self):
+        self.select_fixture()
+        data_path = self.source / ".chezmoidata/provingkit.json"
+        data = json.loads(data_path.read_text())
+        artifacts = data["provingkit"]["profiles"]["portable-linux"]["artifacts"]
+        artifacts["unknown-client"] = artifacts.pop("cursor")
+        data_path.write_text(json.dumps(data))
+
+        result = self.chezmoi("apply", "--force")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsupported artifact target", result.stderr)
+        self.assertFalse((self.home / ".local/share/provingkit").exists())
+
+    @unittest.skipUnless(
+        os.uname().sysname == "Linux", "active materialization targets Linux"
+    )
+    def test_invalid_artifact_digest_is_rejected_before_acquisition(self):
+        self.select_fixture()
+        data_path = self.source / ".chezmoidata/provingkit.json"
+        data = json.loads(data_path.read_text())
+        artifact = data["provingkit"]["profiles"]["portable-linux"]["artifacts"][
+            "cursor"
+        ]
+        for invalid in ("abc", "A" * 64, "g" * 64):
+            with self.subTest(digest=invalid):
+                artifact["artifact_sha256"] = invalid
+                data_path.write_text(json.dumps(data))
+
+                result = self.chezmoi("apply", "--force")
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("invalid artifact SHA-256", result.stderr)
+                self.assertFalse((self.home / ".local/share/provingkit").exists())
+
+    @unittest.skipUnless(
+        os.uname().sysname == "Linux", "active materialization targets Linux"
+    )
     def test_missing_extracted_artifact_and_installed_directory_are_recreated(self):
         selection = self.select_fixture()
         first = self.chezmoi("apply", "--force")

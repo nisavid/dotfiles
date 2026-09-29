@@ -37,7 +37,7 @@ A profile uses `provingkit-installation-selection-v1` and these fields:
 | `source` | Repository `https://github.com/nisavid/provingkit` and its full immutable `commit`. |
 | `artifact_slate` | Ordered complete catalog membership emitted by the projector. This is distinct from the installation selection. |
 | `artifacts` | Each selected target's archive URL, archive SHA-256 and root name, artifact tree SHA-256, separate receipt URL/SHA-256, mode-manifest URL/SHA-256, and catalog path. |
-| `clients` | Per-client artifact target, route, scope, and a map of selected member names to `{ "enabled": true }` or `false`. Only these members are reconciled. |
+| `clients` | Per-client artifact target, route, scope, and a map of selected member names to `{ "enabled": true }` or `{ "enabled": false }`. Only these members are reconciled. |
 | `retirements` | Empty. Retirement is an operator-owned step; this command has no retirement actuator. |
 
 Targets and controls are fixed:
