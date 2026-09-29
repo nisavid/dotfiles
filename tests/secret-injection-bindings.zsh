@@ -13,6 +13,13 @@ fail() {
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-injection-bindings.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
+
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
+    rm -rf -- "$test_dir"
+  fi
+}
 export UV_CACHE_DIR=$test_dir/uv-cache
 fixture_home=$test_dir/home
 mkdir -p -- "$fixture_home"
