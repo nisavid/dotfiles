@@ -27,6 +27,7 @@ run_failed_scan() {
 expect_single_finding() {
   emulate -L zsh
   setopt nounset pipefail
+  (( $# >= 1 )) || exit 1
   local expected=$1
   shift
   expect_findings "$expected" 1 "$@"
@@ -35,6 +36,7 @@ expect_single_finding() {
 expect_findings() {
   emulate -L zsh
   setopt nounset pipefail
+  (( $# >= 2 )) || exit 1
   local expected=$1
   local expected_count=$2
   local -a output_lines
