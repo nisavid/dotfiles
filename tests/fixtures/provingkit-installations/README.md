@@ -81,3 +81,15 @@ adoption through a matching artifact, and recovery copies before same-version
 replacement. They establish synthetic native lifecycle behavior, not live
 account adoption or interactive discovery. The earlier probe transcript remains
 unchanged and retains its original version bindings.
+
+The alias/adoption cases use those same binaries with public synthetic plugin
+content. They exercise a distinct Codex marketplace from both neutral and Git
+repository directories, adoption of a six-member source while selecting three,
+missing-cache repair, and refusal of a later unsupported shared-source rebind.
+The tests compare registrations and cache files as well as command results.
+
+Claude marker fixtures follow the installed 2.1.284 writer and reader: a root
+`.in_use` directory, direct decimal-PID filenames, matching JSON `pid`, and an
+optional decimal-string `procStart`. These files are constructed test inputs.
+The tests establish payload comparison, refusal, and backup behavior; they do
+not establish process liveness or fresh signed-in plugin loading.
