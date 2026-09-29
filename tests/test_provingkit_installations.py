@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -235,6 +236,439 @@ class InstallationCommandTests(unittest.TestCase):
         self.assertTrue(
             all(not item["actions"] for item in repeated["clients"].values()), repeated
         )
+
+    def test_codex_alias_install_preserves_the_verified_canonical_artifact(
+        self,
+    ) -> None:
+        self.use_native_clients()
+        selection = fixture_selection(self.home, clients=("codex",))
+        selection["profile"]["clients"]["codex"]["marketplace"] = "provingkit-local"
+        root = artifact_root(self.home, selection, "agent-plugins")
+        original = {
+            str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mode)
+            for p in root.rglob("*")
+            if p.is_file()
+        }
+        self.selection.write_text(json.dumps(selection))
+
+        code, report = self.run_command("reconcile")
+
+        self.assertEqual((code, report["outcome"]), (0, "converged"), report)
+        observed = report["clients"]["codex"]
+        self.assertEqual(observed["marketplace"]["name"], "provingkit-local")
+        self.assertEqual(observed["members"]["proseweaving"]["content"], "match")
+        self.assertIn(
+            "/cache/provingkit-local/", observed["members"]["proseweaving"]["path"]
+        )
+        self.assertEqual(
+            original,
+            {
+                str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mode)
+                for p in root.rglob("*")
+                if p.is_file()
+            },
+        )
+        repeated_code, repeated = self.run_command("reconcile")
+        self.assertEqual(
+            (repeated_code, repeated["outcome"]), (0, "converged"), repeated
+        )
+        self.assertEqual(repeated["clients"]["codex"]["actions"], [])
+
+        different = fixture_selection(self.home, "b", ("codex",))
+        repository = self.home / "repository"
+        shutil.copytree(
+            artifact_root(self.home, different, "agent-plugins"), repository
+        )
+        subprocess.run(
+            ["git", "init", "--quiet", str(repository)],
+            env=self.environment,
+            check=True,
+        )
+        discovery = subprocess.run(
+            [
+                str(self.home / "bin/codex"),
+                "plugin",
+                "list",
+                "--marketplace",
+                "provingkit-local",
+                "--json",
+            ],
+            env=self.environment,
+            cwd=repository,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertTrue(json.loads(discovery.stdout)["installed"])
+        code, rediscovered = self.run_command("status")
+        self.assertEqual(
+            (code, rediscovered["outcome"]), (0, "converged"), rediscovered
+        )
+
+    def test_codex_adopts_equivalent_shared_alias_without_native_mutations(
+        self,
+    ) -> None:
+        self.use_native_clients()
+        selection = fixture_selection(self.home, "six_a", ("codex",))
+        selection["profile"]["clients"]["codex"]["marketplace"] = "provingkit-local"
+        self.selection.write_text(json.dumps(selection))
+        code, first = self.run_command("reconcile")
+        self.assertEqual(code, 0, first)
+        stable = Path(first["clients"]["codex"]["marketplace"]["root"])
+        external = self.home / "retained-alpha"
+        shutil.copytree(stable, external)
+        retained_backup = self.home / "retained-alpha-backup"
+        shutil.copytree(external, retained_backup)
+        for member in selection["profile"]["artifact_slate"]:
+            self.native_run(
+                "codex", "plugin", "remove", member + "@provingkit-local", "--json"
+            )
+        self.native_run(
+            "codex", "plugin", "marketplace", "remove", "provingkit-local", "--json"
+        )
+        self.native_run(
+            "codex", "plugin", "marketplace", "add", str(external), "--json"
+        )
+        for member in selection["profile"]["artifact_slate"]:
+            self.native_run(
+                "codex", "plugin", "add", member + "@provingkit-local", "--json"
+            )
+        shutil.rmtree(stable)
+        (self.home / ".local/state/provingkit/installations.json").unlink()
+        before = json.loads(
+            self.native_run(
+                "codex", "plugin", "list", "--marketplace", "provingkit-local", "--json"
+            ).stdout
+        )
+        cache = self.home / ".codex/plugins/cache/provingkit-local"
+        before_files = {
+            str(p.relative_to(cache)): (p.read_bytes(), p.stat().st_mode)
+            for p in cache.rglob("*")
+            if p.is_file()
+        }
+        selection["profile"]["clients"]["codex"]["members"] = {
+            member: {"enabled": True}
+            for member in ("proseweaving", "versionkeeping", "mergecraft")
+        }
+        self.selection.write_text(json.dumps(selection))
+
+        code, report = self.run_command("reconcile")
+
+        self.assertEqual((code, report["outcome"]), (0, "converged"), report)
+        self.assertEqual(report["clients"]["codex"]["actions"], [])
+        self.assertEqual(
+            report["clients"]["codex"]["marketplace"]["root"], str(external)
+        )
+        self.assertFalse(stable.exists())
+        after = json.loads(
+            self.native_run(
+                "codex", "plugin", "list", "--marketplace", "provingkit-local", "--json"
+            ).stdout
+        )
+        self.assertEqual(before, after)
+        self.assertEqual(
+            before_files,
+            {
+                str(p.relative_to(cache)): (p.read_bytes(), p.stat().st_mode)
+                for p in cache.rglob("*")
+                if p.is_file()
+            },
+        )
+
+        repeated_code, repeated = self.run_command("reconcile")
+        self.assertEqual(
+            (repeated_code, repeated["outcome"]), (0, "converged"), repeated
+        )
+        self.assertEqual(repeated["clients"]["codex"]["actions"], [])
+
+        combined = fixture_selection(self.home, "six_a", ("codex", "claude"))
+        combined["profile"]["clients"]["codex"] = selection["profile"]["clients"][
+            "codex"
+        ]
+        self.selection.write_text(json.dumps(combined))
+        code, healthy = self.run_command("reconcile")
+        self.assertEqual((code, healthy["outcome"]), (0, "converged"), healthy)
+        self.assertEqual(healthy["clients"]["claude"]["source_binding"], "match")
+        del combined["profile"]["clients"]["codex"]
+        del combined["profile"]["artifacts"]["agent-plugins"]
+        self.selection.write_text(json.dumps(combined))
+        code, claude_only = self.run_command("status")
+        self.assertEqual((code, claude_only["outcome"]), (0, "converged"), claude_only)
+        self.selection.write_text(json.dumps(selection))
+
+        # Identical payloads at another path do not preserve the adopted binding.
+        redirected = self.home / "redirected-alpha"
+        shutil.copytree(external, redirected)
+        shutil.copytree(external, stable)
+        mixed = fixture_selection(self.home, "six_a", ("cursor", "codex"))
+        mixed["profile"]["clients"]["codex"] = selection["profile"]["clients"]["codex"]
+        for source, expected_code, expected_binding in (
+            (redirected, 2, "different"),
+            (stable, 2, "different"),
+            (external, 0, "match"),
+        ):
+            for member in selection["profile"]["artifact_slate"]:
+                self.native_run(
+                    "codex", "plugin", "remove", member + "@provingkit-local", "--json"
+                )
+            self.native_run(
+                "codex", "plugin", "marketplace", "remove", "provingkit-local", "--json"
+            )
+            self.native_run(
+                "codex", "plugin", "marketplace", "add", str(source), "--json"
+            )
+            for member in selection["profile"]["artifact_slate"]:
+                self.native_run(
+                    "codex", "plugin", "add", member + "@provingkit-local", "--json"
+                )
+            self.selection.write_text(json.dumps(mixed if expected_code else selection))
+            code, observed = self.run_command("status")
+            self.assertEqual(code, expected_code, observed)
+            if expected_code:
+                self.assertEqual(observed["clients"], {})
+                self.assertIn("registration changed", observed["message"])
+                code, refused = self.run_command("reconcile")
+                self.assertEqual(code, 2, refused)
+                self.assertEqual(refused["clients"], {})
+                self.assertFalse((self.home / ".cursor").exists())
+                continue
+            self.assertEqual(
+                observed["clients"]["codex"]["source_binding"], expected_binding
+            )
+            self.assertEqual(observed["clients"]["codex"]["actions"], [])
+        shutil.rmtree(stable)
+
+        missing = Path(report["clients"]["codex"]["members"]["proseweaving"]["path"])
+        shutil.rmtree(missing)
+        code, repaired = self.run_command("reconcile")
+        self.assertEqual((code, repaired["outcome"]), (0, "converged"), repaired)
+        self.assertEqual(
+            repaired["clients"]["codex"]["members"]["proseweaving"]["content"], "match"
+        )
+        self.assertEqual(
+            repaired["clients"]["codex"]["marketplace"]["root"], str(external)
+        )
+        self.assertFalse(stable.exists())
+
+        desired = fixture_selection(self.home, "preview", ("codex",))
+        desired["profile"]["clients"]["codex"].update(
+            selection["profile"]["clients"]["codex"]
+        )
+        self.selection.write_text(json.dumps(desired))
+        code, refused = self.run_command("reconcile")
+        self.assertEqual(code, 2, refused)
+        self.assertEqual(refused["clients"]["codex"]["actions"], [])
+        self.assertIn("unselected members", refused["clients"]["codex"]["message"])
+        self.assertFalse(stable.exists())
+
+        self.selection.write_text(json.dumps(selection))
+        receipt = external / "RECEIPT.json"
+        original_receipt = receipt.read_text()
+        receipt.write_text(
+            original_receipt.replace(
+                '"parent_receipt_sha256": "', '"parent_receipt_sha256": "bad-'
+            )
+        )
+        code, drift = self.run_command("reconcile")
+        self.assertEqual(code, 2, drift)
+        self.assertEqual(drift["clients"], {})
+
+        # An external owner advances this same directory to the requested artifact.
+        # Matching new bytes cannot authorize a transition of an adopted baseline.
+        shutil.rmtree(external)
+        shutil.copytree(artifact_root(self.home, desired, "agent-plugins"), external)
+        catalog = external / ".agents/plugins/marketplace.json"
+        catalog.write_bytes(
+            catalog.read_bytes().replace(
+                b'"name":"provingkit"', b'"name":"provingkit-local"'
+            )
+        )
+        parent_bytes = (external / "RECEIPT.json").read_bytes()
+        parent = json.loads(parent_bytes)
+        (external / "RECEIPT.json").write_text(
+            json.dumps(
+                {
+                    "schema": "provingkit-local-marketplace-projection-v1",
+                    "source_commit": parent["source"]["commit"],
+                    "parent_receipt_sha256": hashlib.sha256(parent_bytes).hexdigest(),
+                    "change": {
+                        "path": ".agents/plugins/marketplace.json",
+                        "field": "name",
+                        "from": "provingkit",
+                        "to": "provingkit-local",
+                    },
+                    "plugin_slate": parent["plugin_slate"],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        self.selection.write_text(json.dumps(desired))
+        code, replaced_source = self.run_command("reconcile")
+        self.assertEqual(code, 2, replaced_source)
+        self.assertIn("adopted Codex source changed", replaced_source["message"])
+        self.assertEqual(replaced_source["clients"], {})
+        self.assertEqual(
+            before_files,
+            {
+                str(p.relative_to(cache)): (p.read_bytes(), p.stat().st_mode)
+                for p in cache.rglob("*")
+                if p.is_file()
+            },
+        )
+
+        # A coordinated selection of all members can rebind from the unchanged
+        # baseline to the owned source; the old source is then no longer needed.
+        shutil.rmtree(external)
+        shutil.copytree(retained_backup, external)
+        desired["profile"]["clients"]["codex"]["members"] = {
+            member: {"enabled": True} for member in desired["profile"]["artifact_slate"]
+        }
+        self.selection.write_text(json.dumps(desired))
+        code, advanced = self.run_command("reconcile")
+        self.assertEqual((code, advanced["outcome"]), (0, "converged"), advanced)
+        self.assertEqual(
+            advanced["clients"]["codex"]["marketplace"]["root"], str(stable)
+        )
+        shutil.rmtree(external)
+        code, independent = self.run_command("status")
+        self.assertEqual((code, independent["outcome"]), (0, "converged"), independent)
+
+    def test_claude_process_markers_do_not_change_payload_identity_and_are_backed_up(
+        self,
+    ) -> None:
+        self.use_native_clients()
+        selection = fixture_selection(self.home, clients=("claude",))
+        self.selection.write_text(json.dumps(selection))
+        code, initial = self.run_command("reconcile")
+        self.assertEqual(code, 0, initial)
+        installed = Path(
+            initial["clients"]["claude"]["members"]["proseweaving"]["path"]
+        )
+        marker = installed / ".in_use/2147483000"
+        marker.parent.mkdir()
+        marker.write_text('{"pid":2147483000,"procStart":"12345"}')
+        marker.chmod(0o644)
+
+        code, observed = self.run_command("reconcile")
+
+        self.assertEqual((code, observed["outcome"]), (0, "converged"), observed)
+        self.assertEqual(observed["clients"]["claude"]["actions"], [])
+        marker.unlink()
+        second = marker.parent / "2147483001"
+        second.write_text('{"pid":2147483001}')
+        code, changed = self.run_command("status")
+        self.assertEqual((code, changed["outcome"]), (0, "converged"), changed)
+        self.selection.write_text(
+            json.dumps(fixture_selection(self.home, "b", ("claude",)))
+        )
+        code, updated = self.run_command("reconcile")
+        self.assertEqual((code, updated["outcome"]), (0, "converged"), updated)
+        receipt = json.loads(
+            (self.home / ".local/state/provingkit/installations.json").read_text()
+        )
+        backup = next(
+            row for row in receipt["native_backups"] if row["member"] == "proseweaving"
+        )
+        self.assertEqual(
+            (Path(backup["path"]) / ".in_use/2147483001").read_text(),
+            '{"pid":2147483001}',
+        )
+
+    def test_claude_rejects_unrecognized_marker_shapes_before_native_actions(
+        self,
+    ) -> None:
+        self.use_native_clients()
+        self.selection.write_text(
+            json.dumps(fixture_selection(self.home, clients=("claude",)))
+        )
+        code, initial = self.run_command("reconcile")
+        self.assertEqual(code, 0, initial)
+        installed = Path(
+            initial["clients"]["claude"]["members"]["proseweaving"]["path"]
+        )
+        directory = installed / ".in_use"
+        directory.mkdir()
+        cases = [
+            ("123", ""),
+            ("123.tmp", '{"pid":123}'),
+            ("123", '{"pid":124}'),
+            ("123", '{"pid":123,"pid":123}'),
+            ("123", '{"pid":123,"procStart":12}'),
+            ("123", '{"pid":123,"extra":true}'),
+            ("123", " " * 4097),
+            ("123", "[]"),
+        ]
+        for name, content in cases:
+            with self.subTest(name=name, content=content[:60]):
+                marker = directory / name
+                marker.write_text(content)
+                code, refused = self.run_command("reconcile")
+                self.assertEqual(code, 2, refused)
+                self.assertEqual(refused["clients"]["claude"]["actions"], [])
+                self.assertEqual(marker.read_text(), content)
+                marker.unlink()
+        nested = directory / "nested"
+        nested.mkdir()
+        code, refused = self.run_command("reconcile")
+        self.assertEqual(code, 2, refused)
+        self.assertEqual(refused["clients"]["claude"]["actions"], [])
+        nested.rmdir()
+        elsewhere = installed / "skills/fixture/.in_use/123"
+        elsewhere.parent.mkdir()
+        elsewhere.write_text('{"pid":123}')
+        code, refused = self.run_command("reconcile")
+        self.assertEqual(code, 2, refused)
+        self.assertEqual(refused["clients"]["claude"]["actions"], [])
+
+    def test_unknown_marketplace_identity_is_rejected(self) -> None:
+        selection = fixture_selection(self.home, clients=("codex",))
+        selection["profile"]["clients"]["codex"]["marketplace"] = "unrecognized"
+        self.selection.write_text(json.dumps(selection))
+        code, report = self.run_command("validate")
+        self.assertEqual((code, report["outcome"]), (64, "invalid_selection"))
+
+    def test_recorded_codex_marketplace_rename_is_refused_without_duplicate_installs(
+        self,
+    ) -> None:
+        self.use_native_clients()
+        selection = fixture_selection(self.home, clients=("codex",))
+        self.selection.write_text(json.dumps(selection))
+        code, original = self.run_command("reconcile")
+        self.assertEqual(code, 0, original)
+        receipt_path = self.home / ".local/state/provingkit/installations.json"
+        receipt = json.loads(receipt_path.read_text())
+        # Older observations record identity only in the client observation.
+        receipt.pop("codex_marketplace", None)
+        receipt.pop("native_paths", None)
+        receipt_path.write_text(json.dumps(receipt))
+        selection = fixture_selection(self.home, clients=("claude", "cursor", "codex"))
+        selection["profile"]["clients"]["codex"]["marketplace"] = "provingkit-local"
+        self.selection.write_text(json.dumps(selection))
+        before = json.loads(
+            self.native_run("codex", "plugin", "marketplace", "list", "--json").stdout
+        )
+
+        for _ in range(2):
+            code, refused = self.run_command("reconcile")
+            self.assertEqual(code, 2, refused)
+            self.assertIn(
+                "identity_transition_unavailable",
+                refused["message"],
+            )
+            self.assertEqual(refused["clients"], {})
+            self.assertFalse((self.home / ".cursor/plugins/local").exists())
+            self.assertFalse((self.home / ".claude/plugins/cache").exists())
+            self.assertFalse(
+                (
+                    self.home
+                    / ".local/share/provingkit/marketplaces/agent-plugins-local"
+                ).exists()
+            )
+        after = json.loads(
+            self.native_run("codex", "plugin", "marketplace", "list", "--json").stdout
+        )
+        self.assertEqual(before, after)
 
     def test_native_same_version_change_preserves_unselected_members_and_data(
         self,
