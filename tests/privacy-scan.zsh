@@ -126,6 +126,16 @@ run_scan --root "$homebrew_root"
 (( scan_status == 0 ))
 [[ -z $scan_output ]]
 
+formula_basename_root=$test_root/formula-assignment-basename
+mkdir -p "$formula_basename_root"
+{
+  print -r -- "formula=$openssl_formula"
+  print -r -- "\"formula\": \"$sq_formula\","
+} >"$formula_basename_root/source.txt"
+run_scan --root "$formula_basename_root"
+(( scan_status == 0 ))
+[[ -z $scan_output ]]
+
 mkdir -p "$test_root/formula-semicolon"
 print -r -- "formula_path=/opt/$openssl_formula; next=1" \
   >"$test_root/formula-semicolon/source.txt"
@@ -237,6 +247,40 @@ suffix_dash=-extra
 suffix_plus=+extra
 suffix_underscore=_extra
 chained_suffix=${artifact_at}${private_domain}
+
+formula_basename_mixed_root=$test_root/formula-assignment-basename-mixed
+mkdir -p "$formula_basename_mixed_root"
+{
+  print -r -- "formula=$openssl_formula; contact=$private_email"
+  print -r -- \
+    "\"formula\": \"$sq_formula\", \"contact\": \"$private_email\""
+} >"$formula_basename_mixed_root/source.txt"
+expect_findings \
+  $'source.txt:1: [email] review required\nsource.txt:2: [email] review required' \
+  2 \
+  --root "$formula_basename_mixed_root"
+
+formula_basename_suffix_root=$test_root/formula-assignment-basename-suffix
+mkdir -p "$formula_basename_suffix_root"
+{
+  print -r -- "formula=${openssl_formula}_extra"
+  print -r -- "\"formula\": \"${sq_formula}.backup\","
+} >"$formula_basename_suffix_root/source.txt"
+expect_findings \
+  $'source.txt:1: [email] review required\nsource.txt:2: [email] review required' \
+  2 \
+  --root "$formula_basename_suffix_root"
+
+formula_basename_context_root=$test_root/formula-assignment-basename-context
+mkdir -p "$formula_basename_context_root"
+{
+  print -r -- "package=$openssl_formula"
+  print -r -- "\"artifact\": \"$sq_formula\","
+} >"$formula_basename_context_root/source.txt"
+expect_findings \
+  $'source.txt:1: [email] review required\nsource.txt:2: [email] review required' \
+  2 \
+  --root "$formula_basename_context_root"
 
 mkdir -p "$test_root/context-boundaries"
 {

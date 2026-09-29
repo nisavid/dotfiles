@@ -77,8 +77,8 @@ HOMEBREW_FORMULA_ASSIGNMENT = re.compile(
     r"[ \t]*(?::|=)[ \t]*(?P<quote>[\"']?)"
     r"(?P<value>[^\s\"',;]*)(?P=quote)"
 )
-HOMEBREW_FORMULA_PATH_ARTIFACT = re.compile(
-    rf"/(?P<artifact>{HOMEBREW_FORMULA_NAME_VERSION_PATTERN}\.rb)"
+HOMEBREW_FORMULA_ARTIFACT = re.compile(
+    rf"(?P<artifact>{HOMEBREW_FORMULA_NAME_VERSION_PATTERN}\.rb)"
 )
 HOMEBREW_BOTTLE_OUTPUT_ARTIFACT = re.compile(
     r"(?:\A|(?<=[\r\n]))[ \t]*"
@@ -499,12 +499,14 @@ def homebrew_file_content_spans(value: str) -> frozenset[tuple[int, int]]:
     spans: set[tuple[int, int]] = set()
     for assignment in HOMEBREW_FORMULA_ASSIGNMENT.finditer(value):
         value_start, value_end = assignment.span("value")
-        for artifact in HOMEBREW_FORMULA_PATH_ARTIFACT.finditer(
+        for artifact in HOMEBREW_FORMULA_ARTIFACT.finditer(
             value,
             value_start,
             value_end,
         ):
             span = artifact.span("artifact")
+            if span[0] != value_start and value[span[0] - 1] != "/":
+                continue
             boundary_end = span[1]
             if assignment.group("quote"):
                 if span[1] != value_end:
