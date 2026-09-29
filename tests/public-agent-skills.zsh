@@ -561,6 +561,8 @@ selected_mode="${1:-all}"
 typeset -a modes projection_targets fields selected_assertions
 for registration in $skill_registrations; do
   fields=( "${(@s/:/)registration}" )
+  (( ${#fields} == 4 )) || fail "invalid skill registration: $registration"
+  [[ -n "$fields[1]" && -n "$fields[2]" && -n "$fields[3]" ]] || fail "empty field in skill registration: $registration"
   [[ "$fields[4]" == yes || "$fields[4]" == no ]] || fail "invalid Claude projection flag: $registration"
   mode=$fields[1]
   if (( ${modes[(Ie)$mode]} == 0 )); then
