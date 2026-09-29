@@ -24,7 +24,7 @@ Use Conventional Commits for commits and pull request titles; `cog.toml` and the
 
 Treat `$HOME/.local/share/chezmoi` as the stable primary checkout. Preserve whichever branch is checked out there: do not switch or detach that checkout unless Ivan explicitly directs the branch change. Perform other branch work in a persistent sibling worktree under `$HOME/.local/share/chezmoi.wt/`.
 
-Before publication, run the test suites that own the touched surface: `zsh tests/public-agent-skills.zsh` for agent skills, `zsh tests/platform-portability.zsh` for deployment bindings, and `zsh tests/privacy-scan.zsh` plus `python3 scripts/privacy-scan --root . --require-age-manifest` for anything touching encrypted or private material. CI runs all of them; local `privacy-scan` needs `age` installed.
+Before publication, run the test suites that own the touched surface: `zsh tests/public-agent-skills.zsh` for agent skills, `zsh tests/platform-portability.zsh` for deployment bindings, and `zsh tests/privacy-scan.zsh` plus `python3 scripts/privacy-scan --root . --require-age-manifest` for anything touching encrypted or private material. CI runs all of them; local full scanning requires the official checksum-pinned `age-inspect` from `.github/workflows/privacy-age-integrity.yml` with exact version output `v1.3.1`, installed in an absolute directory outside the scan root named by `AGE_TOOLING_DIRECTORY`. Invoke it with `AGE_TOOLING_DIRECTORY=/absolute/external/age-bin python3 scripts/privacy-scan --root . --require-age-manifest`; a PATH-only `age` or `age-inspect` installation is insufficient.
 
 Never commit plaintext secrets. Secret-bearing snippets live as `.age` envelopes under `home/`; treat any plaintext credential in the working tree as a stop-and-report gate.
 
