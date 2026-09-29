@@ -37,7 +37,7 @@ A profile uses `provingkit-installation-selection-v1` and these fields:
 | `source` | Repository `https://github.com/nisavid/provingkit` and its full immutable `commit`. |
 | `artifact_slate` | Ordered complete catalog membership emitted by the projector. This is distinct from the installation selection. |
 | `artifacts` | Each selected target's archive URL, archive SHA-256 and root name, artifact tree SHA-256, separate receipt URL/SHA-256, mode-manifest URL/SHA-256, and catalog path. |
-| `clients` | Per-client artifact target, route, scope, and a map of selected member names to `{ "enabled": true }` or `{ "enabled": false }`. Only these members are reconciled. |
+| `clients` | Per-client artifact target, route, scope, optional `marketplace`, and a map of selected member names to `{ "enabled": true }` or `{ "enabled": false }`. Only these members are reconciled. |
 | `retirements` | Empty. Retirement is an operator-owned step; this command has no retirement actuator. |
 
 Targets and controls are fixed:
@@ -47,6 +47,11 @@ Targets and controls are fixed:
 | Codex | `agent-plugins` | `native_marketplace` | `implicit_user` |
 | Claude | `claude` | `native_marketplace` | `user` |
 | Cursor | `cursor` | `user_local_directory` | `user` |
+
+The marketplace defaults to `provingkit`. Codex also supports the explicit
+`provingkit-local` identity when an installation must remain distinct from a
+repository's `provingkit` catalog. Other names are unavailable. Claude retains
+`provingkit`; Cursor uses its local directory route.
 
 Use a complete clean catalog from one source snapshot when an existing shared
 marketplace contains additional installed members. For example, the artifact
@@ -102,6 +107,14 @@ pinned copy. It verifies file modes against the separate mode manifest because
 the artifact tree digest covers paths and bytes, not modes. Links and special
 files are outside this clean artifact format.
 
+For Codex's `provingkit-local` selection, verify the ordinary artifact first,
+then derive a fixed installation view. Change only the catalog name and replace
+the view's root receipt with `provingkit-local-marketplace-projection-v1`, binding
+the exact ordinary receipt digest, source commit, complete slate, and name
+change. Preserve every plugin file and mode. The acquired canonical artifact
+stays unchanged; the derived receipt is never accepted as an ordinary artifact
+receipt. This route requires the projector's compact catalog encoding.
+
 The stable native marketplace roots are
 `~/.local/share/provingkit/marketplaces/<target>/`. They contain complete copies
 of verified clean artifacts. Replacement requires either matching desired
@@ -109,6 +122,7 @@ content or matching the previous observed projection. Previous directories are
 retained below `~/.local/state/provingkit/backups/`; unrecognized modifications
 stop replacement. Immutable input directories and prior external sources are
 retained for recovery.
+Codex's alias uses `agent-plugins-local` as its owned directory name.
 
 `~/.local/state/provingkit/installations.json` records the selected source and
 artifacts, observed directories, native additions, client results, and source
@@ -144,6 +158,17 @@ do not edit the observation receipt to make an unknown installation appear
 recognized. This also applies to installations recorded by older versions of
 this procedure that lack the `native_files` inventory.
 
+An existing Codex `provingkit-local` source can be adopted in place when its complete files
+and modes match the verified installation view and every selected installation
+already has the requested content, registration, and enabled state. Record its
+actual source and inventories without rebinding the marketplace or changing
+caches. This observation-only adoption also works with unselected members.
+Missing selected caches can subsequently be repaired from that same verified
+source without rebinding it; unexplained cache edits still stop replacement.
+Retain the original source directory. A later source change still follows the
+client's rebind rules below; adoption does not make a commit-addressed directory
+mutable or establish a selected-only Codex rebind.
+
 An initial source rebind differs by client:
 
 - Codex rejects a same-name source replacement. Removal is allowed only when
@@ -171,6 +196,17 @@ otherwise a bounded version component within the observed cache layout. Both
 `local` and versioned directories are supported. The native-generated Codex
 `.codex-plugin/plugin.json` is recorded separately from artifact-defined files;
 unknown extra files and drift in a previously observed adapter are rejected.
+
+Claude's root `.in_use` directory contains volatile native process markers.
+Accept only direct regular files named by a positive decimal PID, containing
+at most 4096 bytes of JSON with a matching integer `pid` and optional decimal
+string `procStart`. Duplicate keys, incomplete writes, unknown fields, nested
+entries, and links make observation unavailable; preserve them for inspection.
+Validated markers are reported separately from plugin payloads and excluded
+from retained payload identity. Keep them in complete recovery copies. Their
+presence does not prove that a process is active or that a live update is safe.
+This format is grounded in Claude Code 2.1.284's installed marker writer and
+reader; tests construct marker fixtures and do not claim fresh session loading.
 
 Compatibility is based on required command/JSON shapes and observed state, with
 the native version included in the report. A different compatible patch version

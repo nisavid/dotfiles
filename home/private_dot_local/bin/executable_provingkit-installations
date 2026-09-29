@@ -13,6 +13,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 TARGETS = {"codex": "agent-plugins", "claude": "claude", "cursor": "cursor"}
@@ -116,6 +117,15 @@ def validate(selection: dict) -> dict | None:
     targets = set()
     for client, choice in profile["clients"].items():
         require(client in TARGETS, "unsupported client")
+        require(
+            choice.get("marketplace", "provingkit")
+            in (
+                ("provingkit", "provingkit-local")
+                if client == "codex"
+                else ("provingkit",)
+            ),
+            "unsupported native marketplace identity",
+        )
         target = TARGETS[client]
         targets.add(target)
         require(choice["artifact"] == target, "client artifact target differs")
@@ -313,10 +323,96 @@ def native_require(condition: bool, message: str) -> None:
         raise Unavailable(message)
 
 
+def unique_json_object(pairs: list) -> dict:
+    result = {}
+    for key, value in pairs:
+        native_require(key not in result, "duplicate native marker field")
+        result[key] = value
+    return result
+
+
+def installed_inventory(client: str, root: Path) -> tuple[dict, dict]:
+    """Separate Claude's validated, volatile process markers from payload identity."""
+    actual = files(root)
+    markers = {}
+    marker_root = root / ".in_use"
+    if client == "claude" and (marker_root.exists() or marker_root.is_symlink()):
+        native_require(
+            stat.S_ISDIR(marker_root.lstat().st_mode), "invalid Claude marker directory"
+        )
+        for path in marker_root.iterdir():
+            native_require(
+                stat.S_ISREG(path.lstat().st_mode)
+                and re.fullmatch(r"[1-9][0-9]*", path.name) is not None,
+                "unrecognized Claude process marker",
+            )
+            raw = path.read_bytes()
+            native_require(
+                0 < len(raw) <= 4096, "incomplete or oversized Claude process marker"
+            )
+            value = json.loads(
+                raw.decode("utf-8"), object_pairs_hook=unique_json_object
+            )
+            native_require(
+                isinstance(value, dict)
+                and set(value) in ({"pid"}, {"pid", "procStart"})
+                and type(value["pid"]) is int
+                and str(value["pid"]) == path.name
+                and (
+                    "procStart" not in value
+                    or (
+                        isinstance(value["procStart"], str)
+                        and re.fullmatch(r"[0-9]+", value["procStart"]) is not None
+                    )
+                ),
+                "unrecognized Claude process marker contents",
+            )
+            relative_path = path.relative_to(root).as_posix()
+            markers[relative_path] = actual.pop(relative_path)
+    return actual, markers
+
+
+@contextmanager
+def installation_view(root: Path, choice: dict):
+    """Derive the fixed Codex alias from an already verified canonical artifact."""
+    if choice.get("marketplace", "provingkit") == "provingkit":
+        yield root
+        return
+    catalog_path = CATALOGS["agent-plugins"]
+    canonical = (root / catalog_path).read_bytes()
+    needle = b'"name":"provingkit"'
+    native_require(
+        canonical.count(needle) == 1, "unsupported canonical catalog encoding"
+    )
+    parent_bytes = (root / "RECEIPT.json").read_bytes()
+    parent = json.loads(parent_bytes)
+    with tempfile.TemporaryDirectory(prefix="provingkit-alias-") as temporary:
+        view = Path(temporary) / "view"
+        shutil.copytree(root, view)
+        (view / catalog_path).write_bytes(
+            canonical.replace(needle, b'"name":"provingkit-local"', 1)
+        )
+        derived = {
+            "schema": "provingkit-local-marketplace-projection-v1",
+            "source_commit": parent["source"]["commit"],
+            "parent_receipt_sha256": digest(parent_bytes),
+            "change": {
+                "path": catalog_path,
+                "field": "name",
+                "from": "provingkit",
+                "to": "provingkit-local",
+            },
+            "plugin_slate": parent["plugin_slate"],
+        }
+        (view / "RECEIPT.json").write_text(json.dumps(derived, indent=2) + "\n")
+        yield view
+
+
 class NativeClient:
-    def __init__(self, name: str, home: Path):
+    def __init__(self, name: str, home: Path, marketplace: str = "provingkit"):
         self.name = name
         self.home = home
+        self.marketplace = marketplace
         self.sentinels = {}
         self.receipt = {}
         self.executable = shutil.which(name)
@@ -371,7 +467,7 @@ class NativeClient:
             "plugin",
             "list",
             *(
-                ("--marketplace", "provingkit", "--json")
+                ("--marketplace", self.marketplace, "--json")
                 if self.name == "codex"
                 else ("--json",)
             ),
@@ -382,14 +478,14 @@ class NativeClient:
             isinstance(marketplaces, list) and isinstance(plugins, list),
             "unrecognized native list shape",
         )
-        sources = [row for row in marketplaces if row["name"] == "provingkit"]
+        sources = [row for row in marketplaces if row["name"] == self.marketplace]
         native_require(len(sources) <= 1, "ambiguous provingkit marketplace")
         rows = {}
         for row in plugins:
             identifier = row["pluginId" if self.name == "codex" else "id"]
-            if not identifier.endswith("@provingkit"):
+            if not identifier.endswith("@" + self.marketplace):
                 continue
-            name = identifier.removesuffix("@provingkit")
+            name = identifier.removesuffix("@" + self.marketplace)
             native_require(
                 relative(name) and "/" not in name,
                 "unrecognized native member identifier",
@@ -398,7 +494,7 @@ class NativeClient:
                 native_require(
                     row["installed"] is True
                     and row["name"] == name
-                    and row["marketplaceName"] == "provingkit",
+                    and row["marketplaceName"] == self.marketplace,
                     "unrecognized Codex installed row",
                 )
             native_require(
@@ -440,7 +536,9 @@ class NativeClient:
         return {
             member: {
                 "registration": rows[member],
-                "files": files(self.installed_path(member, rows[member], self.receipt)),
+                "files": installed_inventory(
+                    self.name, self.installed_path(member, rows[member], self.receipt)
+                )[0],
             }
             for member in sorted(members)
         }
@@ -457,7 +555,9 @@ class NativeClient:
             if not path.exists():
                 continue
             data = json.loads(path.read_text())
-            entry = (data.get(section, {}) if section else data).get("provingkit", {})
+            entry = (data.get(section, {}) if section else data).get(
+                self.marketplace, {}
+            )
             if "autoUpdate" in entry:
                 native_require(
                     isinstance(entry["autoUpdate"], bool),
@@ -474,7 +574,9 @@ class NativeClient:
                 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", version) is not None,
                 "unrecognized Codex cache version",
             )
-            expected = self.config / "plugins/cache/provingkit" / member / version
+            expected = (
+                self.config / "plugins/cache" / self.marketplace / member / version
+            )
             observed = self.install_paths.get(member) or receipt.get(
                 "native_paths", {}
             ).get(member)
@@ -487,9 +589,9 @@ class NativeClient:
                 return Path(observed)
             return expected
         if row is None:
-            return self.config / "plugins/cache/provingkit" / member / "absent"
+            return self.config / "plugins/cache" / self.marketplace / member / "absent"
         path = Path(row["installPath"])
-        expected_parent = self.config / "plugins/cache/provingkit" / member
+        expected_parent = self.config / "plugins/cache" / self.marketplace / member
         native_require(
             path.is_absolute() and path.parent == expected_parent,
             "unexpected native installation path",
@@ -500,18 +602,19 @@ class NativeClient:
         result = self.call(
             "plugin",
             "add" if self.name == "codex" else "install",
-            member + "@provingkit",
+            member + "@" + self.marketplace,
             *(("--json",) if self.name == "codex" else ("--scope", "user", "--json")),
             action=True,
         )
         native_require(
-            result["pluginId"] == member + "@provingkit",
+            result["pluginId"] == member + "@" + self.marketplace,
             "unrecognized native install result",
         )
         if self.name == "codex":
             path = Path(result["installedPath"])
             native_require(
-                path.parent == self.config / "plugins/cache/provingkit" / member,
+                path.parent
+                == self.config / "plugins/cache" / self.marketplace / member,
                 "unexpected native install result path",
             )
             self.install_paths[member] = str(path)
@@ -522,7 +625,8 @@ class NativeClient:
         if path.exists() or path.is_symlink():
             actual = files(path)
             native_require(
-                self.replacement_files.get(member) == actual,
+                self.replacement_files.get(member)
+                == installed_inventory(self.name, path)[0],
                 f"selected cache changed before removal: {member}",
             )
             parent = self.home / ".local/state/provingkit/backups"
@@ -545,7 +649,7 @@ class NativeClient:
         self.call(
             "plugin",
             "remove" if self.name == "codex" else "uninstall",
-            member + "@provingkit",
+            member + "@" + self.marketplace,
             *(
                 ("--json",)
                 if self.name == "codex"
@@ -561,12 +665,19 @@ class NativeClient:
         self.call(
             "plugin",
             "enable" if enabled else "disable",
-            member + "@provingkit",
+            member + "@" + self.marketplace,
             "--scope",
             "user",
             "--json",
             action=True,
         )
+
+
+def marketplace_root(native: NativeClient, choice: dict) -> Path:
+    name = choice["artifact"] + (
+        "-local" if native.marketplace == "provingkit-local" else ""
+    )
+    return native.home / ".local/share/provingkit/marketplaces" / name
 
 
 def native_status(
@@ -583,15 +694,24 @@ def native_status(
         installed = native.installed_path(member, row, receipt)
         content, additions = "absent", {}
         if installed.exists() or installed.is_symlink():
-            expected, actual = files(root / "plugins" / member), files(installed)
+            expected = files(root / "plugins" / member)
+            native_require(
+                native.name != "claude"
+                or not any(
+                    name == ".in_use" or name.startswith(".in_use/")
+                    for name in expected
+                ),
+                "artifact declares Claude native marker files",
+            )
+            actual, markers = installed_inventory(native.name, installed)
             extra = set(actual) - set(expected)
             allowed = {".codex-plugin/plugin.json"} if native.name == "codex" else set()
             native_require(
                 extra <= allowed,
                 f"unknown installed files for {member}: {sorted(extra - allowed)}",
             )
-            additions = {name: actual[name] for name in extra}
-            if additions:
+            additions = {name: actual[name] for name in extra} | markers
+            if extra:
                 adapter = json.loads(
                     (installed / ".codex-plugin/plugin.json").read_text()
                 )
@@ -617,11 +737,15 @@ def native_status(
             "registered": row is not None,
             "native_additions": additions,
         }
-    stable = native.home / ".local/share/provingkit/marketplaces" / choice["artifact"]
+    source = native.source_path(marketplace)
     source_matches = (
-        native.source_path(marketplace) == str(stable)
-        and stable.exists()
-        and files(stable) == files(root)
+        source is not None
+        and (
+            source == str(marketplace_root(native, choice))
+            or native.marketplace == "provingkit-local"
+        )
+        and Path(source).exists()
+        and files(Path(source)) == files(root)
     )
     converged = source_matches and all(
         item["content"] == "match"
@@ -652,14 +776,14 @@ def native_reconcile(
     rows: dict,
     receipt: dict,
 ) -> tuple[dict, dict]:
-    stable = home / ".local/share/provingkit/marketplaces" / choice["artifact"]
+    stable = marketplace_root(native, choice)
     source = native.source_path(marketplace)
     rebind = source is not None and source != str(stable)
     if native.name == "claude" and source is not None:
         settings = json.loads((native.config / "settings.json").read_text())
         declared = (
             settings.get("extraKnownMarketplaces", {})
-            .get("provingkit", {})
+            .get(native.marketplace, {})
             .get("source")
         )
         native_require(
@@ -670,6 +794,12 @@ def native_reconcile(
         source is not None or not rows,
         "source_transition_unavailable: installed members have no marketplace",
     )
+    retained_source_matches = False
+    if rebind and native.name == "codex" and native.marketplace == "provingkit-local":
+        baseline = native_status(native, choice, root, marketplace, rows, receipt)
+        retained_source_matches = baseline["source_binding"] == "match"
+        if retained_source_matches:
+            rebind = False
     unselected = set(rows) - set(choice["members"])
     if rebind and native.name == "codex":
         native_require(
@@ -691,14 +821,23 @@ def native_reconcile(
     current = native_status(native, choice, root, marketplace, rows, receipt)
     for member, observed in current["members"].items():
         if observed["content"] != "absent":
-            native.replacement_files[member] = files(Path(observed["path"]))
+            native.replacement_files[member] = installed_inventory(
+                native.name, Path(observed["path"])
+            )[0]
         if observed["content"] == "different":
             previous = receipt.get("native_files", {}).get(native.name, {}).get(member)
             native_require(
-                previous == files(Path(observed["path"])),
+                previous == installed_inventory(native.name, Path(observed["path"]))[0],
                 f"unrecognized selected cache for {member}; reconcile its contents with the owner before replacement",
             )
-    changed = project_directory(root, stable, home, receipt)
+    if retained_source_matches:
+        native_require(
+            files(Path(source)) == files(root),
+            "registered source changed during adoption",
+        )
+        changed = False
+    else:
+        changed = project_directory(root, stable, home, receipt)
     if rebind:
         receipt.setdefault("source_transitions", []).append(
             {
@@ -712,7 +851,12 @@ def native_reconcile(
             for member in rows:
                 native.uninstall(member)
             native.call(
-                "plugin", "marketplace", "remove", "provingkit", "--json", action=True
+                "plugin",
+                "marketplace",
+                "remove",
+                native.marketplace,
+                "--json",
+                action=True,
             )
         marketplace = None
     if marketplace is None:
@@ -730,7 +874,7 @@ def native_reconcile(
             "plugin",
             "marketplace",
             "update",
-            "provingkit",
+            native.marketplace,
             structured=False,
             action=True,
         )
@@ -963,15 +1107,24 @@ def main() -> int:
                             cursor_reconcile(home, choice, root, receipt)
                         observation = cursor_status(home, choice, root)
                     else:
-                        native = NativeClient(client, home)
-                        marketplace, rows = native.observe()
-                        if args.command == "reconcile":
-                            marketplace, rows = native_reconcile(
-                                native, home, choice, root, marketplace, rows, receipt
+                        with installation_view(root, choice) as root:
+                            native = NativeClient(
+                                client, home, choice.get("marketplace", "provingkit")
                             )
-                        observation = native_status(
-                            native, choice, root, marketplace, rows, receipt
-                        )
+                            marketplace, rows = native.observe()
+                            if args.command == "reconcile":
+                                marketplace, rows = native_reconcile(
+                                    native,
+                                    home,
+                                    choice,
+                                    root,
+                                    marketplace,
+                                    rows,
+                                    receipt,
+                                )
+                            observation = native_status(
+                                native, choice, root, marketplace, rows, receipt
+                            )
                     report["clients"][client] = observation
                     if native is not None and args.command == "reconcile":
                         inventories = receipt.setdefault("native_files", {}).setdefault(
@@ -982,7 +1135,9 @@ def main() -> int:
                                 observed["content"] == "match"
                                 and observed["registered"]
                             ):
-                                inventories[member] = files(Path(observed["path"]))
+                                inventories[member] = installed_inventory(
+                                    client, Path(observed["path"])
+                                )[0]
                     if client == "codex" and args.command == "reconcile":
                         for member, observed in observation["members"].items():
                             if (
