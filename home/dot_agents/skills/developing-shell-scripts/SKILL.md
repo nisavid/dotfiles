@@ -42,6 +42,7 @@ Do not use this skill for non-shell implementation work or as a substitute for c
 - In Zsh functions, start with `emulate -L zsh` and opt into options explicitly so caller settings do not leak into control flow
 - Check prerequisites with `command -v`, validate required environment variables, and clean up temporary files with traps
 - In Zsh scripts, errexit inside a function skips zsh's EXIT trap: failure helpers should `exit`, not `return`, and other in-function command failures need errexit off and `err_return`, or an equivalent, in every function between the failure and top level; `emulate -L zsh` turns errexit off, so do not re-enable it in those functions
+- In Zsh 5.9.2 scripts under `set -euo pipefail`, an unset expansion under `nounset` skips the EXIT trap even at top level; `${var:?message}` skips it inside a function with or without `errexit`. Validate required variables before creating temporary files; after that, use `${var-}` and an explicit check that `exit`s.
 - Prefer `print -r --` in Zsh, keep help text in single quotes or heredocs, and support both short and long GNU-style options when a CLI is user-facing
 
 Read [references/operational-details.md](references/operational-details.md) for shell-specific safety details, CLI parsing, portability gotchas, toolchain choices, and cleanup patterns.
