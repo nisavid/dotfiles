@@ -52,6 +52,9 @@ The marketplace defaults to `provingkit`. Codex also supports the explicit
 `provingkit-local` identity when an installation must remain distinct from a
 repository's `provingkit` catalog. Other names are unavailable. Claude retains
 `provingkit`; Cursor uses its local directory route.
+Changing an identity already recorded by this producer requires a separately
+reviewed migration. The command refuses that change before native actions;
+it does not install duplicate aliases or rename the existing marketplace.
 
 Use a complete clean catalog from one source snapshot when an existing shared
 marketplace contains additional installed members. For example, the artifact

@@ -506,6 +506,45 @@ class InstallationCommandTests(unittest.TestCase):
         code, report = self.run_command("validate")
         self.assertEqual((code, report["outcome"]), (64, "invalid_selection"))
 
+    def test_recorded_codex_marketplace_rename_is_refused_without_duplicate_installs(
+        self,
+    ) -> None:
+        self.use_native_clients()
+        selection = fixture_selection(self.home, clients=("codex",))
+        self.selection.write_text(json.dumps(selection))
+        code, original = self.run_command("reconcile")
+        self.assertEqual(code, 0, original)
+        receipt_path = self.home / ".local/state/provingkit/installations.json"
+        receipt = json.loads(receipt_path.read_text())
+        # Older observations record identity only in the client observation.
+        receipt.pop("codex_marketplace", None)
+        receipt.pop("native_paths", None)
+        receipt_path.write_text(json.dumps(receipt))
+        selection["profile"]["clients"]["codex"]["marketplace"] = "provingkit-local"
+        self.selection.write_text(json.dumps(selection))
+        before = json.loads(
+            self.native_run("codex", "plugin", "marketplace", "list", "--json").stdout
+        )
+
+        for _ in range(2):
+            code, refused = self.run_command("reconcile")
+            self.assertEqual(code, 2, refused)
+            self.assertIn(
+                "identity_transition_unavailable",
+                refused["clients"]["codex"]["message"],
+            )
+            self.assertEqual(refused["clients"]["codex"]["actions"], [])
+            self.assertFalse(
+                (
+                    self.home
+                    / ".local/share/provingkit/marketplaces/agent-plugins-local"
+                ).exists()
+            )
+        after = json.loads(
+            self.native_run("codex", "plugin", "marketplace", "list", "--json").stdout
+        )
+        self.assertEqual(before, after)
+
     def test_native_same_version_change_preserves_unselected_members_and_data(
         self,
     ) -> None:

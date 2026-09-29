@@ -931,6 +931,20 @@ def load_receipt(home: Path) -> dict:
         and isinstance(receipt.get("source_transitions", []), list),
         "unrecognized observation history",
     )
+    previous_marketplace = (
+        receipt.get("clients", {}).get("codex", {}).get("marketplace")
+    )
+    if previous_marketplace is not None:
+        previous_identity = previous_marketplace["name"]
+        native_require(
+            receipt.get("codex_marketplace") in (None, previous_identity),
+            "conflicting recorded Codex marketplace identities",
+        )
+        receipt["codex_marketplace"] = previous_identity
+    native_require(
+        receipt.get("codex_marketplace") in (None, "provingkit", "provingkit-local"),
+        "unrecognized recorded Codex marketplace identity",
+    )
     return receipt
 
 
@@ -938,6 +952,9 @@ def save_receipt(home: Path, receipt: dict, selection: dict, clients: dict) -> N
     receipt["selection"] = {
         key: selection[key] for key in ("source", "adoption", "artifacts")
     }
+    codex_marketplace = clients.get("codex", {}).get("marketplace")
+    if codex_marketplace is not None:
+        receipt["codex_marketplace"] = codex_marketplace["name"]
     receipt["clients"] = clients
     path = receipt_path(home)
     raw = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
@@ -1107,6 +1124,12 @@ def main() -> int:
                             cursor_reconcile(home, choice, root, receipt)
                         observation = cursor_status(home, choice, root)
                     else:
+                        native_require(
+                            client != "codex"
+                            or receipt.get("codex_marketplace")
+                            in (None, choice.get("marketplace", "provingkit")),
+                            "identity_transition_unavailable: changing a recorded Codex marketplace requires a separate migration",
+                        )
                         with installation_view(root, choice) as root:
                             native = NativeClient(
                                 client, home, choice.get("marketplace", "provingkit")
