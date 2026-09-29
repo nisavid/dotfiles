@@ -90,6 +90,7 @@ run_cutover() {
   HINDSIGHT_TEST_INSTALL_ROOT="$test_install_root" \
   HINDSIGHT_AGENTS_CHECKOUT="$agents_root" \
   HINDSIGHT_INSTALLATION_CONFIG="$installation_config" \
+  HINDSIGHT_INSTALL_ROOT="$test_install_root" \
   stop_legacy="$helpers/stop" \
   rollback_preflight="$helpers/rollback" \
   activation_acceptance="$helpers/accept" \
