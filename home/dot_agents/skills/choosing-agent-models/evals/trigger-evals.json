@@ -34,5 +34,25 @@
   {
     "query": "Explain the difference between supervised and unsupervised learning.",
     "should_trigger": false
+  },
+  {
+    "query": "Does ordinary cleanup of a test-owned child process require Daybreak?",
+    "should_trigger": true
+  },
+  {
+    "query": "The security finding is resolved. Choose the reviewer for the remaining wording and synthetic fixture plumbing.",
+    "should_trigger": true
+  },
+  {
+    "query": "A model declined this task. Determine whether this is a capability error, permission problem, or safety refusal before choosing another route.",
+    "should_trigger": true
+  },
+  {
+    "query": "Explain why a child process becomes a zombie on Unix.",
+    "should_trigger": false
+  },
+  {
+    "query": "Rewrite this ordinary user-facing sentence without delegating or selecting a model.",
+    "should_trigger": false
   }
 ]

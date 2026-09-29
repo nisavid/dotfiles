@@ -6,9 +6,10 @@ test_dir=$(mktemp -d "${TMPDIR:-/tmp}/proton-pass-startup-bindings.XXXXXX")
 test_dir=${test_dir:A}
 trap 'rm -rf -- "$test_dir"' EXIT HUP INT TERM
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -ru2 -- "FAIL: $*"
-  return 1
+  exit 1
 }
 
 assert_line() {
@@ -26,6 +27,11 @@ ignore_template=$repo_root/home/.chezmoiignore
 [[ -f $wants_source ]] || fail 'the Plasma target wants link must be managed'
 [[ -f $agent_template ]] || fail 'the macOS LaunchAgent must be managed'
 [[ -f $activation_template ]] || fail 'the provider-readiness activation hook must be managed'
+# The Linux unit awaits login prerequisites for up to 65.30 seconds, then two
+# 36-second readiness attempts, backoff, and notification need 79.15 more:
+# 144.45 seconds in all. The ceiling keeps a 15.55-second margin.
+assert_line 'ExecStart=%h/.local/bin/proton-pass-startup --await-prerequisites' "$unit_source"
+assert_line 'TimeoutStartSec=160s' "$unit_source"
 
 if [[ $OSTYPE == linux* ]]; then
   systemd_test_bin=
@@ -53,8 +59,13 @@ Description=Isolated KWallet fixture
 Type=oneshot
 ExecStart=/bin/true' >"$transaction_dir/plasma-kwallet-pam.service"
 
+  # A user-mode manager needs a runtime directory even under --test; supply a
+  # private one so the transaction never depends on the caller's session.
+  transaction_runtime_dir=$test_dir/systemd-runtime
+  mkdir -m 0700 -- "$transaction_runtime_dir"
   transaction_log=$test_dir/systemd-transaction.log
-  if ! SYSTEMD_UNIT_PATH="${transaction_dir}:${unit_source:h}" \
+  if ! XDG_RUNTIME_DIR=$transaction_runtime_dir \
+    SYSTEMD_UNIT_PATH="${transaction_dir}:${unit_source:h}" \
     SYSTEMD_GENERATOR_PATH=/dev/null \
     SYSTEMD_ENVIRONMENT_GENERATOR_PATH=/dev/null \
     SYSTEMD_LOG_LEVEL=info \

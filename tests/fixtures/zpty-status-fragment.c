@@ -309,6 +309,14 @@ static bool provider_completion_recorded(void) {
   return path != NULL && *path != '\0' && access(path, F_OK) == 0;
 }
 
+/* Later controllers, such as the forced cleanup after a failed login, run in
+   fresh processes; only the first (login) controller is the fixture target. */
+static bool waiter_controller_recorded(void) {
+  const char *path = getenv("ZPTY_WAITER_STAGE_CONTROLLER_PID_FILE");
+
+  return path != NULL && *path != '\0' && access(path, F_OK) == 0;
+}
+
 static bool identity_loss_requested(void) {
   return initial_identity_loss_requested() ||
          post_active_identity_loss_requested();
@@ -423,7 +431,8 @@ int kill(pid_t target, int signal_number) {
   }
   if (waiter_stage_mode_is("retirement") && zpty_child_process &&
       target == 0 && signal_number == SIGKILL &&
-      provider_completion_recorded() && !waiter_retirement_blocked) {
+      provider_completion_recorded() && !waiter_retirement_blocked &&
+      !waiter_controller_recorded()) {
     waiter_retirement_blocked = true;
     record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
                   "login-controller-targeted\n");

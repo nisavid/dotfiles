@@ -1,0 +1,233 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+: "${FAKE_GH_STATE_DIR:?}"
+: "${FAKE_GH_SCENARIO:?}"
+
+signal_parent_repeatedly() {
+  kill -TERM "$PPID"
+  sleep 0.1
+  kill -INT "$PPID"
+  sleep 0.1
+  kill -HUP "$PPID"
+}
+
+print -r -- "$*" >>"$FAKE_GH_STATE_DIR/calls.log"
+
+if [[ ${1:-} == api ]]; then
+  shift
+  method=GET
+  hostname=
+  input_file=
+  endpoint=
+  typeset -a headers
+  while (( $# > 0 )); do
+    case "$1" in
+      --method)
+        method=$2
+        shift 2
+        ;;
+      --hostname)
+        hostname=$2
+        shift 2
+        ;;
+      --header|-H)
+        headers+=("$2")
+        shift 2
+        ;;
+      --input)
+        input_file=$2
+        shift 2
+        ;;
+      *)
+        endpoint=$1
+        shift
+        ;;
+    esac
+  done
+
+  if [[ ${FAKE_GH_REQUIRE_ADMIN_API_CONTRACT:-0} == 1 ]]; then
+    [[ $hostname == github.com ]] || {
+      print -u2 -- "administrative GitHub call did not pin github.com"
+      return 66
+    }
+    accept_header_count=0
+    version_header_count=0
+    for header in "${headers[@]}"; do
+      case "$header" in
+        'Accept: application/vnd.github+json')
+          accept_header_count=$((accept_header_count + 1))
+          ;;
+        'X-GitHub-Api-Version: 2022-11-28')
+          version_header_count=$((version_header_count + 1))
+          ;;
+      esac
+    done
+    (( accept_header_count == 1 && version_header_count == 1 )) || {
+      print -u2 -- "administrative GitHub call did not pin the REST headers"
+      return 66
+    }
+  fi
+
+  if [[ $method == PATCH ]]; then
+    check_count=$(jq -r '.checks | length' "$input_file")
+    jq -e '
+      (keys | sort) == ["checks", "strict"] and
+      .strict == true and
+      all(.checks[];
+        (.context | type) == "string" and
+        (.app_id | type) == "number" and .app_id > 0 and
+        .app_id == (.app_id | floor))
+    ' "$input_file" >/dev/null || return 65
+    if [[ $check_count == 3 ]]; then
+      jq -e '
+        ([.checks[] | [.context, .app_id]] | sort) ==
+        ([
+          ["check conventional commit compliance", 15368],
+          ["CodeRabbit", 347564],
+          ["zsh deployment portability", 15368]
+        ] | sort)
+      ' "$input_file" >/dev/null || return 65
+      cp "$FAKE_GH_STATE_DIR/exception.json" "$FAKE_GH_STATE_DIR/protection.json"
+      case "$FAKE_GH_SCENARIO" in
+        exception-patch-ambiguous|finalizer-repeated-signals|finalizer-child-self-term)
+          return 74
+          ;;
+        exception-wrong)
+          jq '.enforce_admins.enabled = false' \
+            "$FAKE_GH_STATE_DIR/protection.json" \
+            >"$FAKE_GH_STATE_DIR/protection.wrong.json"
+          mv "$FAKE_GH_STATE_DIR/protection.wrong.json" \
+            "$FAKE_GH_STATE_DIR/protection.json"
+          ;;
+        interrupt-patch)
+          : >"$FAKE_GH_STATE_DIR/signal-ready"
+          kill -TERM "$PPID"
+          sleep 1
+          return 143
+          ;;
+      esac
+    else
+      jq -e '
+        ([.checks[] | [.context, .app_id]] | sort) ==
+        ([
+          ["check conventional commit compliance", 15368],
+          ["CodeRabbit", 347564],
+          ["zsh deployment portability", 15368],
+          ["Verify trusted base against candidate data", 15368]
+        ] | sort)
+      ' "$input_file" >/dev/null || return 65
+      case "$FAKE_GH_SCENARIO" in
+        restore-fails)
+          return 75
+          ;;
+        restore-fails-once)
+          restore_attempt=$(awk '
+            /required-checks\.restore\.json/ { count++ }
+            END { print count + 0 }
+          ' "$FAKE_GH_STATE_DIR/calls.log")
+          if (( restore_attempt == 1 )); then
+            return 75
+          fi
+          cp "$FAKE_GH_STATE_DIR/preimage.json" \
+            "$FAKE_GH_STATE_DIR/protection.json"
+          ;;
+        restore-ambiguous)
+          cp "$FAKE_GH_STATE_DIR/preimage.json" \
+            "$FAKE_GH_STATE_DIR/protection.json"
+          return 75
+          ;;
+        restore-repeated-signals|finalizer-repeated-signals)
+          signal_parent_repeatedly
+          cp "$FAKE_GH_STATE_DIR/preimage.json" \
+            "$FAKE_GH_STATE_DIR/protection.json"
+          ;;
+        finalizer-child-self-term)
+          kill -TERM "$$"
+          sleep 0.1
+          cp "$FAKE_GH_STATE_DIR/preimage.json" \
+            "$FAKE_GH_STATE_DIR/protection.json"
+          ;;
+        *)
+          cp "$FAKE_GH_STATE_DIR/preimage.json" \
+            "$FAKE_GH_STATE_DIR/protection.json"
+          ;;
+      esac
+    fi
+    print -r -- '{}'
+    return 0
+  fi
+
+  if [[ $method == PUT ]]; then
+    [[ $endpoint == repos/nisavid/dotfiles/pulls/286/merge ]] || {
+      print -u2 -- "unexpected fake merge endpoint: $endpoint"
+      return 64
+    }
+    jq -e '
+      .sha == "cccccccccccccccccccccccccccccccccccccccc" and
+      .merge_method == "squash"
+    ' "$input_file" >/dev/null || return 65
+    case "$FAKE_GH_SCENARIO" in
+      merge-error)
+        return 76
+        ;;
+      merge-rejected)
+        jq -n '{sha: null, merged: false, message: "not mergeable"}'
+        return 0
+        ;;
+      merge-ambiguous|interrupt-merge)
+        jq '.merged = true | .state = "closed" | .merge_commit_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' \
+          "$FAKE_GH_STATE_DIR/pull.json" >"$FAKE_GH_STATE_DIR/pull.next.json"
+        mv "$FAKE_GH_STATE_DIR/pull.next.json" "$FAKE_GH_STATE_DIR/pull.json"
+        print -r -- bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+          >"$FAKE_GH_STATE_DIR/main.sha"
+        if [[ $FAKE_GH_SCENARIO == interrupt-merge ]]; then
+          : >"$FAKE_GH_STATE_DIR/signal-ready"
+          kill -TERM "$PPID"
+          sleep 1
+          return 143
+        fi
+        return 77
+        ;;
+      *)
+        jq '.merged = true | .state = "closed" | .merge_commit_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' \
+          "$FAKE_GH_STATE_DIR/pull.json" >"$FAKE_GH_STATE_DIR/pull.next.json"
+        mv "$FAKE_GH_STATE_DIR/pull.next.json" "$FAKE_GH_STATE_DIR/pull.json"
+        print -r -- bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+          >"$FAKE_GH_STATE_DIR/main.sha"
+        jq -n '{
+          sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          merged: true,
+          message: "merged"
+        }'
+        return 0
+        ;;
+    esac
+  fi
+
+  case "$endpoint" in
+    repos/nisavid/dotfiles/branches/main/protection)
+      if [[ $FAKE_GH_SCENARIO == restore-read-repeated-signals ]] &&
+        awk '/required-checks\.restore\.json/ { found = 1 } END { exit !found }' \
+          "$FAKE_GH_STATE_DIR/calls.log"; then
+        signal_parent_repeatedly
+      fi
+      command cat "$FAKE_GH_STATE_DIR/protection.json"
+      ;;
+    repos/nisavid/dotfiles/pulls/286)
+      command cat "$FAKE_GH_STATE_DIR/pull.json"
+      ;;
+    repos/nisavid/dotfiles/git/ref/heads/main)
+      jq -n --rawfile sha "$FAKE_GH_STATE_DIR/main.sha" \
+        '{object: {sha: ($sha | rtrimstr("\n"))}}'
+      ;;
+    *)
+      print -u2 -- "unexpected fake gh api endpoint: $endpoint"
+      return 64
+      ;;
+  esac
+  return 0
+fi
+
+print -u2 -- "unexpected fake gh command: $*"
+return 64

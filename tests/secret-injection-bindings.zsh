@@ -5,9 +5,10 @@ setopt extended_glob
 repo_root=${0:A:h:h}
 cd "$repo_root"
 
+# exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
-  return 1
+  exit 1
 }
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-injection-bindings.XXXXXX")
@@ -279,6 +280,7 @@ mkdir -m 700 -- "$rendered_profiles"
 for profile_template in "${profile_templates[@]}"; do
   profile_name=${${profile_template:t}#private_}
   profile_name=${profile_name%.env.tmpl}
+  [[ $profile_name == github ]] && continue
   rendered_profile=$rendered_profiles/$profile_name.env
   chezmoi -S home execute-template \
     --override-data-file tests/fixtures/secret-exec-public.toml \
@@ -293,14 +295,81 @@ for profile_template in "${profile_templates[@]}"; do
   done < "$rendered_profile"
 done
 
+render_github_profile() {
+  local host=$1
+  local target=$2
+  local override_data
+  override_data=$(printf '{"chezmoi":{"hostname":"%s"}}' "$host")
+  chezmoi -S home execute-template \
+    --override-data "$override_data" \
+    --override-data-file tests/fixtures/secret-exec-public.toml \
+    < home/dot_config/private_secret-exec/private_profiles/private_github.env.tmpl > "$target"
+}
+
+github_personal_profile=$test_dir/github-personal.env
+render_github_profile test-host "$github_personal_profile"
+grep -Fx '# secret-exec-github-profile=github-fixture-personal' "$github_personal_profile" >/dev/null || \
+  fail 'the fixture host must select the personal GitHub profile'
+grep -Fx '# secret-exec-github-login=fixture-personal' "$github_personal_profile" >/dev/null || \
+  fail 'the fixture host must carry the personal GitHub identity marker'
+grep -Fx 'GITHUB_PERSONAL_ACCESS_TOKEN=pass://fixture-vault/item-d/password' "$github_personal_profile" >/dev/null || \
+  fail 'the fixture host must render the personal GitHub locator'
+
+github_secondary_profile=$test_dir/github-secondary.env
+render_github_profile second-host "$github_secondary_profile"
+grep -Fx '# secret-exec-github-profile=github-fixture-secondary' "$github_secondary_profile" >/dev/null || \
+  fail 'the second fixture host must select the secondary GitHub profile'
+grep -Fx '# secret-exec-github-login=fixture-secondary' "$github_secondary_profile" >/dev/null || \
+  fail 'the second fixture host must carry the secondary GitHub identity marker'
+grep -Fx 'GITHUB_PERSONAL_ACCESS_TOKEN=pass://fixture-vault/item-f/password' "$github_secondary_profile" >/dev/null || \
+  fail 'the second fixture host must render its distinct GitHub locator'
+
+if render_github_profile unknown-fixture "$test_dir/github-unknown.env" 2> "$test_dir/github-unknown.err"; then
+  fail 'an unbound host must not render a GitHub profile'
+fi
+grep -F 'no GitHub credential binding for host' "$test_dir/github-unknown.err" >/dev/null || \
+  fail 'an unbound host must report a value-free profile-selection failure'
+for confidential_value in github-fixture-personal github-fixture-secondary \
+  fixture-personal fixture-secondary fixture-vault 'pass://'; do
+  if grep -F -- "$confidential_value" "$test_dir/github-unknown.env" \
+    "$test_dir/github-unknown.err" >/dev/null; then
+    fail 'an unbound host must not disclose profile, identity, or locator data'
+  fi
+done
+
+if render_github_profile missing-profile-host "$test_dir/github-missing.env" \
+  2> "$test_dir/github-missing.err"; then
+  fail 'a binding that names a missing profile must not render a GitHub profile'
+fi
+grep -F 'names a missing profile' "$test_dir/github-missing.err" >/dev/null || \
+  fail 'a binding that names a missing profile must report a value-free failure'
+if grep -F -e github-fixture-missing -e fixture-vault -e 'pass://' \
+  "$test_dir/github-missing.env" "$test_dir/github-missing.err" >/dev/null; then
+  fail 'a binding that names a missing profile must not disclose profile or locator data'
+fi
+
 commands_template=home/dot_config/private_secret-exec/private_commands.env.tmpl
 rendered_commands=$test_dir/rendered-commands.env
 chezmoi -S home execute-template \
   --override-data-file tests/fixtures/secret-exec-public.toml \
   < "$commands_template" > "$rendered_commands"
+command_mapping_line_valid() {
+  [[ -z $1 || $1 == \#* ||
+    $1 == [A-Za-z0-9][A-Za-z0-9_.+-]#=[A-Za-z0-9][A-Za-z0-9_.-]#(|[?]) ]]
+}
+for command_line in tool=profile 'tool=profile?' 'tool.x+y=pro_file-1.2?'; do
+  command_mapping_line_valid "$command_line" ||
+    fail "the command-map syntax must accept $command_line"
+done
+for command_line in 'tool=profile??' 'tool=?' 'tool=?profile' 'tool=pro?file' \
+  'tool?=profile' 'tool=profile ?' 'tool=' '=profile'; do
+  ! command_mapping_line_valid "$command_line" ||
+    fail "the command-map syntax must reject $command_line"
+done
+grep -Fqx 'tool-b=aws?' "$rendered_commands" ||
+  fail 'the fixture command map must exercise a best-effort mapping'
 while IFS= read -r command_line || [[ -n $command_line ]]; do
-  [[ -z $command_line || $command_line == \#* ||
-    $command_line == [A-Za-z0-9][A-Za-z0-9_.+-]#=[A-Za-z0-9][A-Za-z0-9_.-]# ]] || \
+  command_mapping_line_valid "$command_line" || \
     fail 'the fixture command map contains an invalid mapping'
 done < "$rendered_commands"
 

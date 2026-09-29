@@ -22,10 +22,11 @@ A PR-fixup branch is a narrow patch stacked on the PR under review. Its base is 
    - If no open PR is found, or multiple PRs match, stop and ask which PR to target.
 2. Create the branch from the latest base PR head:
    - Fetch the base head ref.
-   - Derive the branch by replacing the first path segment with `ivan/`; if there is no slash, prepend `ivan/`.
+   - Resolve the operator's branch prefix: the repository's own instructions or a more specific rule for its owner take precedence over the operator's user-level default. If no applicable convention sets a prefix, ask.
+   - Derive the branch by replacing the first path segment with that prefix; if there is no slash, prepend it.
    - Remove a trailing `-p<N>` before adding the new suffix.
    - Append `-p<N>`, starting at `-p0` and incrementing to the next unused local head, relevant remote head, or open PR head in the target repository.
-   - Example: `jason/multi-cred-test` becomes `ivan/multi-cred-test-p0`.
+   - Example: with the prefix `me/`, `author/multi-cred-test` becomes `me/multi-cred-test-p0`.
 3. Keep scope narrow:
    - Apply only concrete fixes for the base PR.
    - Preserve unrelated dirty work; stage explicit files only.
@@ -56,6 +57,7 @@ A PR-fixup branch is a narrow patch stacked on the PR under review. Its base is 
 | Mistake | Fix |
 | --- | --- |
 | Basing the fixup PR on `main` | Base it on the reviewed PR's head branch. |
+| Hard-coding a personal branch prefix | Resolve the prefix from the operator's applicable convention for the target repository. |
 | Reusing `-p0` after another fixup exists | Scan local heads, relevant remote heads, and open PR heads before choosing the suffix ordinal. |
 | Marking ready while fixes are speculative or incomplete | Stop at draft or branch-only and ask for the readiness decision. |
 | Requesting review while still draft | Request the base PR author's review only after ready-for-review. |

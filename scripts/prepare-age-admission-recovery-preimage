@@ -1,0 +1,1916 @@
+#!/usr/bin/env python3
+"""Prepare a read-only, digest-bound GitHub recovery preimage."""
+
+from __future__ import annotations
+
+import sys
+
+if not (sys.flags.isolated and sys.flags.dont_write_bytecode and sys.flags.no_site):
+    print(
+        "recovery preimage preparation requires python3 -I -B -S",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+import argparse
+import copy
+import errno
+import hashlib
+import json
+import os
+import re
+import selectors
+import shutil
+import signal
+import stat
+import subprocess
+import time
+from pathlib import Path, PurePosixPath
+from typing import NoReturn
+
+os.umask(0o077)
+
+REQUEST_SCHEMA = "issue286-recovery-preimage-request/v2"
+READY_SCHEMA = "issue286-recovery-preimage-ready/v2"
+INTERRUPTED_SCHEMA = "issue286-recovery-preimage-interrupted/v1"
+REPOSITORY = "nisavid/dotfiles"
+BRANCH = "main"
+GITHUB_HOSTNAME = "github.com"
+GITHUB_API_VERSION = "2022-11-28"
+EXCEPTION_CONTEXT = "Verify trusted base against candidate data"
+CHECK_RUN_SOURCE = "check-run"
+COMMIT_STATUS_SOURCE = "commit-status"
+COMMIT_STATUS_STATES = frozenset({"error", "failure", "pending", "success"})
+GRAPHQL_QUERY = """query Issue286RecoveryReviewThreads(
+  $owner: String!
+  $name: String!
+  $pullNumber: Int!
+  $threadsCursor: String
+) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $pullNumber) {
+      number
+      baseRefOid
+      headRefOid
+      reviewDecision
+      reviewThreads(first: 100, after: $threadsCursor) {
+        nodes {
+          id
+          isResolved
+          isOutdated
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}"""
+GRAPHQL_QUERY_SHA256 = (
+    "4ce24d04bdcdf3b7fdf792cc2156d113acaa52250e469728b2d87a8991a87e36"
+)
+
+REQUEST_MAX_BYTES = 1_048_576
+CAPTURE_STDOUT_MAX_BYTES = 4_194_304
+CAPTURE_STDERR_MAX_BYTES = 65_536
+CAPTURE_TOTAL_MAX_BYTES = 67_108_864
+PAYLOAD_MAX_BYTES = 4_194_304
+CAPTURE_TIMEOUT_SECONDS = 30
+TERMINATE_GRACE_SECONDS = 2
+TOTAL_TIMEOUT_SECONDS = 180
+PAGE_SIZE = 100
+MAX_PAGES = 5
+MAX_ARTIFACTS = 256
+READY_MAX_BYTES = 1_048_576
+GRAPHQL_INT_MAX = 2_147_483_647
+
+LIMITS = {
+    "capture_stderr_bytes": CAPTURE_STDERR_MAX_BYTES,
+    "capture_stdout_bytes": CAPTURE_STDOUT_MAX_BYTES,
+    "capture_timeout_seconds": CAPTURE_TIMEOUT_SECONDS,
+    "capture_total_bytes": CAPTURE_TOTAL_MAX_BYTES,
+    "max_artifacts": MAX_ARTIFACTS,
+    "max_pages": MAX_PAGES,
+    "page_size": PAGE_SIZE,
+    "ready_bytes": READY_MAX_BYTES,
+    "request_bytes": REQUEST_MAX_BYTES,
+    "terminate_grace_seconds": TERMINATE_GRACE_SECONDS,
+    "total_timeout_seconds": TOTAL_TIMEOUT_SECONDS,
+}
+
+SHA256 = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
+COMMIT = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+SAFE_LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z", re.ASCII)
+SAFE_ARTIFACT_PATH = re.compile(
+    r"(?:captures|payloads)/[A-Za-z0-9._-]{1,160}\Z", re.ASCII
+)
+GITHUB_LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?\Z", re.ASCII)
+GITHUB_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z", re.ASCII
+)
+
+REQUEST_KEYS = {
+    "schema",
+    "repository",
+    "branch",
+    "pull_request_number",
+    "base_commit",
+    "head_commit",
+    "reviewed_source_commit",
+    "required_checks",
+    "required_check_sources",
+    "trusted_reviewers",
+    "expected_protection",
+    "expected_effective_rules",
+    "expected_rulesets",
+}
+REVIEWER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+PROTECTION_KEYS = {
+    "url",
+    "required_status_checks",
+    "required_pull_request_reviews",
+    "required_signatures",
+    "enforce_admins",
+    "required_linear_history",
+    "allow_force_pushes",
+    "allow_deletions",
+    "block_creations",
+    "required_conversation_resolution",
+    "lock_branch",
+    "allow_fork_syncing",
+}
+
+# GitHub embeds whole repository and App records in pull and check-run responses.
+# These fields track incidental repository activity and App record refresh times.
+# App permissions, events, and all other unlisted fields stay bound.
+# The relevant-state comparison validates their shape and then drops them; the
+# raw captures keep them, bound by digest.
+INCIDENTAL_REPOSITORY_FIELDS = frozenset(
+    {
+        "forks",
+        "forks_count",
+        "open_issues",
+        "open_issues_count",
+        "pushed_at",
+        "size",
+        "stargazers_count",
+        "updated_at",
+        "watchers",
+        "watchers_count",
+    }
+)
+INCIDENTAL_APP_FIELDS = frozenset({"updated_at"})
+
+
+class PreimageError(ValueError):
+    """The preimage could not be established without broadening authority."""
+
+
+class Interrupted(PreimageError):
+    """A caught signal interrupted the bounded read-only operation."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__("recovery preimage preparation was interrupted")
+        self.signum = signum
+
+
+_caught_signal = 0
+_active_process: subprocess.Popen[bytes] | None = None
+_active_process_group: int | None = None
+_HANDLED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+
+
+def _signal_handler(signum: int, _frame: object) -> None:
+    global _caught_signal
+    if _caught_signal:
+        return
+    _caught_signal = signum
+    process_group = _active_process_group
+    if process_group is not None:
+        try:
+            os.killpg(process_group, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def _check_signal() -> None:
+    if _caught_signal:
+        raise Interrupted(_caught_signal)
+
+
+def _json_bytes(value: object) -> bytes:
+    return (
+        json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("ascii")
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _reject_constant(_value: str) -> NoReturn:
+    raise PreimageError("JSON contains a non-finite number")
+
+
+def _object_without_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise PreimageError("JSON contains a duplicate key")
+        value[key] = item
+    return value
+
+
+def _load_json(data: bytes) -> object:
+    try:
+        text = data.decode("utf-8", "strict")
+        value = json.loads(
+            text,
+            object_pairs_hook=_object_without_duplicates,
+            parse_constant=_reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise PreimageError("JSON is malformed") from error
+    _validate_json_bounds(value)
+    return value
+
+
+def _validate_json_bounds(value: object, *, depth: int = 0) -> None:
+    if depth > 32:
+        raise PreimageError("JSON nesting exceeds its bound")
+    if isinstance(value, str):
+        if len(value) > 262_144:
+            raise PreimageError("JSON string exceeds its bound")
+        return
+    if value is None or isinstance(value, (bool, int, float)):
+        return
+    if isinstance(value, list):
+        if len(value) > 10_000:
+            raise PreimageError("JSON array exceeds its bound")
+        for item in value:
+            _validate_json_bounds(item, depth=depth + 1)
+        return
+    if isinstance(value, dict):
+        if len(value) > 10_000:
+            raise PreimageError("JSON object exceeds its bound")
+        for key, item in value.items():
+            if not isinstance(key, str) or len(key) > 1024:
+                raise PreimageError("JSON key is invalid")
+            _validate_json_bounds(item, depth=depth + 1)
+        return
+    raise PreimageError("JSON type is unsupported")
+
+
+def _exact_keys(value: object, keys: set[str], name: str) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise PreimageError(f"{name} has an invalid schema")
+    return value
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _require_commit(value: object, name: str) -> str:
+    if not isinstance(value, str) or COMMIT.fullmatch(value) is None:
+        raise PreimageError(f"{name} is invalid")
+    return value
+
+
+def _require_positive_id(value: object, name: str) -> int:
+    if not _is_int(value) or value <= 0:
+        raise PreimageError(f"{name} is invalid")
+    return value
+
+
+def _require_bounded_positive_int(value: object, name: str, maximum: int) -> int:
+    if not _is_int(value) or value <= 0 or value > maximum:
+        raise PreimageError(f"{name} is invalid")
+    return value
+
+
+def _require_bounded_count(value: object, name: str, maximum: int) -> int:
+    if not _is_int(value) or value < 0 or value > maximum:
+        raise PreimageError(f"{name} is invalid")
+    return value
+
+
+def _required_checks(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list) or len(value) != 4:
+        raise PreimageError("required checks must contain exactly four records")
+    checks: list[dict[str, object]] = []
+    contexts: set[str] = set()
+    for record in value:
+        item = _exact_keys(record, {"context", "app_id"}, "required check")
+        context = item["context"]
+        app_id = item["app_id"]
+        if (
+            not isinstance(context, str)
+            or not context
+            or len(context) > 256
+            or "\x00" in context
+            or context in contexts
+        ):
+            raise PreimageError("required check context is invalid")
+        contexts.add(context)
+        checks.append(
+            {
+                "context": context,
+                "app_id": _require_positive_id(app_id, "required check app ID"),
+            }
+        )
+    if sum(check["context"] == EXCEPTION_CONTEXT for check in checks) != 1:
+        raise PreimageError("the sole recovery exception is not present exactly once")
+    return sorted(
+        checks, key=lambda check: (str(check["context"]), int(check["app_id"]))
+    )
+
+
+def _required_check_sources(
+    value: object, checks: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    if not isinstance(value, list) or len(value) != len(checks):
+        raise PreimageError("required check sources must cover each check once")
+    app_ids = {str(check["context"]): int(check["app_id"]) for check in checks}
+    sources: list[dict[str, object]] = []
+    contexts: set[str] = set()
+    for record in value:
+        kind = record.get("source") if isinstance(record, dict) else None
+        if kind == CHECK_RUN_SOURCE:
+            item = _exact_keys(
+                record, {"context", "source", "app_id"}, "required check-run source"
+            )
+        elif kind == COMMIT_STATUS_SOURCE:
+            item = _exact_keys(
+                record,
+                {"context", "source", "creator_id", "creator_login"},
+                "required commit-status source",
+            )
+        else:
+            raise PreimageError("required check source kind is invalid")
+        context = item["context"]
+        if not isinstance(context, str) or context not in app_ids or context in contexts:
+            raise PreimageError("required check source context is invalid")
+        contexts.add(context)
+        if kind == CHECK_RUN_SOURCE:
+            app_id = _require_positive_id(item["app_id"], "required check-run app ID")
+            if app_id != app_ids[context]:
+                raise PreimageError("required check-run app differs from protection")
+        else:
+            # The protection app ID and the status creator ID are distinct GitHub
+            # identities; neither is derived from or compared with the other.
+            if context == EXCEPTION_CONTEXT:
+                raise PreimageError("the recovery exception must be a check run")
+            _require_positive_id(item["creator_id"], "required status creator ID")
+            login = item["creator_login"]
+            if not isinstance(login, str) or GITHUB_LOGIN.fullmatch(login) is None:
+                raise PreimageError("required status creator login is invalid")
+        sources.append(dict(item))
+    return sorted(sources, key=lambda source: str(source["context"]))
+
+
+def _trusted_reviewers(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise PreimageError("trusted reviewers are invalid")
+    reviewers: list[dict[str, object]] = []
+    identifiers: set[int] = set()
+    logins: set[str] = set()
+    for record in value:
+        item = _exact_keys(record, {"id", "login"}, "trusted reviewer")
+        identifier = _require_positive_id(item["id"], "trusted reviewer ID")
+        login = item["login"]
+        # A person with write access has a repository association. Only a pinned
+        # App bot account may approve while GitHub reports its association as NONE.
+        if (
+            not isinstance(login, str)
+            or GITHUB_LOGIN.fullmatch(login) is None
+            or not login.endswith("[bot]")
+            or identifier in identifiers
+            or login in logins
+        ):
+            raise PreimageError("trusted reviewer identity is invalid")
+        identifiers.add(identifier)
+        logins.add(login)
+        reviewers.append({"id": identifier, "login": login})
+    return sorted(reviewers, key=lambda reviewer: int(reviewer["id"]))
+
+
+def _trusted_reviewer_identities(request: dict[str, object]) -> set[tuple[int, str]]:
+    reviewers = request["trusted_reviewers"]
+    if not isinstance(reviewers, list):
+        raise PreimageError("trusted reviewers are invalid")
+    return {
+        (int(reviewer["id"]), str(reviewer["login"]))
+        for reviewer in reviewers
+        if isinstance(reviewer, dict)
+    }
+
+
+def _sources_of_kind(
+    request: dict[str, object], kind: str
+) -> dict[str, dict[str, object]]:
+    sources = request["required_check_sources"]
+    if not isinstance(sources, list):
+        raise PreimageError("required check sources are invalid")
+    return {
+        str(source["context"]): source
+        for source in sources
+        if isinstance(source, dict) and source["source"] == kind
+    }
+
+
+def _url_root() -> str:
+    return f"https://api.github.com/repos/{REPOSITORY}/branches/{BRANCH}/protection"
+
+
+def _boolean_record(value: object, expected: bool, name: str) -> None:
+    record = _exact_keys(value, {"enabled"}, name)
+    if record["enabled"] is not expected:
+        raise PreimageError(f"{name} does not match the settled policy")
+
+
+def _validate_protection(
+    value: object, required_checks: list[dict[str, object]]
+) -> dict[str, object]:
+    protection = _exact_keys(value, PROTECTION_KEYS, "classic branch protection")
+    root = _url_root()
+    if protection["url"] != root:
+        raise PreimageError("classic branch protection URL is invalid")
+
+    status = _exact_keys(
+        protection["required_status_checks"],
+        {"url", "strict", "contexts", "contexts_url", "checks"},
+        "required status checks",
+    )
+    if (
+        status["url"] != f"{root}/required_status_checks"
+        or status["contexts_url"] != f"{root}/required_status_checks/contexts"
+        or status["strict"] is not True
+    ):
+        raise PreimageError("required status checks do not match the settled policy")
+    contexts = status["contexts"]
+    if not isinstance(contexts, list) or not all(
+        isinstance(context, str) for context in contexts
+    ):
+        raise PreimageError("required status contexts are invalid")
+    observed_checks = _required_checks(status["checks"])
+    expected_contexts = sorted(str(check["context"]) for check in required_checks)
+    if sorted(contexts) != expected_contexts or observed_checks != required_checks:
+        raise PreimageError("required status checks differ from the request")
+
+    reviews = _exact_keys(
+        protection["required_pull_request_reviews"],
+        {
+            "url",
+            "dismiss_stale_reviews",
+            "require_code_owner_reviews",
+            "require_last_push_approval",
+            "required_approving_review_count",
+        },
+        "required pull request reviews",
+    )
+    if reviews != {
+        "url": f"{root}/required_pull_request_reviews",
+        "dismiss_stale_reviews": True,
+        "require_code_owner_reviews": False,
+        "require_last_push_approval": False,
+        "required_approving_review_count": 1,
+    }:
+        raise PreimageError("required reviews do not match the settled policy")
+
+    signatures = _exact_keys(
+        protection["required_signatures"], {"url", "enabled"}, "required signatures"
+    )
+    if signatures != {"url": f"{root}/required_signatures", "enabled": False}:
+        raise PreimageError("required signatures do not match the settled policy")
+    admins = _exact_keys(
+        protection["enforce_admins"], {"url", "enabled"}, "administrator enforcement"
+    )
+    if admins != {"url": f"{root}/enforce_admins", "enabled": True}:
+        raise PreimageError(
+            "administrator enforcement does not match the settled policy"
+        )
+
+    _boolean_record(protection["required_linear_history"], True, "linear history")
+    _boolean_record(protection["allow_force_pushes"], False, "force pushes")
+    _boolean_record(protection["allow_deletions"], False, "deletions")
+    _boolean_record(protection["block_creations"], False, "branch creation blocking")
+    _boolean_record(
+        protection["required_conversation_resolution"], True, "conversation resolution"
+    )
+    _boolean_record(protection["lock_branch"], False, "branch lock")
+    _boolean_record(protection["allow_fork_syncing"], False, "fork syncing")
+    return _normalize_protection(protection)
+
+
+def _normalize_protection(value: dict[str, object]) -> dict[str, object]:
+    normalized = copy.deepcopy(value)
+    status = normalized["required_status_checks"]
+    if not isinstance(status, dict):
+        raise PreimageError("required status checks are invalid")
+    contexts = status["contexts"]
+    checks = status["checks"]
+    if not isinstance(contexts, list) or not isinstance(checks, list):
+        raise PreimageError("required status checks are invalid")
+    status["contexts"] = sorted(contexts)
+    status["checks"] = sorted(
+        checks,
+        key=lambda check: (
+            str(check["context"]) if isinstance(check, dict) else "",
+            int(check["app_id"]) if isinstance(check, dict) else 0,
+        ),
+    )
+    return normalized
+
+
+def _validate_request(value: object) -> dict[str, object]:
+    request = _exact_keys(value, REQUEST_KEYS, "request")
+    if request["schema"] != REQUEST_SCHEMA:
+        raise PreimageError("request schema is unsupported")
+    if request["repository"] != REPOSITORY or request["branch"] != BRANCH:
+        raise PreimageError("request authority is outside the fixed recovery boundary")
+    _require_bounded_positive_int(
+        request["pull_request_number"], "pull request number", GRAPHQL_INT_MAX
+    )
+    base = _require_commit(request["base_commit"], "base commit")
+    head = _require_commit(request["head_commit"], "head commit")
+    source = _require_commit(
+        request["reviewed_source_commit"], "reviewed source commit"
+    )
+    if len({base, head}) != 2 or source == base:
+        raise PreimageError("request commits do not describe a recovery transition")
+    checks = _required_checks(request["required_checks"])
+    sources = _required_check_sources(request["required_check_sources"], checks)
+    reviewers = _trusted_reviewers(request["trusted_reviewers"])
+    expected = _validate_protection(request["expected_protection"], checks)
+    if request["expected_effective_rules"] != [] or request["expected_rulesets"] != []:
+        raise PreimageError("nonempty rules require a new reviewed recovery design")
+    validated = dict(request)
+    validated["required_checks"] = checks
+    validated["required_check_sources"] = sources
+    validated["trusted_reviewers"] = reviewers
+    validated["expected_protection"] = expected
+    return validated
+
+
+def _path_parts(path: Path) -> tuple[str, ...]:
+    text = os.fspath(path)
+    if not text.startswith("/") or text != os.path.normpath(text):
+        raise PreimageError("private path must be absolute and normalized")
+    pure = PurePosixPath(text)
+    parts = pure.parts
+    if len(parts) < 2 or any(part in {"", ".", ".."} for part in parts[1:]):
+        raise PreimageError("private path is invalid")
+    return parts
+
+
+def _open_directory(path: Path) -> int:
+    parts = _path_parts(path)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open("/", flags)
+        for component in parts[1:]:
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+    except OSError as error:
+        try:
+            os.close(descriptor)
+        except (OSError, UnboundLocalError):
+            pass
+        raise PreimageError("private path is unavailable") from error
+    return descriptor
+
+
+def _validate_private_directory(descriptor: int, name: str) -> None:
+    info = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or stat.S_IMODE(info.st_mode) != 0o700
+        or info.st_uid != os.getuid()
+    ):
+        raise PreimageError(f"{name} must be a caller-owned mode-0700 directory")
+
+
+def _open_private_parent(path: Path, name: str) -> tuple[int, str]:
+    parts = _path_parts(path)
+    parent = Path(*parts[:-1])
+    descriptor = _open_directory(parent)
+    try:
+        _validate_private_directory(descriptor, name)
+    except Exception:
+        os.close(descriptor)
+        raise
+    return descriptor, parts[-1]
+
+
+def _read_request(path: Path) -> tuple[bytes, dict[str, object]]:
+    parent, filename = _open_private_parent(path, "request parent")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(filename, flags, dir_fd=parent)
+    except OSError as error:
+        os.close(parent)
+        raise PreimageError("request is unavailable") from error
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+            or info.st_size <= 0
+            or info.st_size > REQUEST_MAX_BYTES
+        ):
+            raise PreimageError("request must be one caller-owned mode-0600 file")
+        chunks: list[bytes] = []
+        remaining = REQUEST_MAX_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > REQUEST_MAX_BYTES:
+            raise PreimageError("request exceeds its size limit")
+    except OSError as error:
+        raise PreimageError("request could not be read") from error
+    finally:
+        os.close(descriptor)
+        os.close(parent)
+    decoded = _load_json(data)
+    if _json_bytes(decoded) != data:
+        raise PreimageError("request bytes are not canonical JSON")
+    request = _validate_request(decoded)
+    return data, request
+
+
+def _create_state_directory(path: Path) -> int:
+    parent, filename = _open_private_parent(path, "state parent")
+    try:
+        os.mkdir(filename, 0o700, dir_fd=parent)
+        os.fsync(parent)
+        flags = (
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        )
+        descriptor = os.open(filename, flags, dir_fd=parent)
+        _validate_private_directory(descriptor, "state directory")
+    except OSError as error:
+        raise PreimageError("state directory must be new") from error
+    finally:
+        os.close(parent)
+    return descriptor
+
+
+def _create_subdirectory(parent: int, name: str) -> int:
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent)
+        os.fsync(parent)
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=parent,
+        )
+        _validate_private_directory(descriptor, name)
+    except OSError as error:
+        raise PreimageError("private state layout could not be created") from error
+    return descriptor
+
+
+def _open_new_file(parent: int, name: str) -> int:
+    try:
+        descriptor = os.open(
+            name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_NOFOLLOW
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=parent,
+        )
+    except OSError as error:
+        raise PreimageError("private state file could not be created") from error
+    info = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or info.st_uid != os.getuid()
+        or info.st_nlink != 1
+    ):
+        os.close(descriptor)
+        raise PreimageError("private state file is not authoritative")
+    return descriptor
+
+
+def _write_all(descriptor: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise PreimageError("private state file could not be written")
+        view = view[written:]
+
+
+def _artifact(kind: str, path: str, data: bytes) -> dict[str, object]:
+    if SAFE_ARTIFACT_PATH.fullmatch(path) is None:
+        raise PreimageError("artifact path is invalid")
+    return {"bytes": len(data), "kind": kind, "path": path, "sha256": _sha256(data)}
+
+
+def _process_group_present(process_group: int) -> bool | None:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return False
+        return None
+    return True
+
+
+def _retire_process_group(process: subprocess.Popen[bytes], process_group: int) -> bool:
+    # Darwin reports EPERM, not ESRCH, while a group holds only exiting or unreaped
+    # members, so EPERM proves neither presence nor absence. Retirement keeps
+    # signalling within the fixed grace windows; only ESRCH observed after the
+    # leader is reaped proves the group absent.
+    def retired() -> bool:
+        return (
+            process.poll() is not None
+            and _process_group_present(process_group) is False
+        )
+
+    for signum in (signal.SIGTERM, signal.SIGKILL):
+        if retired():
+            return True
+        try:
+            os.killpg(process_group, signum)
+        except OSError as error:
+            if error.errno not in {errno.EPERM, errno.ESRCH}:
+                return False
+        deadline = time.monotonic() + TERMINATE_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            if retired():
+                return True
+            time.sleep(0.02)
+    return retired()
+
+
+def _child_signal_setup() -> None:
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, _HANDLED_SIGNALS)
+    for signum in _HANDLED_SIGNALS:
+        try:
+            signal.signal(signum, signal.SIG_DFL)
+        except (OSError, ValueError):
+            os._exit(127)
+
+
+def _child_environment() -> dict[str, str]:
+    environment = {
+        "GH_FORCE_TTY": "0",
+        "GH_PAGER": "cat",
+        "GH_PROMPT_DISABLED": "1",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "NO_COLOR": "1",
+        "PAGER": "cat",
+    }
+    for variable in (
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "GH_CONFIG_DIR",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+    ):
+        value = os.environ.get(variable)
+        if value and "\x00" not in value:
+            environment[variable] = value
+    return environment
+
+
+class CaptureRunner:
+    def __init__(self, capture_directory: int, gh: str) -> None:
+        self.capture_directory = capture_directory
+        self.gh = gh
+        self.index = 0
+        self.total_bytes = 0
+        self.artifacts: list[dict[str, object]] = []
+        self.operation_deadline = time.monotonic() + TOTAL_TIMEOUT_SECONDS
+
+    def get(self, label: str, endpoint: str) -> object:
+        return self._request(label, endpoint, "GET", None)
+
+    def graphql(self, label: str, variables: dict[str, object]) -> object:
+        if set(variables) != {"owner", "name", "pullNumber", "threadsCursor"}:
+            raise PreimageError("GraphQL variables are invalid")
+        return self._request(
+            label,
+            "graphql",
+            "POST",
+            _json_bytes({"query": GRAPHQL_QUERY, "variables": variables}),
+        )
+
+    def _request(
+        self, label: str, endpoint: str, method: str, input_data: bytes | None
+    ) -> object:
+        global _active_process, _active_process_group
+        _check_signal()
+        if SAFE_LABEL.fullmatch(label) is None:
+            raise PreimageError("capture label is invalid")
+        valid_rest = (
+            method == "GET"
+            and input_data is None
+            and endpoint.startswith(f"repos/{REPOSITORY}/")
+        )
+        valid_graphql = (
+            method == "POST" and input_data is not None and endpoint == "graphql"
+        )
+        if not (valid_rest or valid_graphql) or any(
+            character in endpoint for character in ("\x00", "\r", "\n")
+        ):
+            raise PreimageError("GitHub endpoint is outside the fixed boundary")
+        self.index += 1
+        stem = f"{self.index:03d}-{label}"
+        stdout_name = f"{stem}.stdout.json"
+        stderr_name = f"{stem}.stderr"
+        status_name = f"{stem}.status.json"
+        stdout_fd = _open_new_file(self.capture_directory, stdout_name)
+        stderr_fd = _open_new_file(self.capture_directory, stderr_name)
+        status_fd = _open_new_file(self.capture_directory, status_name)
+        input_name: str | None = None
+        if input_data is not None:
+            input_name = f"{stem}.request.json"
+            input_fd = _open_new_file(self.capture_directory, input_name)
+            try:
+                _write_all(input_fd, input_data)
+                os.fsync(input_fd)
+            finally:
+                os.close(input_fd)
+        os.fsync(self.capture_directory)
+
+        stdout = bytearray()
+        stderr = bytearray()
+        outcome = "spawn-error"
+        exit_status: int | None = None
+        child_signal: int | None = None
+        process: subprocess.Popen[bytes] | None = None
+        process_group: int | None = None
+        retirement_verified = True
+        retirement_attempted = False
+        clean_group_exit = True
+        status_data = b""
+
+        def persist_status(value: dict[str, object]) -> None:
+            nonlocal status_data
+            status_data = _json_bytes(value)
+            os.lseek(status_fd, 0, os.SEEK_SET)
+            os.ftruncate(status_fd, 0)
+            _write_all(status_fd, status_data)
+            for descriptor in (stdout_fd, stderr_fd, status_fd):
+                os.fsync(descriptor)
+            os.fsync(self.capture_directory)
+
+        def retire() -> bool:
+            nonlocal retirement_attempted, retirement_verified
+            if retirement_attempted:
+                return retirement_verified
+            if process is None or process_group is None:
+                retirement_verified = True
+                return True
+            retirement_attempted = True
+            retirement_verified = _retire_process_group(process, process_group)
+            return retirement_verified
+
+        try:
+            try:
+                command = [
+                    self.gh,
+                    "api",
+                    "--hostname",
+                    GITHUB_HOSTNAME,
+                    "--method",
+                    method,
+                    "--header",
+                    "Accept: application/vnd.github+json",
+                    "--header",
+                    f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+                ]
+                if input_data is not None:
+                    command.extend(["--input", "-"])
+                command.append(endpoint)
+                process = subprocess.Popen(
+                    command,
+                    stdin=(
+                        subprocess.PIPE
+                        if input_data is not None
+                        else subprocess.DEVNULL
+                    ),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    close_fds=True,
+                    env=_child_environment(),
+                    # The collector is single-threaded; reset the child's signal state.
+                    preexec_fn=_child_signal_setup,  # noqa: PLW1509
+                    restore_signals=True,
+                    start_new_session=True,
+                )
+            except OSError:
+                process = None
+            if process is not None:
+                process_group = process.pid
+                retirement_verified = False
+                _active_process = process
+                _active_process_group = process_group
+                _check_signal()
+                if input_data is not None:
+                    if process.stdin is None:
+                        raise PreimageError("GraphQL input pipe is unavailable")
+                    try:
+                        _write_all(process.stdin.fileno(), input_data)
+                        process.stdin.close()
+                    except OSError as error:
+                        raise PreimageError(
+                            "GraphQL input could not be delivered"
+                        ) from error
+                if process.stdout is None or process.stderr is None:
+                    raise PreimageError("GitHub capture pipes are unavailable")
+                selector = selectors.DefaultSelector()
+                streams = {
+                    process.stdout.fileno(): (
+                        process.stdout,
+                        stdout,
+                        stdout_fd,
+                        CAPTURE_STDOUT_MAX_BYTES,
+                    ),
+                    process.stderr.fileno(): (
+                        process.stderr,
+                        stderr,
+                        stderr_fd,
+                        CAPTURE_STDERR_MAX_BYTES,
+                    ),
+                }
+                for file_object, _buffer, _destination, _limit in streams.values():
+                    os.set_blocking(file_object.fileno(), False)
+                    selector.register(file_object, selectors.EVENT_READ)
+                overflow = False
+                timed_out = False
+                try:
+                    deadline = min(
+                        time.monotonic() + CAPTURE_TIMEOUT_SECONDS,
+                        self.operation_deadline,
+                    )
+                    while selector.get_map():
+                        _check_signal()
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            timed_out = True
+                            break
+                        events = selector.select(min(remaining, 0.2))
+                        for key, _mask in events:
+                            file_object, buffer, destination, limit = streams[key.fd]
+                            try:
+                                chunk = os.read(key.fd, 65_536)
+                            except BlockingIOError:
+                                continue
+                            if not chunk:
+                                selector.unregister(file_object)
+                                file_object.close()
+                                continue
+                            if len(buffer) + len(chunk) > limit:
+                                allowed = max(0, limit - len(buffer))
+                                if allowed:
+                                    buffer.extend(chunk[:allowed])
+                                    _write_all(destination, chunk[:allowed])
+                                overflow = True
+                                break
+                            buffer.extend(chunk)
+                            _write_all(destination, chunk)
+                        if overflow:
+                            break
+                finally:
+                    selector.close()
+                if timed_out or overflow or _caught_signal:
+                    retire()
+                else:
+                    try:
+                        process.wait(timeout=TERMINATE_GRACE_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+                        retire()
+                    else:
+                        group_present = _process_group_present(process_group)
+                        if group_present is False:
+                            retirement_verified = True
+                        else:
+                            clean_group_exit = False
+                            retire()
+                return_code = process.poll()
+                if not retirement_verified:
+                    outcome = "unverified-retirement"
+                elif timed_out:
+                    outcome = "timeout"
+                elif overflow:
+                    outcome = "capture-overflow"
+                elif _caught_signal:
+                    outcome = "interrupted"
+                elif return_code is None:
+                    outcome = "unreaped"
+                elif return_code < 0:
+                    outcome = "signaled"
+                    child_signal = -return_code
+                else:
+                    outcome = "exited"
+                    exit_status = return_code
+            status_value: dict[str, object] = {"method": method, "outcome": outcome}
+            if exit_status is not None:
+                status_value["exit_status"] = exit_status
+            if child_signal is not None:
+                status_value["signal"] = child_signal
+            if _caught_signal:
+                status_value["caught_signal"] = _caught_signal
+            persist_status(status_value)
+        except Interrupted as error:
+            retire()
+            if retirement_verified:
+                persist_status(
+                    {
+                        "caught_signal": error.signum,
+                        "method": method,
+                        "outcome": "interrupted",
+                    }
+                )
+                raise
+            persist_status(
+                {
+                    "caught_signal": error.signum,
+                    "method": method,
+                    "outcome": "unverified-retirement",
+                }
+            )
+            raise PreimageError("GitHub child retirement is unverified") from error
+        except Exception as error:
+            if (
+                process is not None
+                and process_group is not None
+                and not retirement_verified
+            ):
+                retire()
+            if not retirement_verified:
+                status_value = {
+                    "method": method,
+                    "outcome": "unverified-retirement",
+                }
+                if _caught_signal:
+                    status_value["caught_signal"] = _caught_signal
+                persist_status(status_value)
+                raise PreimageError("GitHub child retirement is unverified") from error
+            raise
+        finally:
+            if retirement_verified:
+                _active_process = None
+                _active_process_group = None
+            for descriptor in (stdout_fd, stderr_fd, status_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+
+        self.total_bytes += len(stdout) + len(stderr)
+        if self.total_bytes > CAPTURE_TOTAL_MAX_BYTES:
+            raise PreimageError("GitHub captures exceed their total bound")
+        if not retirement_verified:
+            raise PreimageError("GitHub child retirement is unverified")
+        if not clean_group_exit:
+            raise PreimageError("GitHub child left a descendant process")
+        if outcome != "exited" or exit_status != 0 or stderr:
+            _check_signal()
+            raise PreimageError("GitHub read failed")
+        records = [
+            _artifact("capture-stdout", f"captures/{stdout_name}", bytes(stdout)),
+            _artifact("capture-stderr", f"captures/{stderr_name}", bytes(stderr)),
+            _artifact("capture-status", f"captures/{status_name}", status_data),
+        ]
+        if input_name is not None and input_data is not None:
+            records.append(
+                _artifact("graphql-input", f"captures/{input_name}", input_data)
+            )
+        self.artifacts.extend(records)
+        if len(self.artifacts) > MAX_ARTIFACTS:
+            raise PreimageError("capture artifact count exceeds its bound")
+        return _load_json(bytes(stdout))
+
+
+def _paginated_array(
+    runner: CaptureRunner, pass_name: str, label: str, endpoint: str
+) -> list[object]:
+    combined: list[object] = []
+    complete = False
+    for page in range(1, MAX_PAGES + 1):
+        separator = "&" if "?" in endpoint else "?"
+        value = runner.get(
+            f"{pass_name}-{label}-p{page}",
+            f"{endpoint}{separator}per_page={PAGE_SIZE}&page={page}",
+        )
+        if not isinstance(value, list) or len(value) > PAGE_SIZE:
+            raise PreimageError("paginated GitHub response is invalid")
+        combined.extend(value)
+        if len(value) < PAGE_SIZE:
+            complete = True
+            break
+    if not complete:
+        raise PreimageError("paginated GitHub response exceeds its completeness bound")
+    return combined
+
+
+def _paginated_check_runs(
+    runner: CaptureRunner, pass_name: str, endpoint: str
+) -> dict[str, object]:
+    combined: list[object] = []
+    total_count: int | None = None
+    complete = False
+    for page in range(1, MAX_PAGES + 1):
+        value = runner.get(
+            f"{pass_name}-check-runs-p{page}",
+            f"{endpoint}?filter=latest&per_page={PAGE_SIZE}&page={page}",
+        )
+        page_value = _exact_keys(
+            value, {"total_count", "check_runs"}, "check runs page"
+        )
+        page_total = page_value["total_count"]
+        runs = page_value["check_runs"]
+        if not isinstance(runs, list):
+            raise PreimageError("check runs page is invalid")
+        page_total = _require_bounded_count(
+            page_total, "check runs total count", MAX_PAGES * PAGE_SIZE
+        )
+        if total_count is None:
+            total_count = page_total
+        elif total_count != page_total:
+            raise PreimageError("check runs changed during pagination")
+        if len(runs) > PAGE_SIZE:
+            raise PreimageError("check runs page exceeds its bound")
+        combined.extend(runs)
+        if len(runs) < PAGE_SIZE:
+            complete = True
+            break
+    if not complete or total_count is None or total_count != len(combined):
+        raise PreimageError("check runs pagination is incomplete")
+    return {"total_count": total_count, "check_runs": combined}
+
+
+def _paginated_review_threads(
+    runner: CaptureRunner, pass_name: str, request: dict[str, object]
+) -> list[dict[str, object]]:
+    combined: list[dict[str, object]] = []
+    identifiers: set[str] = set()
+    cursors: set[str] = set()
+    cursor: str | None = None
+    complete = False
+    for page_number in range(1, MAX_PAGES + 1):
+        value = runner.graphql(
+            f"{pass_name}-review-threads-p{page_number}",
+            {
+                "owner": "nisavid",
+                "name": "dotfiles",
+                "pullNumber": request["pull_request_number"],
+                "threadsCursor": cursor,
+            },
+        )
+        response = _exact_keys(value, {"data"}, "GraphQL response")
+        data = _exact_keys(response["data"], {"repository"}, "GraphQL data")
+        repository = _exact_keys(
+            data["repository"], {"pullRequest"}, "GraphQL repository"
+        )
+        pull = _exact_keys(
+            repository["pullRequest"],
+            {"number", "baseRefOid", "headRefOid", "reviewDecision", "reviewThreads"},
+            "GraphQL pull request",
+        )
+        if (
+            pull["number"] != request["pull_request_number"]
+            or pull["baseRefOid"] != request["base_commit"]
+            or pull["headRefOid"] != request["head_commit"]
+        ):
+            raise PreimageError("GraphQL pull request does not match the request")
+        if pull["reviewDecision"] != "APPROVED":
+            raise PreimageError("pull request is not currently approved")
+        connection = _exact_keys(
+            pull["reviewThreads"], {"nodes", "pageInfo"}, "review threads"
+        )
+        nodes = connection["nodes"]
+        page_info = _exact_keys(
+            connection["pageInfo"], {"hasNextPage", "endCursor"}, "thread page info"
+        )
+        if not isinstance(nodes, list) or len(nodes) > PAGE_SIZE:
+            raise PreimageError("review thread page exceeds its bound")
+        for record in nodes:
+            thread = _exact_keys(
+                record, {"id", "isResolved", "isOutdated"}, "review thread"
+            )
+            identifier = thread["id"]
+            if (
+                not isinstance(identifier, str)
+                or not identifier
+                or len(identifier) > 256
+                or identifier in identifiers
+                or not isinstance(thread["isResolved"], bool)
+                or not isinstance(thread["isOutdated"], bool)
+            ):
+                raise PreimageError("review thread is invalid or duplicated")
+            identifiers.add(identifier)
+            if thread["isResolved"] is not True:
+                raise PreimageError("pull request has an unresolved review thread")
+            combined.append(thread)
+        has_next = page_info["hasNextPage"]
+        end_cursor = page_info["endCursor"]
+        if not isinstance(has_next, bool) or not (
+            end_cursor is None or isinstance(end_cursor, str)
+        ):
+            raise PreimageError("review thread pagination is malformed")
+        if not has_next:
+            complete = True
+            break
+        if (
+            not isinstance(end_cursor, str)
+            or not end_cursor
+            or len(end_cursor) > 4096
+            or end_cursor in cursors
+        ):
+            raise PreimageError("review thread pagination cursor is invalid")
+        cursors.add(end_cursor)
+        cursor = end_cursor
+    if not complete:
+        raise PreimageError("review thread pagination exceeds its completeness bound")
+    return sorted(combined, key=lambda thread: str(thread["id"]))
+
+
+def _collect_snapshot(
+    runner: CaptureRunner, pass_name: str, request: dict[str, object]
+) -> dict[str, object]:
+    number = request["pull_request_number"]
+    prefix = f"repos/{REPOSITORY}"
+    head = request["head_commit"]
+    snapshot = {
+        "pull": runner.get(f"{pass_name}-pull", f"{prefix}/pulls/{number}"),
+        "main_ref": runner.get(
+            f"{pass_name}-main-ref", f"{prefix}/git/ref/heads/{BRANCH}"
+        ),
+        "pull_head_ref": runner.get(
+            f"{pass_name}-pull-head-ref", f"{prefix}/git/ref/pull/{number}/head"
+        ),
+        "requested_reviewers": runner.get(
+            f"{pass_name}-requested-reviewers",
+            f"{prefix}/pulls/{number}/requested_reviewers",
+        ),
+        "protection": runner.get(
+            f"{pass_name}-protection", f"{prefix}/branches/{BRANCH}/protection"
+        ),
+        "commits": _paginated_array(
+            runner, pass_name, "commits", f"{prefix}/pulls/{number}/commits"
+        ),
+        "reviews": _paginated_array(
+            runner, pass_name, "reviews", f"{prefix}/pulls/{number}/reviews"
+        ),
+        "review_threads": _paginated_review_threads(runner, pass_name, request),
+        "check_runs": _paginated_check_runs(
+            runner, pass_name, f"{prefix}/commits/{head}/check-runs"
+        ),
+        "statuses": _paginated_array(
+            runner, pass_name, "statuses", f"{prefix}/commits/{head}/statuses"
+        ),
+        "effective_rules": _paginated_array(
+            runner, pass_name, "effective-rules", f"{prefix}/rules/branches/{BRANCH}"
+        ),
+        "rulesets": _paginated_array(
+            runner,
+            pass_name,
+            "rulesets",
+            f"{prefix}/rulesets?includes_parents=true",
+        ),
+    }
+    return _validate_snapshot(snapshot, request)
+
+
+def _validate_ref(
+    value: object, expected_ref: str, expected_sha: str, name: str
+) -> None:
+    if not isinstance(value, dict) or value.get("ref") != expected_ref:
+        raise PreimageError(f"{name} is invalid")
+    object_value = value.get("object")
+    if (
+        not isinstance(object_value, dict)
+        or object_value.get("type") != "commit"
+        or object_value.get("sha") != expected_sha
+    ):
+        raise PreimageError(f"{name} does not match the request")
+
+
+def _validate_pull(value: object, request: dict[str, object]) -> tuple[int, int]:
+    if not isinstance(value, dict):
+        raise PreimageError("pull request response is invalid")
+    number = request["pull_request_number"]
+    base = value.get("base")
+    head = value.get("head")
+    author = value.get("user")
+    if (
+        not isinstance(base, dict)
+        or not isinstance(head, dict)
+        or not isinstance(author, dict)
+    ):
+        raise PreimageError("pull request identity is invalid")
+    base_repo = base.get("repo")
+    head_repo = head.get("repo")
+    if not isinstance(base_repo, dict) or not isinstance(head_repo, dict):
+        raise PreimageError("pull request repository identity is invalid")
+    if (
+        value.get("number") != number
+        or value.get("state") != "open"
+        or value.get("merged") is not False
+        or value.get("draft") is not False
+        or value.get("auto_merge") is not None
+        or value.get("mergeable") is not True
+        or value.get("mergeable_state") != "blocked"
+        or base.get("ref") != BRANCH
+        or base.get("sha") != request["base_commit"]
+        or base_repo.get("full_name") != REPOSITORY
+        or head.get("sha") != request["head_commit"]
+        or head_repo.get("full_name") != REPOSITORY
+    ):
+        raise PreimageError("pull request does not match the recovery request")
+    author_id = _require_positive_id(author.get("id"), "pull request author ID")
+    commits = _require_bounded_positive_int(
+        value.get("commits"), "pull request commit count", 250
+    )
+    return author_id, commits
+
+
+def _validate_commits(
+    value: object, expected_count: int, request: dict[str, object]
+) -> list[object]:
+    if not isinstance(value, list) or len(value) != expected_count:
+        raise PreimageError("pull request commit pagination is incomplete")
+    shas: list[str] = []
+    for record in value:
+        if not isinstance(record, dict):
+            raise PreimageError("pull request commit is invalid")
+        shas.append(_require_commit(record.get("sha"), "pull request commit"))
+    if len(set(shas)) != len(shas):
+        raise PreimageError("pull request commit list contains duplicates")
+    if shas[-1] != request["head_commit"]:
+        raise PreimageError("pull request head is not the final commit")
+    if request["reviewed_source_commit"] not in shas:
+        raise PreimageError("reviewed source commit is not in the pull request")
+    return value
+
+
+def _validate_reviews(
+    value: object, head: str, author_id: int, trusted: set[tuple[int, str]]
+) -> list[object]:
+    if not isinstance(value, list):
+        raise PreimageError("pull request reviews are invalid")
+    identifiers: set[int] = set()
+    latest: dict[int, dict[str, object]] = {}
+    ambiguous: set[int] = set()
+    normalized: list[dict[str, object]] = []
+    for record in value:
+        if not isinstance(record, dict):
+            raise PreimageError("pull request review is invalid")
+        identifier = _require_positive_id(record.get("id"), "review ID")
+        if identifier in identifiers:
+            raise PreimageError("pull request reviews contain duplicate IDs")
+        identifiers.add(identifier)
+        state = record.get("state")
+        if state == "PENDING":
+            raise PreimageError("pull request has an unaccepted review state")
+        if state not in {"APPROVED", "COMMENTED", "DISMISSED", "CHANGES_REQUESTED"}:
+            raise PreimageError("pull request review state is invalid")
+        user = record.get("user")
+        if not isinstance(user, dict):
+            raise PreimageError("pull request reviewer identity is invalid")
+        reviewer_id = _require_positive_id(user.get("id"), "reviewer ID")
+        if state != "COMMENTED":
+            submitted_at = record.get("submitted_at")
+            if (
+                not isinstance(submitted_at, str)
+                or GITHUB_TIMESTAMP.fullmatch(submitted_at) is None
+            ):
+                raise PreimageError("review submission time is invalid")
+            newest = latest.get(reviewer_id)
+            if newest is None or submitted_at > newest["submitted_at"]:
+                latest[reviewer_id] = record
+                ambiguous.discard(reviewer_id)
+            elif submitted_at == newest["submitted_at"]:
+                ambiguous.add(reviewer_id)
+        if state == "APPROVED" and record.get("commit_id") == head:
+            login = user.get("login")
+            pinned = isinstance(login, str) and (reviewer_id, login) in trusted
+            if (
+                reviewer_id == author_id
+                or (
+                    not pinned
+                    and record.get("author_association") not in REVIEWER_ASSOCIATIONS
+                )
+                or not isinstance(record.get("submitted_at"), str)
+            ):
+                raise PreimageError("exact-head approval is not independent")
+        normalized.append(record)
+    if ambiguous:
+        raise PreimageError("latest reviewer opinion is ambiguous")
+    if any(record["state"] == "CHANGES_REQUESTED" for record in latest.values()):
+        raise PreimageError("pull request has a current change request")
+    if not any(
+        record["state"] == "APPROVED" and record.get("commit_id") == head
+        for record in latest.values()
+    ):
+        raise PreimageError("pull request lacks an exact-head approval")
+    return sorted(normalized, key=lambda record: int(record["id"]))
+
+
+def _validate_requested_reviewers(value: object) -> dict[str, object]:
+    reviewers = _exact_keys(value, {"users", "teams"}, "requested reviewers")
+    if reviewers["users"] != [] or reviewers["teams"] != []:
+        raise PreimageError("pull request still has requested reviewers")
+    return reviewers
+
+
+def _validate_check_runs(
+    value: object, request: dict[str, object]
+) -> dict[str, object]:
+    page = _exact_keys(value, {"total_count", "check_runs"}, "check runs")
+    runs = page["check_runs"]
+    if not isinstance(runs, list) or page["total_count"] != len(runs):
+        raise PreimageError("check runs are incomplete")
+    required = {
+        context: int(source["app_id"])
+        for context, source in _sources_of_kind(request, CHECK_RUN_SOURCE).items()
+    }
+    status_contexts = set(_sources_of_kind(request, COMMIT_STATUS_SOURCE))
+    identifiers: set[int] = set()
+    required_matches: dict[str, int] = {context: 0 for context in required}
+    normalized: list[dict[str, object]] = []
+    for record in runs:
+        if not isinstance(record, dict):
+            raise PreimageError("check run is invalid")
+        identifier = _require_positive_id(record.get("id"), "check run ID")
+        if identifier in identifiers:
+            raise PreimageError("check runs contain duplicate IDs")
+        identifiers.add(identifier)
+        name = record.get("name")
+        app = record.get("app")
+        if not isinstance(name, str) or not name or not isinstance(app, dict):
+            raise PreimageError("check run identity is invalid")
+        if name in status_contexts:
+            raise PreimageError("a commit-status required context has a check run")
+        app_id = _require_positive_id(app.get("id"), "check run app ID")
+        if (
+            record.get("head_sha") != request["head_commit"]
+            or record.get("status") != "completed"
+        ):
+            raise PreimageError("check run is not complete for the exact head")
+        conclusion = record.get("conclusion")
+        if name in required:
+            if app_id != required[name]:
+                raise PreimageError("required check run app ID differs")
+            required_matches[name] += 1
+            expected = "failure" if name == EXCEPTION_CONTEXT else "success"
+            if conclusion != expected:
+                raise PreimageError("required check conclusion differs")
+        elif conclusion != "success":
+            raise PreimageError("an unrelated hosted check did not succeed")
+        normalized.append(record)
+    if any(count < 1 for count in required_matches.values()):
+        raise PreimageError("required check runs are missing")
+    return {
+        "total_count": len(normalized),
+        "check_runs": sorted(normalized, key=lambda record: int(record["id"])),
+    }
+
+
+def _validate_statuses(value: object, request: dict[str, object]) -> list[object]:
+    if not isinstance(value, list):
+        raise PreimageError("commit statuses are invalid")
+    creators = {
+        context: (source["creator_id"], source["creator_login"])
+        for context, source in _sources_of_kind(request, COMMIT_STATUS_SOURCE).items()
+    }
+    check_run_contexts = set(_sources_of_kind(request, CHECK_RUN_SOURCE))
+    expected_url = (
+        f"https://api.github.com/repos/{REPOSITORY}/statuses/{request['head_commit']}"
+    )
+    identifiers: set[int] = set()
+    latest: dict[str, dict[str, object]] = {}
+    for record in value:
+        if not isinstance(record, dict):
+            raise PreimageError("commit status is invalid")
+        identifier = _require_positive_id(record.get("id"), "commit status ID")
+        if identifier in identifiers:
+            raise PreimageError("commit statuses contain duplicate IDs")
+        identifiers.add(identifier)
+        context = record.get("context")
+        state = record.get("state")
+        created_at = record.get("created_at")
+        if (
+            not isinstance(context, str)
+            or not context
+            or not isinstance(state, str)
+            or state not in COMMIT_STATUS_STATES
+            or not isinstance(created_at, str)
+            or GITHUB_TIMESTAMP.fullmatch(created_at) is None
+            or record.get("updated_at") != created_at
+        ):
+            raise PreimageError("commit status identity is invalid")
+        if record.get("url") != expected_url:
+            raise PreimageError("commit status is not for the exact head")
+        if context in check_run_contexts:
+            raise PreimageError("a check-run required context has a commit status")
+        if context in creators:
+            creator = record.get("creator")
+            if (
+                not isinstance(creator, dict)
+                or not _is_int(creator.get("id"))
+                or (creator.get("id"), creator.get("login")) != creators[context]
+            ):
+                raise PreimageError("required commit status creator differs")
+        # GitHub lists statuses newest first. The first record for a context is its
+        # latest only when it is also strictly newest by creation time and by ID.
+        newest = latest.get(context)
+        if newest is None:
+            latest[context] = record
+        elif not (
+            created_at < str(newest["created_at"]) and identifier < int(newest["id"])
+        ):
+            raise PreimageError("latest commit status is ambiguous")
+    if any(context not in latest for context in creators):
+        raise PreimageError("required commit statuses are missing")
+    if any(record["state"] != "success" for record in latest.values()):
+        raise PreimageError("a latest commit status did not succeed")
+    return value
+
+
+def _validate_snapshot(
+    value: dict[str, object], request: dict[str, object]
+) -> dict[str, object]:
+    expected_keys = {
+        "pull",
+        "main_ref",
+        "pull_head_ref",
+        "requested_reviewers",
+        "protection",
+        "commits",
+        "reviews",
+        "review_threads",
+        "check_runs",
+        "statuses",
+        "effective_rules",
+        "rulesets",
+    }
+    if set(value) != expected_keys:
+        raise PreimageError("observation schema is invalid")
+    author_id, commit_count = _validate_pull(value["pull"], request)
+    _validate_ref(
+        value["main_ref"],
+        f"refs/heads/{BRANCH}",
+        str(request["base_commit"]),
+        "main ref",
+    )
+    _validate_ref(
+        value["pull_head_ref"],
+        f"refs/pull/{request['pull_request_number']}/head",
+        str(request["head_commit"]),
+        "pull head ref",
+    )
+    value["requested_reviewers"] = _validate_requested_reviewers(
+        value["requested_reviewers"]
+    )
+    checks = request["required_checks"]
+    if not isinstance(checks, list):
+        raise PreimageError("required checks are invalid")
+    protection = _validate_protection(value["protection"], checks)
+    if protection != request["expected_protection"]:
+        raise PreimageError("classic protection differs from the reviewed request")
+    value["protection"] = protection
+    value["commits"] = _validate_commits(value["commits"], commit_count, request)
+    value["reviews"] = _validate_reviews(
+        value["reviews"],
+        str(request["head_commit"]),
+        author_id,
+        _trusted_reviewer_identities(request),
+    )
+    threads = value["review_threads"]
+    if not isinstance(threads, list):
+        raise PreimageError("review thread evidence is invalid")
+    value["check_runs"] = _validate_check_runs(value["check_runs"], request)
+    value["statuses"] = _validate_statuses(value["statuses"], request)
+    if value["effective_rules"] != [] or value["rulesets"] != []:
+        raise PreimageError("repository rules differ from the reviewed empty policy")
+    return value
+
+
+def _discard_incidental(record: dict[str, object], fields: frozenset[str]) -> None:
+    for field in sorted(fields & set(record)):
+        value = record.pop(field)
+        if field.endswith("_at"):
+            valid = value is None or (
+                isinstance(value, str)
+                and GITHUB_TIMESTAMP.fullmatch(value) is not None
+            )
+        else:
+            valid = _is_int(value) and value >= 0
+        if not valid:
+            raise PreimageError("incidental GitHub metadata is malformed")
+
+
+def _relevant_observation(snapshot: dict[str, object]) -> dict[str, object]:
+    relevant = copy.deepcopy(snapshot)
+    pull = relevant["pull"]
+    if not isinstance(pull, dict):
+        raise PreimageError("pull request response is invalid")
+    for side in ("base", "head"):
+        branch = pull.get(side)
+        repository = branch.get("repo") if isinstance(branch, dict) else None
+        if not isinstance(repository, dict):
+            raise PreimageError("pull request repository identity is invalid")
+        _discard_incidental(repository, INCIDENTAL_REPOSITORY_FIELDS)
+    check_runs = relevant["check_runs"]
+    runs = check_runs.get("check_runs") if isinstance(check_runs, dict) else None
+    if not isinstance(runs, list):
+        raise PreimageError("check runs are invalid")
+    for run in runs:
+        app = run.get("app") if isinstance(run, dict) else None
+        if not isinstance(app, dict):
+            raise PreimageError("check run identity is invalid")
+        _discard_incidental(app, INCIDENTAL_APP_FIELDS)
+    return relevant
+
+
+def _write_payload(
+    directory: int,
+    filename: str,
+    kind: str,
+    value: object,
+) -> tuple[dict[str, object], dict[str, str]]:
+    data = _json_bytes(value)
+    if len(data) > PAYLOAD_MAX_BYTES:
+        raise PreimageError("payload artifact exceeds its bound")
+    descriptor = _open_new_file(directory, filename)
+    try:
+        _write_all(descriptor, data)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.fsync(directory)
+    path = f"payloads/{filename}"
+    record = _artifact(kind, path, data)
+    reference = {"path": path, "sha256": str(record["sha256"])}
+    return record, reference
+
+
+def _collector_sha256() -> str:
+    try:
+        data = Path(__file__).read_bytes()
+    except OSError as error:
+        raise PreimageError("collector source cannot be bound") from error
+    if not data or len(data) > READY_MAX_BYTES:
+        raise PreimageError("collector source cannot be bound")
+    return _sha256(data)
+
+
+def _publish_ready(state_directory: int, value: dict[str, object]) -> None:
+    data = _json_bytes(value)
+    if len(data) > READY_MAX_BYTES:
+        raise PreimageError("ready manifest exceeds its bound")
+    temporary = ".ready.json.tmp"
+    descriptor = _open_new_file(state_directory, temporary)
+    published = False
+    try:
+        _write_all(descriptor, data)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.rename(
+            temporary,
+            "ready.json",
+            src_dir_fd=state_directory,
+            dst_dir_fd=state_directory,
+        )
+        published = True
+        os.fsync(state_directory)
+    except OSError as error:
+        if published:
+            try:
+                os.unlink("ready.json", dir_fd=state_directory)
+                os.fsync(state_directory)
+            except OSError:
+                pass
+        raise PreimageError("ready manifest could not be published") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=state_directory)
+        except FileNotFoundError:
+            pass
+
+
+def _record_interruption(state_directory: int, signum: int) -> None:
+    data = _json_bytes(
+        {
+            "schema": INTERRUPTED_SCHEMA,
+            "outcome": "interrupted",
+            "caught_signal": signum,
+        }
+    )
+    temporary = ".interrupted.json.tmp"
+    descriptor = -1
+    published = False
+    try:
+        descriptor = _open_new_file(state_directory, temporary)
+        _write_all(descriptor, data)
+        os.fsync(descriptor)
+        closing, descriptor = descriptor, -1
+        os.close(closing)
+        os.rename(
+            temporary,
+            "interrupted.json",
+            src_dir_fd=state_directory,
+            dst_dir_fd=state_directory,
+        )
+        published = True
+        os.fsync(state_directory)
+    except (OSError, PreimageError) as error:
+        if published:
+            try:
+                os.unlink("interrupted.json", dir_fd=state_directory)
+                os.fsync(state_directory)
+            except OSError:
+                pass
+        raise PreimageError("interruption could not be durably recorded") from error
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if not published:
+            try:
+                os.unlink(temporary, dir_fd=state_directory)
+            except OSError:
+                pass
+
+
+def _publish_ready_terminal(state_directory: int, value: dict[str, object]) -> None:
+    _check_signal()
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, _HANDLED_SIGNALS)
+    try:
+        _check_signal()
+        _publish_ready(state_directory, value)
+    except Exception:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        _check_signal()
+        raise
+
+
+def _prepare(request_path: Path, state_path: Path) -> None:
+    if _sha256(GRAPHQL_QUERY.encode("utf-8")) != GRAPHQL_QUERY_SHA256:
+        raise PreimageError("source-owned GraphQL query digest is invalid")
+    request_bytes, request = _read_request(request_path)
+    state_directory = _create_state_directory(state_path)
+    capture_directory = -1
+    payload_directory = -1
+    try:
+        _check_signal()
+        capture_directory = _create_subdirectory(state_directory, "captures")
+        payload_directory = _create_subdirectory(state_directory, "payloads")
+        gh = shutil.which("gh", path=os.environ.get("PATH"))
+        if gh is None or not os.path.isabs(gh):
+            raise PreimageError("GitHub CLI is unavailable")
+        runner = CaptureRunner(capture_directory, gh)
+        first = _relevant_observation(_collect_snapshot(runner, "a", request))
+        second = _relevant_observation(_collect_snapshot(runner, "b", request))
+        if _json_bytes(first) != _json_bytes(second):
+            raise PreimageError("GitHub evidence changed between complete observations")
+
+        required = second["protection"]
+        if not isinstance(required, dict):
+            raise PreimageError("classic protection is invalid")
+        status = required["required_status_checks"]
+        if not isinstance(status, dict):
+            raise PreimageError("required status checks are invalid")
+        checks = _required_checks(status["checks"])
+        restore = {"strict": True, "checks": checks}
+        exception = {
+            "strict": True,
+            "checks": [
+                check for check in checks if check["context"] != EXCEPTION_CONTEXT
+            ],
+        }
+
+        artifacts = list(runner.artifacts)
+        payloads: dict[str, dict[str, str]] = {}
+        for key, filename, kind, value in (
+            ("observations", "observations.json", "observations", second),
+            (
+                "protection_preimage",
+                "main-protection.preimage.json",
+                "protection-preimage",
+                required,
+            ),
+            (
+                "restore_checks",
+                "required-checks.restore.json",
+                "restore-payload",
+                restore,
+            ),
+            (
+                "exception_checks",
+                "required-checks.exception.json",
+                "exception-payload",
+                exception,
+            ),
+        ):
+            record, reference = _write_payload(payload_directory, filename, kind, value)
+            artifacts.append(record)
+            payloads[key] = reference
+        if len(artifacts) > MAX_ARTIFACTS:
+            raise PreimageError("artifact count exceeds its bound")
+        artifacts.sort(key=lambda artifact: str(artifact["path"]))
+
+        binding = {
+            "repository": request["repository"],
+            "branch": request["branch"],
+            "pull_request_number": request["pull_request_number"],
+            "base_commit": request["base_commit"],
+            "head_commit": request["head_commit"],
+            "reviewed_source_commit": request["reviewed_source_commit"],
+            "required_checks": request["required_checks"],
+            "required_check_sources": request["required_check_sources"],
+            "trusted_reviewers": request["trusted_reviewers"],
+        }
+        observations_sha = payloads["observations"]["sha256"]
+        ready = {
+            "schema": READY_SCHEMA,
+            "outcome": "ready",
+            "collector_sha256": _collector_sha256(),
+            "graphql_query_sha256": GRAPHQL_QUERY_SHA256,
+            "request_sha256": _sha256(request_bytes),
+            "binding": binding,
+            "limits": LIMITS,
+            "observations_sha256": observations_sha,
+            "artifacts": artifacts,
+            "payloads": payloads,
+        }
+        _publish_ready_terminal(state_directory, ready)
+    except Interrupted as error:
+        _record_interruption(state_directory, error.signum)
+        raise
+    finally:
+        if payload_directory >= 0:
+            os.close(payload_directory)
+        if capture_directory >= 0:
+            os.close(capture_directory)
+        os.close(state_directory)
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise PreimageError(message)
+
+
+def _arguments(argv: list[str]) -> argparse.Namespace:
+    parser = _ArgumentParser(add_help=True, allow_abbrev=False)
+    parser.add_argument("--request", required=True)
+    parser.add_argument("--state-directory", required=True)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str]) -> int:
+    global _active_process, _active_process_group, _caught_signal
+    _caught_signal = 0
+    _active_process = None
+    _active_process_group = None
+    handlers: dict[int, object] = {}
+    try:
+        arguments = _arguments(argv)
+        for signum in _HANDLED_SIGNALS:
+            handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, _signal_handler)
+        _prepare(Path(arguments.request), Path(arguments.state_directory))
+    except Interrupted as error:
+        print("recovery preimage preparation interrupted", file=sys.stderr)
+        return 128 + error.signum
+    except (PreimageError, OSError, RuntimeError, subprocess.SubprocessError):
+        print("recovery preimage preparation failed", file=sys.stderr)
+        return 1
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)  # type: ignore[arg-type]
+    print("recovery preimage ready")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
