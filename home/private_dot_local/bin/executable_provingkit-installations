@@ -738,8 +738,12 @@ def native_status(
             "native_additions": additions,
         }
     source = native.source_path(marketplace)
+    retained_source = (
+        receipt.get("retained_codex_source") if native.name == "codex" else None
+    )
     source_matches = (
         source is not None
+        and (retained_source is None or retained_source["path"] == source)
         and (
             source == str(marketplace_root(native, choice))
             or native.marketplace == "provingkit-local"
@@ -797,10 +801,7 @@ def native_reconcile(
     retained_source_matches = False
     if rebind and native.name == "codex" and native.marketplace == "provingkit-local":
         baseline = native_status(native, choice, root, marketplace, rows, receipt)
-        prior_source = receipt.get("retained_codex_source")
-        retained_source_matches = baseline["source_binding"] == "match" and (
-            prior_source is None or prior_source["path"] == source
-        )
+        retained_source_matches = baseline["source_binding"] == "match"
         if retained_source_matches:
             rebind = False
     unselected = set(rows) - set(choice["members"])
@@ -1133,6 +1134,14 @@ def main() -> int:
                             files(Path(retained["path"])) == retained["files"],
                             "adopted Codex source changed; reconcile its baseline with the owner",
                         )
+                        codex = NativeClient(
+                            "codex", home, codex_choice.get("marketplace", "provingkit")
+                        )
+                        registered, _ = codex.observe()
+                        native_require(
+                            codex.source_path(registered) == retained["path"],
+                            "adopted Codex source registration changed; reconcile its binding with the owner",
+                        )
             except (
                 Unavailable,
                 OSError,
@@ -1140,6 +1149,7 @@ def main() -> int:
                 KeyError,
                 TypeError,
                 AttributeError,
+                subprocess.TimeoutExpired,
             ) as error:
                 report.update(
                     outcome="selection_transition_unavailable", message=str(error)

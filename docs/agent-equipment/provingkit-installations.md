@@ -170,9 +170,11 @@ unselected members.
 Missing selected caches can subsequently be repaired from that same verified
 source without rebinding it; unexplained cache edits still stop replacement.
 Retain the original source directory unchanged. Every later run that selects
-Codex checks its recorded baseline before processing any client. A changed or
-missing retained source stops the run for reconciliation with its owner, even
-when it matches the newly requested artifact. Selecting a new artifact while
+Codex checks its recorded baseline and registered source path before processing
+any client. A changed or missing retained source, or registration to another
+path (including the owned marketplace root), stops both status and reconciliation
+until the discrepancy is resolved with its owner, even when the files match the
+requested artifact. Selecting a new artifact while
 the retained source remains unchanged follows the client's rebind rules below;
 adoption does not make a commit-addressed directory mutable or establish a
 selected-only Codex rebind.

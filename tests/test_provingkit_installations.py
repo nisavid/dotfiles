@@ -381,6 +381,63 @@ class InstallationCommandTests(unittest.TestCase):
         )
         self.assertEqual(repeated["clients"]["codex"]["actions"], [])
 
+        combined = fixture_selection(self.home, "six_a", ("codex", "claude"))
+        combined["profile"]["clients"]["codex"] = selection["profile"]["clients"][
+            "codex"
+        ]
+        self.selection.write_text(json.dumps(combined))
+        code, healthy = self.run_command("reconcile")
+        self.assertEqual((code, healthy["outcome"]), (0, "converged"), healthy)
+        self.assertEqual(healthy["clients"]["claude"]["source_binding"], "match")
+        del combined["profile"]["clients"]["codex"]
+        del combined["profile"]["artifacts"]["agent-plugins"]
+        self.selection.write_text(json.dumps(combined))
+        code, claude_only = self.run_command("status")
+        self.assertEqual((code, claude_only["outcome"]), (0, "converged"), claude_only)
+        self.selection.write_text(json.dumps(selection))
+
+        # Identical payloads at another path do not preserve the adopted binding.
+        redirected = self.home / "redirected-alpha"
+        shutil.copytree(external, redirected)
+        shutil.copytree(external, stable)
+        mixed = fixture_selection(self.home, "six_a", ("cursor", "codex"))
+        mixed["profile"]["clients"]["codex"] = selection["profile"]["clients"]["codex"]
+        for source, expected_code, expected_binding in (
+            (redirected, 2, "different"),
+            (stable, 2, "different"),
+            (external, 0, "match"),
+        ):
+            for member in selection["profile"]["artifact_slate"]:
+                self.native_run(
+                    "codex", "plugin", "remove", member + "@provingkit-local", "--json"
+                )
+            self.native_run(
+                "codex", "plugin", "marketplace", "remove", "provingkit-local", "--json"
+            )
+            self.native_run(
+                "codex", "plugin", "marketplace", "add", str(source), "--json"
+            )
+            for member in selection["profile"]["artifact_slate"]:
+                self.native_run(
+                    "codex", "plugin", "add", member + "@provingkit-local", "--json"
+                )
+            self.selection.write_text(json.dumps(mixed if expected_code else selection))
+            code, observed = self.run_command("status")
+            self.assertEqual(code, expected_code, observed)
+            if expected_code:
+                self.assertEqual(observed["clients"], {})
+                self.assertIn("registration changed", observed["message"])
+                code, refused = self.run_command("reconcile")
+                self.assertEqual(code, 2, refused)
+                self.assertEqual(refused["clients"], {})
+                self.assertFalse((self.home / ".cursor").exists())
+                continue
+            self.assertEqual(
+                observed["clients"]["codex"]["source_binding"], expected_binding
+            )
+            self.assertEqual(observed["clients"]["codex"]["actions"], [])
+        shutil.rmtree(stable)
+
         missing = Path(report["clients"]["codex"]["members"]["proseweaving"]["path"])
         shutil.rmtree(missing)
         code, repaired = self.run_command("reconcile")
