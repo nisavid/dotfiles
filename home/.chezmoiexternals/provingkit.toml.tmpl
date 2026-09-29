@@ -1,0 +1,33 @@
+{{- $selection := includeTemplate "provingkit-selection.tmpl" . | fromJson -}}
+{{- $profile := $selection.profile -}}
+{{- if and $profile (eq .chezmoi.os "linux") (eq $profile.platform.os .chezmoi.os) (eq $profile.platform.arch .chezmoi.arch) -}}
+{{- range $target, $artifact := $profile.artifacts }}
+{{- if not (has $target (list "agent-plugins" "claude" "cursor")) -}}
+{{- fail "Provingkit unsupported artifact target" -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9a-f]{64}$" $artifact.artifact_sha256) -}}
+{{- fail "Provingkit invalid artifact SHA-256" -}}
+{{- end -}}
+{{- range $kind := list "archive" "receipt" "modes" -}}
+{{- $url := (index $artifact $kind).url -}}
+{{- if not (or (hasPrefix "https://" $url) (and (eq (env "PROVINGKIT_TEST_LOCAL_ARTIFACTS") "1") (hasPrefix "file:///" $url))) -}}
+{{- fail (printf "Provingkit %s URL must use HTTPS (local files require explicit fixture mode)" $kind) -}}
+{{- end -}}
+{{- end }}
+[{{ printf ".local/share/provingkit/artifacts/%s/%s" $target $artifact.artifact_sha256 | quote }}]
+type = "archive"
+url = {{ $artifact.archive.url | quote }}
+stripComponents = 1
+checksum.sha256 = {{ $artifact.archive.sha256 | quote }}
+
+[{{ printf ".local/share/provingkit/evidence/%s/%s/RECEIPT.json" $target $artifact.artifact_sha256 | quote }}]
+type = "file"
+url = {{ $artifact.receipt.url | quote }}
+checksum.sha256 = {{ $artifact.receipt.sha256 | quote }}
+
+[{{ printf ".local/share/provingkit/evidence/%s/%s/modes.tsv" $target $artifact.artifact_sha256 | quote }}]
+type = "file"
+url = {{ $artifact.modes.url | quote }}
+checksum.sha256 = {{ $artifact.modes.sha256 | quote }}
+{{ end -}}
+{{- end -}}

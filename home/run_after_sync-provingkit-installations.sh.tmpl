@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+exec {{ joinPath .chezmoi.homeDir ".local/bin/provingkit-installations" | quote }} reconcile
