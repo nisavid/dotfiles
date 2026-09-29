@@ -15,6 +15,13 @@ fail() {
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-command-shims.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
 
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
+    rm -rf -- "$test_dir"
+  fi
+}
+
 fixture_home=$test_dir/home
 shim_dir=$fixture_home/.local/lib/secret-exec/bin
 real_bin=$test_dir/real-bin

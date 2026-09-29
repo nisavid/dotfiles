@@ -14,6 +14,13 @@ command -v rg >/dev/null || fail 'rg is required to validate the client boundary
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/mlxctl-client-boundary.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
+
+# zsh skips EXIT traps when errexit fires inside a function.
+TRAPZERR() {
+  if [[ -o errexit ]] && (( ZSH_SUBSHELL == 0 && ${#funcstack} > 1 )); then
+    rm -rf -- "$test_dir"
+  fi
+}
 rendered=$test_dir/modify-codex-config
 fixture_home=$test_dir/home
 mkdir -p -- "$fixture_home"
@@ -55,9 +62,13 @@ if before != after:
     raise SystemExit(1)
 PY
 
+# The fixture path may itself contain a client name.
+rendered_for_scan=$(<"$rendered")
+rendered_for_scan=${rendered_for_scan//"$fixture_home"/<fixture-home>}
+print -r -- "$rendered_for_scan" > "$test_dir/rendered-for-scan"
 ! rg -n -i \
   'MLX_OPTIQ|mlx-optiq|HINDSIGHT_API_LLM|127\.0\.0\.1:8766|model_context_window|model_catalog_json' \
-  "$rendered" home/dot_codex/modify_private_config.toml.tmpl \
+  "$test_dir/rendered-for-scan" home/dot_codex/modify_private_config.toml.tmpl \
   home/run_after_install-mlxctl.sh.tmpl >/dev/null || \
   fail 'dotfiles must not configure mlxctl clients'
 
