@@ -2705,10 +2705,12 @@ new recovery enrollment, temporary protection patch, exact recovery merge,
 restoration, incident decisions, and any second recovery. Never let a script
 infer or broaden that authority.
 
-## Activate the consumers and close the issue
+## Use the recovered signer for consumers
 
-After recovery merges, rebase open PRs whose heads predate the new adapter onto
-the recovered `main` before expecting the privacy-age integrity check to pass.
+Issue [#286](https://github.com/nisavid/dotfiles/issues/286) records the completed
+recovery and its [operational acceptance](https://github.com/nisavid/dotfiles/issues/286#issuecomment-5882596788).
+Rebase any open PR whose head predates the new adapter onto current `main` before
+expecting the privacy-age integrity check to pass.
 The active-boundary check requires the adapter in every head, even for PRs that
 change only unprotected files.
 
@@ -2716,25 +2718,23 @@ PR [#285](https://github.com/nisavid/dotfiles/pull/285),
 PR [#287](https://github.com/nisavid/dotfiles/pull/287),
 PR [#302](https://github.com/nisavid/dotfiles/pull/302),
 PR [#303](https://github.com/nisavid/dotfiles/pull/303), and
-PR [#323](https://github.com/nisavid/dotfiles/pull/323) consume the reviewed
-procedure under their separate owning tasks. PR #323's registration is recorded
+PR [#323](https://github.com/nisavid/dotfiles/pull/323) were registered as
+consumers of the reviewed procedure under their separate owning tasks.
+PR #323's registration is recorded
 in [issue #286](https://github.com/nisavid/dotfiles/issues/286#issuecomment-5822092645).
-PR #285's head was `6a9b527e87b21967dbb8f43d2c2c15af8658e772` when this
-procedure was prepared; that value and any observed base or head of any
-consumer are not reusable operating inputs. Before any later operation, each
+An earlier base or head observed for any consumer is not a reusable operating
+input. Before any later operation, each
 consumer must independently load the published, reviewed issue #286 revision,
 record that revision plus the refreshed adapter, trusted-wrapper, and creator
 digests, and refresh its own then-current base and head. A local candidate, an
 earlier digest handoff, or another consumer's transition is not an operating
 input.
 
-Once the new key is trusted, protection is restored, and operational acceptance
-is recorded, each owning task may, under its separate authority, create a new
-receipt through the routine path, replace that PR's prior marker, and require a
-fresh hosted `Verify trusted base against candidate data` run for that exact
-then-current transition. Each owner retains its work. This handoff changes none
-of those pull requests and transfers no branch, source, receipt, review, or
-integration ownership.
+Each owning task may, under its separate authority, create a new receipt
+through the routine path, replace that PR's prior marker, and require a fresh
+hosted `Verify trusted base against candidate data` run for that exact
+then-current transition. Each owner retains its source, review, publication,
+and integration work.
 
 [PR #253](https://github.com/nisavid/dotfiles/pull/253) is the public retired-key
 control. Bind later verification to these exact public bytes:
@@ -2759,18 +2759,17 @@ allowed-signers blob. This establishes a formerly valid signed control. The
 receipt expired at `2026-09-03T19:03:24Z`; current-time receipt extraction
 rejects it for expiry and proves nothing about signer retirement.
 
-After recovery, verify the already isolated canonical signature directly
-against both signer blobs: it must still verify against the pre-recovery blob
-and must fail against the recovered `main` blob. Do not run current-time receipt
-extraction and label its expiry error as retired-key rejection. In a separately
-authorized disposable protected transition, also require the hosted gate to
-reject the retired receipt before publishing a new-key receipt. The recovered-
-signer comparison and hosted fresh-transition check remain unexecuted and need
-their existing production authorization. This control requires no copy of the
-retired private key and separates signer retirement from exact-transition and
-expiry checks.
+The recovered-signer comparison and hosted fresh-transition control are
+complete. The historical signature verifies against the pre-recovery signer
+and fails against the signer on recovered `main`. The exact #253 marker was
+rejected on [#287's final protected transition](https://github.com/nisavid/dotfiles/actions/runs/36363624992/job/108745569332)
+with `privacy age integrity gate failed: admission receipt is invalid`, then
+removed before the new receipt was published. That hosted rejection is an
+expiry-stage result; the direct signature comparison establishes signer
+retirement separately. Neither control requires the retired private key.
 
-Before closing issue #286, retain value-free evidence of all of these outcomes:
+The [#286 acceptance record](https://github.com/nisavid/dotfiles/issues/286#issuecomment-5882596788)
+retains value-free evidence of:
 
 - the reviewed published source revision, adapter/wrapper digests, and clean
   fixture tests;
@@ -2782,16 +2781,10 @@ Before closing issue #286, retain value-free evidence of all of these outcomes:
   and the retired receipt rejected on a new transition;
 - the full restored protection response matching its preimage, including the
   app-pinned trusted-base check;
-- a new-key receipt and a fresh hosted success for PR #285 at its
-  independently refreshed base/head transition; and
+- a new-key receipt and [fresh hosted success](https://github.com/nisavid/dotfiles/actions/runs/36377281173/job/108785878711)
+  for PR #285 at its independently refreshed base/head transition; and
 - absence of adapter and receipt-creator private staging plus the operational
   handoff.
 
-PRs #287, #302, #303, and #323 are independently owned consumers, not closure
-gates for issue #286. Each still follows the fresh-revision and
-fresh-transition requirements above.
-
-The public PR #253 control settles only the historical side of that comparison.
-Static inspection of the one-key allowed-signers file is not enough to claim
-the pending recovered-key rejection. Keep issue #286 open until that dynamic
-comparison and the authorized hosted transition complete.
+PRs #302, #303, and #323 retain their own fresh-revision and fresh-transition
+requirements. Their owners determine each PR's current state before operating.
