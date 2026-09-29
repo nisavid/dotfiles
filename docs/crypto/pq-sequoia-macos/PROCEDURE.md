@@ -23,9 +23,11 @@ revision and receives separate acceptance.
   Its fixed [message](fixtures/v1/message.bin) is exactly 51 bytes and has SHA-256
   `6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337`.
 - [`pq-sequoia-macos`](../../../scripts/pq-sequoia-macos) validates those
-  inputs, commits and verifies the ephemeral tap, inspects key-packet versions,
-  controls exact-keg selection, records the Mach-O and runtime closures, and
-  opens and closes the live exchange.
+  inputs, parses release-signature status, compares signed Git trees with
+  pre-patch archives, binds Homebrew's active OpenSSL formula, commits and
+  verifies the ephemeral tap, inspects key-packet versions, controls exact-keg
+  selection, records the Mach-O and runtime closures, and opens and closes the
+  live exchange.
 - [`pq-sequoia-macos.yml`](../../../.github/workflows/pq-sequoia-macos.yml) is
   manual-only. It has no push, pull-request, schedule, or release trigger.
 
@@ -33,7 +35,12 @@ The selected OpenSSL closure is Homebrew `openssl@3.5` 3.5.8, not the
 preflight's OpenSSL 3.6.4 proposal. OpenSSL lists 3.5 as LTS through 2030-04-08,
 and Homebrew provides a keg-only 3.5 formula with an Apple Silicon Sequoia
 bottle. The workflow verifies the official detached release signature, source,
-formula, and bottle bytes before use.
+formula, and bottle bytes before use. It checks out the declared Homebrew/core
+revision with API-based formula resolution disabled, requires Homebrew's own
+formula resolver to return the declared formula path, and compares those live
+bytes with the candidate before any package installation. The same formula
+identity is observed again after the private formula builds and retained in
+the runtime closure.
 
 ## Validate the checked-in surface
 
@@ -41,12 +48,43 @@ Run this after any edit to the procedure, protocol, formulae, or lock patches:
 
 ```sh
 scripts/pq-sequoia-macos validate-static --root .
-python3 -m unittest tests.test_pq_sequoia_macos
+python3 -B -m unittest tests.test_pq_sequoia_macos
+ruff check --no-cache scripts/pq-sequoia-macos tests/test_pq_sequoia_macos.py
+actionlint .github/workflows/pq-sequoia-macos.yml
 ```
 
 The command fails closed on any formula, patch, message, or manifest mismatch.
 The formulae embed the same reviewed patch bytes retained beside them; the test
-and command require the two copies to remain byte-identical.
+and command require the two copies to remain byte-identical. Inert source
+fixtures also require exactly one structurally valid GnuPG `VALIDSIG` record,
+exercise every declared signing-subkey identity, reject a pre-patch archive
+whose normalized tree differs from its signed commit, and reject an active
+formula whose path, bytes, or Homebrew/core revision differs while the
+separately downloaded formula remains unchanged.
+
+## Verify source provenance before build
+
+For each `sq` and `sqv` tag, retain GnuPG's machine-readable status and require
+exactly one `VALIDSIG` record. Its signing-key fingerprint must equal the
+declared signing subkey, and its primary-key fingerprint must equal the
+declared primary. Apply the same rule to the OpenSSL detached signature.
+Missing, duplicate, malformed, or mismatched records stop before a source
+receipt is written.
+
+Extract each Sequoia release archive without patching it, then compare it with
+the tree named by the verified tag commit. The normalization includes every
+tracked regular file and symbolic link, its repo-relative path, Git mode, byte
+count, and SHA-256 content digest; it ignores directories because Git does not
+track empty directories. The archive wrapper directory is removed during
+extraction. Any missing, extra, changed, mode-different, or unsupported entry
+stops before the lock patch, upstream tests, or package build.
+
+`source-verification.json` retains each observed primary and signing
+fingerprint, signed commit and Git tree, both normalized tree digests, the
+active OpenSSL formula path and digest, and the exact Homebrew/core revision.
+`runtime-closure.json` embeds that receipt and a second active-formula
+observation made after the candidate builds. A difference between the two
+formula observations rejects runtime-closure creation.
 
 ## Prepare the #148 public opening phase
 
@@ -149,29 +187,34 @@ The qualification job then:
 1. proves a GitHub-hosted macOS 15 ARM64 runner and records `ImageOS`,
    `ImageVersion`, `RUNNER_ARCH`, `RUNNER_ENVIRONMENT`, `sw_vers`, Xcode, and
    build-tool identities;
-2. verifies the signed Sequoia tags and exact commits, release archives,
-   retained patches, final 2.4.1 locks, OpenSSL signature and source, pinned
-   Homebrew formula, and OpenSSL bottle;
-3. runs the complete upstream `sq` and `sqv` suites against OpenSSL 3.5.8;
-4. copies both exact formulae into the ephemeral tap, creates a local unsigned
+2. verifies the signed Sequoia tags and exact commits, enforces both observed
+   signer fingerprints, and proves each pre-patch archive matches the signed
+   commit tree;
+3. verifies the retained patches, final 2.4.1 locks, OpenSSL signature and
+   source, exact active Homebrew/core formula revision and bytes, and OpenSSL
+   bottle before installing dependencies;
+4. runs the complete upstream `sq` and `sqv` suites against OpenSSL 3.5.8;
+5. copies both exact formulae into the ephemeral tap, creates a local unsigned
    Git commit, and requires the clean committed blobs and working-tree bytes to
    match `candidate.json` before building and bottling either formula;
-5. proves that a wrong executable digest leaves the selector absent, then
+6. proves that a wrong executable digest leaves the selector absent, then
    selects only exact Cellar paths;
-6. records every on-disk Mach-O dependency digest and queries the live cache
+7. rechecks the active formula and core revision, then records every on-disk
+   Mach-O dependency digest and queries the live cache
    with `/usr/bin/dyld_shared_cache_util -list`; an unresolved install name is
    accepted only by exact membership in that listing, and the evidence retains
    the utility identity, listing digest, listed-name count, and used members;
-7. runs generation, exact key and signature packet-shape inspection, lint,
+8. runs generation, exact key and signature packet-shape inspection, lint,
    detached `sq` and independent `sqv` verification,
    altered-message rejection, encryption/decryption, tampered-ciphertext
    rejection without recovered output, emergency and explicit certificate
    revocation, signing- and encryption-subkey retirement, and 200 sequential
    clean lifecycles of each executable; and
-8. records `runtime-closure.json`, including the tap commit and live-cache
-   observation, signs its exact SHA-256 as phase B's producer closure, and
-   uploads the unchanged closure beside `macos-ci-phase-b.json` while keeping
-   the macOS secret certificate only in the still-running job.
+9. records `runtime-closure.json`, including the source-verification receipt,
+   post-build formula observation, tap commit, and live-cache observation,
+   signs its exact SHA-256 as phase B's producer closure, and uploads the
+   unchanged closure beside `macos-ci-phase-b.json` while keeping the macOS
+   secret certificate only in the still-running job.
 
 ## Complete the live return
 
@@ -239,12 +282,12 @@ diagnostics.
 ## Completion evidence
 
 The final macOS artifact contains the candidate and protocol, fixed message,
-all three envelopes, both peer results with identical seven-artifact maps,
-exact relay-run metadata, local results, bottle metadata, the tap closure, the
-runtime closure, and `SHA256SUMS`. The runtime closure does not contain its own
-digest; phase B and the peer results bind that digest. Envelope, result,
-closure, and index digests remain separate from the reciprocal map because a
-container cannot contain its own digest.
+source-verification receipt, all three envelopes, both peer results with
+identical seven-artifact maps, exact relay-run metadata, local results, bottle
+metadata, the tap closure, the runtime closure, and `SHA256SUMS`. The runtime
+closure does not contain its own digest; phase B and the peer results bind that
+digest. Envelope, result, closure, and index digests remain separate from the
+reciprocal map because a container cannot contain its own digest.
 Acceptance still requires #258 to reconcile the #147 and #148 evidence, a
 fresh independent review tied to the executed revision, the exact workflow
 run and runner image, and a fresh #149 decision.

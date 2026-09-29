@@ -143,7 +143,6 @@ jobs:
             tag=$(jq -r ".applications.$component.tag" "$candidate")
             tag_object=$(jq -r ".applications.$component.tag_object" "$candidate")
             commit=$(jq -r ".applications.$component.commit" "$candidate")
-            primary=$(jq -r ".applications.$component.signer_primary_fingerprint" "$candidate")
             source_url=$(jq -r ".applications.$component.source_url" "$candidate")
             source_digest=$(jq -r ".applications.$component.source_sha256" "$candidate")
             patch_path=$(jq -r ".applications.$component.patch_path" "$candidate")
@@ -155,10 +154,13 @@ jobs:
               "refs/tags/$tag:refs/tags/$tag"
             [[ "$(git -C "$repository_path" rev-parse "refs/tags/$tag")" == "$tag_object" ]]
             [[ "$(git -C "$repository_path" rev-parse "refs/tags/$tag^{}")" == "$commit" ]]
-            verification=$(GNUPGHOME="$gnupg" \
-              git -C "$repository_path" verify-tag --raw "$tag" 2>&1)
-            grep -Fq "VALIDSIG" <<<"$verification"
-            grep -Fq "$primary" <<<"$verification"
+            signer_status="$downloads/$component-validsig.status"
+            GNUPGHOME="$gnupg" git -C "$repository_path" \
+              verify-tag --raw "$tag" >"$signer_status" 2>&1
+            scripts/pq-sequoia-macos verify-gpg-status \
+              --candidate "$candidate" --source "$component" \
+              --status "$signer_status" \
+              --output "$PQ_SCRATCH/evidence/source-$component-signer.json"
 
             case "$component" in
               sq) archive="$downloads/sequoia-sq-v1.4.0.tar.gz" ;;
@@ -173,6 +175,10 @@ jobs:
               *.tar.gz) tar -xzf "$archive" -C "$sources/$component" --strip-components=1 ;;
               *.tar.bz2) tar -xjf "$archive" -C "$sources/$component" --strip-components=1 ;;
             esac
+            scripts/pq-sequoia-macos verify-archive-tree \
+              --repository "$repository_path" --commit "$commit" \
+              --archive-root "$sources/$component" \
+              --output "$PQ_SCRATCH/evidence/source-$component-tree.json"
             patch -d "$sources/$component" -p1 --forward <"$patch_path"
             printf '%s  %s\n' "$lock_digest" "$sources/$component/Cargo.lock" \
               | shasum -a 256 --check
@@ -184,7 +190,6 @@ jobs:
           openssl_signature_digest=$(jq -r '.openssl.source_signature_sha256' "$candidate")
           openssl_formula_url=$(jq -r '.openssl.formula_url' "$candidate")
           openssl_formula_digest=$(jq -r '.openssl.formula_sha256' "$candidate")
-          openssl_primary=$(jq -r '.openssl.signer_primary_fingerprint' "$candidate")
           openssl_source="$downloads/openssl-3.5.8.tar.gz"
           openssl_signature="$downloads/openssl-3.5.8.tar.gz.asc"
           openssl_formula="$downloads/openssl@3.5.rb"
@@ -200,10 +205,14 @@ jobs:
             | shasum -a 256 --check
           printf '%s  %s\n' "$openssl_formula_digest" "$openssl_formula" \
             | shasum -a 256 --check
-          verification=$(GNUPGHOME="$gnupg" gpg --batch --status-fd 1 \
-            --verify "$openssl_signature" "$openssl_source" 2>/dev/null)
-          grep -Fq "VALIDSIG" <<<"$verification"
-          grep -Fq "$openssl_primary" <<<"$verification"
+          openssl_signer_status="$downloads/openssl-validsig.status"
+          GNUPGHOME="$gnupg" gpg --batch --status-fd 1 \
+            --verify "$openssl_signature" "$openssl_source" \
+            >"$openssl_signer_status" 2>/dev/null
+          scripts/pq-sequoia-macos verify-gpg-status \
+            --candidate "$candidate" --source openssl \
+            --status "$openssl_signer_status" \
+            --output "$PQ_SCRATCH/evidence/source-openssl-signer.json"
 
           bottle_url=$(jq -r '.openssl.arm64_sequoia_bottle_url' "$candidate")
           bottle_digest=$(jq -r '.openssl.arm64_sequoia_bottle_sha256' "$candidate")
@@ -217,63 +226,98 @@ jobs:
           unset token
           printf '%s  %s\n' "$bottle_digest" "$bottle" | shasum -a 256 --check
 
-          python3 - "$candidate" "$PQ_SCRATCH/evidence/source-verification.json" <<'PY'
+      - name: Install disposable build dependencies and pinned OpenSSL bottle
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_FROM_API=1
+          candidate=packaging/homebrew/pq-sequoia-macos/v1/candidate.json
+          core_commit=$(jq -r '.openssl.homebrew_core_commit' "$candidate")
+          if ! core_root=$(brew --repository homebrew/core 2>/dev/null) \
+            || [[ ! -d "$core_root" ]]
+          then
+            brew tap homebrew/core
+            core_root=$(brew --repository homebrew/core)
+          fi
+          git -C "$core_root" fetch --quiet --depth=1 origin "$core_commit"
+          git -C "$core_root" checkout --quiet --detach "$core_commit"
+          active_openssl_formula=$(brew ruby -e \
+            'puts Formulary.factory("openssl@3.5").path')
+          scripts/pq-sequoia-macos verify-homebrew-formula \
+            --candidate "$candidate" --core-root "$core_root" \
+            --active-formula "$active_openssl_formula" \
+            --output "$PQ_SCRATCH/evidence/homebrew-formula-source.json"
+
+          python3 - "$candidate" "$PQ_SCRATCH/evidence" <<'PY'
           import hashlib
           import json
           import pathlib
           import sys
 
           candidate_path = pathlib.Path(sys.argv[1])
+          evidence = pathlib.Path(sys.argv[2])
           candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+
+          def load(name):
+              return json.loads((evidence / name).read_text(encoding="utf-8"))
+
           receipt = {
               "schema_version": "pq-sequoia-source-verification/v1",
               "candidate_sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
-              "verified": {
-                  "sq": {
-                      field: candidate["applications"]["sq"][field]
-                      for field in (
-                          "tag_object",
-                          "commit",
-                          "source_sha256",
-                          "patch_sha256",
-                          "lock_sha256",
-                          "signer_primary_fingerprint",
-                      )
-                  },
-                  "sqv": {
-                      field: candidate["applications"]["sqv"][field]
-                      for field in (
-                          "tag_object",
-                          "commit",
-                          "source_sha256",
-                          "patch_sha256",
-                          "lock_sha256",
-                          "signer_primary_fingerprint",
-                      )
-                  },
-                  "openssl": {
-                      field: candidate["openssl"][field]
-                      for field in (
-                          "source_sha256",
-                          "source_signature_sha256",
-                          "formula_sha256",
-                          "arm64_sequoia_bottle_sha256",
-                          "signer_primary_fingerprint",
-                      )
-                  },
-              },
+              "verified": {},
           }
-          pathlib.Path(sys.argv[2]).write_text(
+          for component in ("sq", "sqv"):
+              application = candidate["applications"][component]
+              receipt["verified"][component] = {
+                  field: application[field]
+                  for field in (
+                      "tag_object",
+                      "commit",
+                      "source_sha256",
+                      "patch_sha256",
+                      "lock_sha256",
+                      "signer_primary_fingerprint",
+                      "signer_subkey_fingerprint",
+                  )
+              }
+              receipt["verified"][component]["observed_signer"] = load(
+                  f"source-{component}-signer.json"
+              )
+              receipt["verified"][component]["archive_tree"] = load(
+                  f"source-{component}-tree.json"
+              )
+          openssl = candidate["openssl"]
+          receipt["verified"]["openssl"] = {
+              field: openssl[field]
+              for field in (
+                  "source_sha256",
+                  "source_signature_sha256",
+                  "formula_sha256",
+                  "arm64_sequoia_bottle_sha256",
+                  "homebrew_core_commit",
+                  "homebrew_core_formula_path",
+                  "signer_primary_fingerprint",
+                  "signer_subkey_fingerprint",
+              )
+          }
+          receipt["verified"]["openssl"]["observed_signer"] = load(
+              "source-openssl-signer.json"
+          )
+          receipt["verified"]["openssl"]["active_formula"] = load(
+              "homebrew-formula-source.json"
+          )
+          (evidence / "source-verification.json").write_text(
               json.dumps(receipt, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
           PY
 
-      - name: Install disposable build dependencies and pinned OpenSSL bottle
-        shell: bash
-        run: |
-          set -euo pipefail
-          export HOMEBREW_NO_AUTO_UPDATE=1
+          {
+            printf 'HOMEBREW_NO_INSTALL_FROM_API=1\n'
+            printf 'PQ_HOMEBREW_CORE_ROOT=%s\n' "$core_root"
+            printf 'PQ_OPENSSL_FORMULA_PATH=%s\n' "$active_openssl_formula"
+          } >>"$GITHUB_ENV"
           brew install capnp gnupg pkgconf
           brew install "$PQ_SCRATCH/downloads/openssl@3.5--3.5.8.arm64_sequoia.bottle.tar.gz"
           openssl_prefix=$(brew --prefix openssl@3.5)
@@ -326,6 +370,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          candidate=packaging/homebrew/pq-sequoia-macos/v1/candidate.json
+          scripts/pq-sequoia-macos verify-homebrew-formula \
+            --candidate "$candidate" --core-root "$PQ_HOMEBREW_CORE_ROOT" \
+            --active-formula "$PQ_OPENSSL_FORMULA_PATH" \
+            --output "$PQ_SCRATCH/evidence/homebrew-formula-runtime.json"
           sq_digest=$(shasum -a 256 "$PQ_SQ" | awk '{print $1}')
           sqv_digest=$(shasum -a 256 "$PQ_SQV" | awk '{print $1}')
           disabled="$PQ_SCRATCH/public/disabled-selector.env"
@@ -349,6 +398,8 @@ jobs:
             --dyld-shared-cache-util /usr/bin/dyld_shared_cache_util \
             --sq "$PQ_SQ" --sqv "$PQ_SQV" \
             --openssl "$PQ_OPENSSL_PREFIX/bin/openssl" \
+            --source-verification "$PQ_SCRATCH/evidence/source-verification.json" \
+            --active-formula-verification "$PQ_SCRATCH/evidence/homebrew-formula-runtime.json" \
             --candidate-identity "$PQ_CANDIDATE_IDENTITY" \
             --output "$PQ_SCRATCH/evidence/runtime-closure.json"
           producer_closure_sha256=$(shasum -a 256 \

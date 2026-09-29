@@ -193,6 +193,342 @@ class QualificationProcedureTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("pq-sequoia-macos static surface: valid\n", result.stdout)
 
+    def test_source_signature_requires_one_exact_validsig_identity(self) -> None:
+        candidate = json.loads(CANDIDATE.read_text(encoding="utf-8"))
+        statuses = {
+            "sq": (
+                candidate["applications"]["sq"]["signer_subkey_fingerprint"],
+                candidate["applications"]["sq"]["signer_primary_fingerprint"],
+            ),
+            "sqv": (
+                candidate["applications"]["sqv"]["signer_subkey_fingerprint"],
+                candidate["applications"]["sqv"]["signer_primary_fingerprint"],
+            ),
+            "openssl": (
+                candidate["openssl"]["signer_subkey_fingerprint"],
+                candidate["openssl"]["signer_primary_fingerprint"],
+            ),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate_path = root / "candidate.json"
+            _write_json(candidate_path, candidate)
+            for source, (signing, primary) in statuses.items():
+                with self.subTest(source=source):
+                    status = root / f"{source}.status"
+                    output = root / f"{source}.json"
+                    status.write_text(
+                        _validsig_status(signing=signing, primary=primary),
+                        encoding="utf-8",
+                    )
+                    accepted = self.run_cli(
+                        "verify-gpg-status",
+                        "--candidate",
+                        str(candidate_path),
+                        "--source",
+                        source,
+                        "--status",
+                        str(status),
+                        "--output",
+                        str(output),
+                    )
+                    self.assertEqual(0, accepted.returncode, accepted.stderr)
+                    record = json.loads(output.read_text(encoding="utf-8"))
+                    self.assertEqual(signing, record["signing_fingerprint"])
+                    self.assertEqual(primary, record["primary_fingerprint"])
+
+                    changed = json.loads(json.dumps(candidate))
+                    owner = (
+                        changed["openssl"]
+                        if source == "openssl"
+                        else changed["applications"][source]
+                    )
+                    owner["signer_subkey_fingerprint"] = "D" * 40
+                    _write_json(candidate_path, changed)
+                    output.unlink()
+                    rejected = self.run_cli(
+                        "verify-gpg-status",
+                        "--candidate",
+                        str(candidate_path),
+                        "--source",
+                        source,
+                        "--status",
+                        str(status),
+                        "--output",
+                        str(output),
+                    )
+                    self.assertEqual(1, rejected.returncode)
+                    self.assertIn("signing fingerprint mismatch", rejected.stderr)
+                    self.assertFalse(output.exists())
+                    _write_json(candidate_path, candidate)
+
+            signing, primary = statuses["openssl"]
+            status = root / "openssl.status"
+            output = root / "openssl.json"
+            invalid_cases = {
+                "missing": "[GNUPG:] GOODSIG fixture\n",
+                "duplicate": _validsig_status(signing=signing, primary=primary) * 2,
+                "malformed": (
+                    f"[GNUPG:] VALIDSIG {signing} 2026-09-29 1790697600 "
+                    "0 4 0 22 8 00\n"
+                ),
+            }
+            for label, content in invalid_cases.items():
+                with self.subTest(label=label):
+                    status.write_text(content, encoding="utf-8")
+                    rejected = self.run_cli(
+                        "verify-gpg-status",
+                        "--candidate",
+                        str(candidate_path),
+                        "--source",
+                        "openssl",
+                        "--status",
+                        str(status),
+                        "--output",
+                        str(output),
+                    )
+                    self.assertEqual(1, rejected.returncode)
+                    self.assertIn("exactly one valid VALIDSIG", rejected.stderr)
+                    self.assertFalse(output.exists())
+
+    def test_prepatch_archive_must_match_the_signed_commit_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "source.git"
+            repository.mkdir()
+            git_environment = _closed_git_environment()
+            subprocess.run(
+                ["git", "init", "--quiet", str(repository)],
+                check=True,
+                env=git_environment,
+            )
+            (repository / "README.md").write_bytes(b"fixture\n")
+            executable = repository / "bin/tool"
+            executable.parent.mkdir()
+            executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
+            (repository / "README.link").symlink_to("README.md")
+            subprocess.run(
+                ["git", "-C", str(repository), "add", "--", "."],
+                check=True,
+                env=git_environment,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "-c",
+                    "user.name=PQ source fixture",
+                    "-c",
+                    "user.email=pq-source.invalid@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--quiet",
+                    "--no-gpg-sign",
+                    "--message",
+                    "Create signed-tree fixture",
+                ],
+                check=True,
+                env=git_environment,
+            )
+            commit = subprocess.run(
+                ["git", "-C", str(repository), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=git_environment,
+            ).stdout.strip()
+            archive = root / "archive"
+            shutil.copytree(
+                repository,
+                archive,
+                symlinks=True,
+                ignore=shutil.ignore_patterns(".git"),
+            )
+            output = root / "tree-verification.json"
+            accepted = self.run_cli(
+                "verify-archive-tree",
+                "--repository",
+                str(repository),
+                "--commit",
+                commit,
+                "--archive-root",
+                str(archive),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(0, accepted.returncode, accepted.stderr)
+            record = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(commit, record["commit"])
+            self.assertEqual(3, record["entry_count"])
+            self.assertEqual(
+                record["commit_normalized_tree_sha256"],
+                record["archive_normalized_tree_sha256"],
+            )
+            self.assertTrue(record["tree_match"])
+
+            (archive / "README.md").write_bytes(b"different but digest-pinned\n")
+            output.unlink()
+            rejected = self.run_cli(
+                "verify-archive-tree",
+                "--repository",
+                str(repository),
+                "--commit",
+                commit,
+                "--archive-root",
+                str(archive),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(1, rejected.returncode)
+            self.assertIn("archive tree does not match", rejected.stderr)
+            self.assertFalse(output.exists())
+
+    def test_active_homebrew_formula_must_match_frozen_core_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            core = root / "homebrew-core"
+            openssl_formula = "openssl@3.5.rb"
+            formula_relative_path = f"Formula/o/{openssl_formula}"
+            formula = core / formula_relative_path
+            formula.parent.mkdir(parents=True)
+            formula.write_bytes(b"class OpensslAT35 < Formula\nend\n")
+            git_environment = _closed_git_environment()
+            subprocess.run(
+                ["git", "init", "--quiet", str(core)],
+                check=True,
+                env=git_environment,
+            )
+            subprocess.run(
+                ["git", "-C", str(core), "add", "--", formula_relative_path],
+                check=True,
+                env=git_environment,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(core),
+                    "-c",
+                    "user.name=PQ formula fixture",
+                    "-c",
+                    "user.email=pq-formula.invalid@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--quiet",
+                    "--no-gpg-sign",
+                    "--message",
+                    "Create formula fixture",
+                ],
+                check=True,
+                env=git_environment,
+            )
+            commit = subprocess.run(
+                ["git", "-C", str(core), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=git_environment,
+            ).stdout.strip()
+            candidate = json.loads(CANDIDATE.read_text(encoding="utf-8"))
+            candidate["openssl"]["homebrew_core_commit"] = commit
+            candidate["openssl"]["homebrew_core_formula_path"] = formula_relative_path
+            candidate["openssl"]["formula_sha256"] = _sha256(formula)
+            candidate_path = root / "candidate.json"
+            _write_json(candidate_path, candidate)
+            downloaded = root / f"downloaded-{openssl_formula}"
+            shutil.copyfile(formula, downloaded)
+            output = root / "formula-verification.json"
+
+            accepted = self.run_cli(
+                "verify-homebrew-formula",
+                "--candidate",
+                str(candidate_path),
+                "--core-root",
+                str(core),
+                "--active-formula",
+                str(formula),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(0, accepted.returncode, accepted.stderr)
+            record = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(commit, record["homebrew_core_revision"])
+            self.assertEqual(_sha256(formula), record["formula_sha256"])
+
+            formula.write_bytes(b"class DifferentFormula < Formula\nend\n")
+            self.assertEqual(
+                candidate["openssl"]["formula_sha256"], _sha256(downloaded)
+            )
+            output.unlink()
+            changed_formula = self.run_cli(
+                "verify-homebrew-formula",
+                "--candidate",
+                str(candidate_path),
+                "--core-root",
+                str(core),
+                "--active-formula",
+                str(formula),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(1, changed_formula.returncode)
+            self.assertIn(
+                "active OpenSSL formula digest mismatch", changed_formula.stderr
+            )
+            self.assertFalse(output.exists())
+
+            shutil.copyfile(downloaded, formula)
+            (core / "unrelated.txt").write_text("new revision\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(core), "add", "--", "unrelated.txt"],
+                check=True,
+                env=git_environment,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(core),
+                    "-c",
+                    "user.name=PQ formula fixture",
+                    "-c",
+                    "user.email=pq-formula.invalid@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--quiet",
+                    "--no-gpg-sign",
+                    "--message",
+                    "Advance core fixture",
+                ],
+                check=True,
+                env=git_environment,
+            )
+            changed_revision = self.run_cli(
+                "verify-homebrew-formula",
+                "--candidate",
+                str(candidate_path),
+                "--core-root",
+                str(core),
+                "--active-formula",
+                str(formula),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(1, changed_revision.returncode)
+            self.assertIn("Homebrew core revision mismatch", changed_revision.stderr)
+            self.assertFalse(output.exists())
+
     def test_public_envelope_validator_accepts_only_bound_payloads(self) -> None:
         session_id = "a" * 64
         cert = b"public disposable certificate"
@@ -313,7 +649,21 @@ class QualificationProcedureTests(unittest.TestCase):
         self.assertIn("interop-close", workflow)
         self.assertIn("if: always()", workflow)
         self.assertIn("persist-credentials: false", workflow)
+        self.assertEqual(2, workflow.count('[[ "$GITHUB_WORKFLOW_SHA" =='))
         self.assertNotIn("home/", workflow)
+        self.assertNotIn("actions/cache", workflow)
+        self.assertEqual(2, workflow.count("base64 --decode"))
+        self.assertIn("verify-gpg-status", workflow)
+        self.assertIn("verify-archive-tree", workflow)
+        self.assertIn("verify-homebrew-formula", workflow)
+        self.assertIn("HOMEBREW_NO_INSTALL_FROM_API=1", workflow)
+        self.assertLess(
+            workflow.index("verify-homebrew-formula"),
+            workflow.index("brew install capnp gnupg pkgconf"),
+        )
+        self.assertLess(
+            workflow.index("verify-archive-tree"), workflow.index('patch -d "$sources')
+        )
 
         procedure = PROCEDURE.read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -718,6 +1068,7 @@ class QualificationProcedureTests(unittest.TestCase):
             "runner": {"image_version": "fixture-a"},
             "build_tools": {},
             "versions": {},
+            "source_verification": {},
             "tap": {"commit": "d" * 40},
             "shared_cache_observation": {"listing_sha256": "e" * 64},
             "closures": {},
@@ -825,6 +1176,7 @@ class QualificationProcedureTests(unittest.TestCase):
                     "runner": {},
                     "build_tools": {},
                     "versions": {},
+                    "source_verification": {},
                     "tap": {},
                     "shared_cache_observation": {},
                     "closures": {},
@@ -1092,6 +1444,7 @@ class QualificationProcedureTests(unittest.TestCase):
                 bin_dir / "dyld_shared_cache_util",
                 "/usr/lib/libSystem.B.dylib\n",
             )
+            source_verification, active_formula = _source_verification_fixtures(root)
             output = root / "runtime.json"
             environment = os.environ.copy()
             environment["PATH"] = str(bin_dir) + os.pathsep + environment["PATH"]
@@ -1113,6 +1466,10 @@ class QualificationProcedureTests(unittest.TestCase):
                     str(sqv),
                     "--openssl",
                     str(openssl),
+                    "--source-verification",
+                    str(source_verification),
+                    "--active-formula-verification",
+                    str(active_formula),
                     "--candidate-identity",
                     "sha256:" + _sha256(CANDIDATE),
                     "--output",
@@ -1128,6 +1485,16 @@ class QualificationProcedureTests(unittest.TestCase):
             record = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual("pq-sequoia-runtime-closure/v1", record["schema_version"])
             self.assertRegex(record["tap"]["commit"], r"^[0-9a-f]{40}$")
+            self.assertEqual(
+                _sha256(source_verification),
+                record["source_verification"]["receipt_sha256"],
+            )
+            self.assertEqual(
+                "87ec0fe343645ff3e4865da62205a7844c99f144",
+                record["source_verification"]["active_formula_runtime"][
+                    "homebrew_core_revision"
+                ],
+            )
             self.assertEqual(
                 1, record["shared_cache_observation"]["listed_name_count"]
             )
@@ -1387,9 +1754,46 @@ def _sha256_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _validsig_status(*, signing: str, primary: str) -> str:
+    return (
+        f"[GNUPG:] VALIDSIG {signing} 2026-09-29 1790697600 0 "
+        f"4 0 22 8 00 {primary}\n"
+    )
+
+
 def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _closed_git_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    return environment
+
+
+def _source_verification_fixtures(root: Path) -> tuple[Path, Path]:
+    openssl_formula = "openssl@3.5.rb"
+    formula_relative_path = f"Formula/o/{openssl_formula}"
+    formula = {
+        "schema_version": "pq-sequoia-homebrew-formula-verification/v1",
+        "formula": "openssl@3.5",
+        "formula_path": str(root / "core" / formula_relative_path),
+        "formula_relative_path": formula_relative_path,
+        "formula_sha256": "3265208aa3bf71299a48b3a2c7d3b734f88b2b65831488ae9e514dbc93c6db05",
+        "homebrew_core_revision": "87ec0fe343645ff3e4865da62205a7844c99f144",
+    }
+    source = {
+        "schema_version": "pq-sequoia-source-verification/v1",
+        "candidate_sha256": _sha256(CANDIDATE),
+        "verified": {"openssl": {"active_formula": formula}},
+    }
+    source_path = root / "source-verification.json"
+    formula_path = root / "active-formula-verification.json"
+    _write_json(source_path, source)
+    _write_json(formula_path, formula)
+    return source_path, formula_path
 
 
 def _revocations() -> dict[str, object]:

@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ from typing import Any
 MESSAGE_SHA256 = "6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337"
 PROTOCOL_SHA256 = "0a542bed779baa5ec0ce98fbd80611819f44913b8e878cfaf66e677e831fc2e0"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+FINGERPRINT_RE = re.compile(r"[0-9A-F]{40}")
 IDENTITY_RE = re.compile(r"sha256:[0-9a-f]{64}")
 SESSION_RE = re.compile(r"[0-9a-f]{64}")
 MAX_ENVELOPE_BYTES = 2 * 1024 * 1024
@@ -192,6 +194,227 @@ def validate_static(root: Path) -> None:
             raise ProcedureError(f"{name} embedded and retained lock patches differ")
         if b'depends_on "openssl@3.5"' not in formula or b"head " in formula.lower():
             raise ProcedureError(f"{name} formula dependency policy mismatch")
+
+
+def candidate_source(candidate: dict[str, Any], source: str) -> dict[str, Any]:
+    if source == "openssl":
+        value = candidate.get("openssl")
+    else:
+        applications = candidate.get("applications")
+        value = applications.get(source) if isinstance(applications, dict) else None
+    if not isinstance(value, dict):
+        raise ProcedureError(f"candidate source declaration is missing: {source}")
+    return value
+
+
+def parse_validsig_status(content: bytes) -> tuple[str, str]:
+    try:
+        lines = content.decode("utf-8").splitlines()
+    except UnicodeError as error:
+        raise ProcedureError("GnuPG status is not valid UTF-8") from error
+    records = [
+        line.split()
+        for line in lines
+        if line.startswith("[GNUPG:] VALIDSIG")
+    ]
+    if (
+        len(records) != 1
+        or len(records[0]) != 12
+        or records[0][:2] != ["[GNUPG:]", "VALIDSIG"]
+        or FINGERPRINT_RE.fullmatch(records[0][2]) is None
+        or FINGERPRINT_RE.fullmatch(records[0][11]) is None
+    ):
+        raise ProcedureError("GnuPG status must contain exactly one valid VALIDSIG")
+    return records[0][2], records[0][11]
+
+
+def verify_gpg_status(arguments: argparse.Namespace) -> None:
+    candidate = read_json(arguments.candidate)
+    source = candidate_source(candidate, arguments.source)
+    try:
+        status = arguments.status.read_bytes()
+    except OSError as error:
+        raise ProcedureError("GnuPG status input is unavailable") from error
+    signing, primary = parse_validsig_status(status)
+    if signing != source.get("signer_subkey_fingerprint"):
+        raise ProcedureError("source signing fingerprint mismatch")
+    if primary != source.get("signer_primary_fingerprint"):
+        raise ProcedureError("source primary fingerprint mismatch")
+    write_json(
+        arguments.output,
+        {
+            "schema_version": "pq-sequoia-gpg-validsig/v1",
+            "source": arguments.source,
+            "status_sha256": sha256_bytes(status),
+            "signing_fingerprint": signing,
+            "primary_fingerprint": primary,
+        },
+    )
+
+
+def source_git_output(repository: Path, arguments: list[str]) -> bytes:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_CONFIG_")
+    }
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    result = subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        check=False,
+        capture_output=True,
+        env=environment,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise ProcedureError("source Git inspection failed")
+    return result.stdout
+
+
+def normalized_git_tree(repository: Path, commit: str) -> list[dict[str, Any]]:
+    listing = source_git_output(
+        repository, ["ls-tree", "--full-tree", "-r", "-z", commit]
+    )
+    entries: list[dict[str, Any]] = []
+    for raw_entry in listing.split(b"\0"):
+        if not raw_entry:
+            continue
+        try:
+            metadata, raw_path = raw_entry.split(b"\t", 1)
+            mode, object_type, object_id = metadata.decode("ascii").split()
+        except (UnicodeError, ValueError) as error:
+            raise ProcedureError("signed commit tree entry is malformed") from error
+        if object_type != "blob" or mode not in {"100644", "100755", "120000"}:
+            raise ProcedureError("signed commit tree contains an unsupported entry")
+        content = source_git_output(repository, ["cat-file", "blob", object_id])
+        entries.append(
+            {
+                "path": raw_path.decode("utf-8", errors="surrogateescape"),
+                "mode": mode,
+                "bytes": len(content),
+                "sha256": sha256_bytes(content),
+            }
+        )
+    return sorted(entries, key=lambda entry: entry["path"])
+
+
+def normalized_archive_tree(root: Path) -> list[dict[str, Any]]:
+    if not root.is_dir() or root.is_symlink():
+        raise ProcedureError("archive root must be a directory")
+    entries: list[dict[str, Any]] = []
+    for directory, directory_names, file_names in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        names = list(file_names)
+        for name in list(directory_names):
+            path = directory_path / name
+            if path.is_symlink():
+                directory_names.remove(name)
+                names.append(name)
+        for name in names:
+            path = directory_path / name
+            relative = path.relative_to(root).as_posix()
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                mode = "120000"
+                content = os.readlink(path).encode("utf-8", errors="surrogateescape")
+            elif stat.S_ISREG(metadata.st_mode):
+                mode = "100755" if metadata.st_mode & 0o111 else "100644"
+                content = path.read_bytes()
+            else:
+                raise ProcedureError("archive tree contains an unsupported entry")
+            entries.append(
+                {
+                    "path": relative,
+                    "mode": mode,
+                    "bytes": len(content),
+                    "sha256": sha256_bytes(content),
+                }
+            )
+    return sorted(entries, key=lambda entry: entry["path"])
+
+
+def normalized_tree_digest(entries: list[dict[str, Any]]) -> str:
+    content = json.dumps(
+        entries, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return sha256_bytes(content)
+
+
+def verify_archive_tree(arguments: argparse.Namespace) -> None:
+    repository = arguments.repository.resolve(strict=True)
+    if re.fullmatch(r"[0-9a-f]{40}", arguments.commit) is None:
+        raise ProcedureError("signed commit identity is invalid")
+    observed_commit = source_git_output(
+        repository, ["rev-parse", "--verify", f"{arguments.commit}^{{commit}}"]
+    ).decode("ascii").strip()
+    if observed_commit != arguments.commit:
+        raise ProcedureError("signed commit identity mismatch")
+    commit_tree = source_git_output(
+        repository, ["rev-parse", f"{arguments.commit}^{{tree}}"]
+    ).decode("ascii").strip()
+    commit_entries = normalized_git_tree(repository, arguments.commit)
+    archive_entries = normalized_archive_tree(arguments.archive_root.resolve())
+    commit_digest = normalized_tree_digest(commit_entries)
+    archive_digest = normalized_tree_digest(archive_entries)
+    if archive_entries != commit_entries:
+        raise ProcedureError("archive tree does not match the signed commit tree")
+    write_json(
+        arguments.output,
+        {
+            "schema_version": "pq-sequoia-archive-tree-verification/v1",
+            "commit": observed_commit,
+            "commit_tree": commit_tree,
+            "normalization": "tracked regular files and symlinks; Git modes and SHA-256 content",
+            "entry_count": len(commit_entries),
+            "commit_normalized_tree_sha256": commit_digest,
+            "archive_normalized_tree_sha256": archive_digest,
+            "tree_match": True,
+        },
+    )
+
+
+def verify_homebrew_formula(arguments: argparse.Namespace) -> None:
+    candidate = read_json(arguments.candidate)
+    openssl = candidate_source(candidate, "openssl")
+    expected_revision = openssl.get("homebrew_core_commit")
+    expected_relative = openssl.get("homebrew_core_formula_path")
+    expected_digest = openssl.get("formula_sha256")
+    if not isinstance(expected_revision, str) or re.fullmatch(
+        r"[0-9a-f]{40}", expected_revision
+    ) is None:
+        raise ProcedureError("candidate Homebrew core revision is invalid")
+    if not isinstance(expected_relative, str) or not expected_relative:
+        raise ProcedureError("candidate OpenSSL formula path is invalid")
+    if not isinstance(expected_digest, str) or SHA256_RE.fullmatch(
+        expected_digest
+    ) is None:
+        raise ProcedureError("candidate OpenSSL formula digest is invalid")
+
+    core_root = arguments.core_root.resolve(strict=True)
+    active_formula = arguments.active_formula.resolve(strict=True)
+    expected_formula = safe_relative(core_root, expected_relative).resolve(strict=True)
+    if active_formula != expected_formula:
+        raise ProcedureError("active OpenSSL formula path mismatch")
+    revision = source_git_output(
+        core_root, ["rev-parse", "--verify", "HEAD^{commit}"]
+    ).decode("ascii").strip()
+    if revision != expected_revision:
+        raise ProcedureError("Homebrew core revision mismatch")
+    digest = sha256_file(active_formula)
+    if digest != expected_digest:
+        raise ProcedureError("active OpenSSL formula digest mismatch")
+    write_json(
+        arguments.output,
+        {
+            "schema_version": "pq-sequoia-homebrew-formula-verification/v1",
+            "formula": openssl.get("formula"),
+            "formula_path": str(active_formula),
+            "formula_relative_path": expected_relative,
+            "formula_sha256": digest,
+            "homebrew_core_revision": revision,
+        },
+    )
 
 
 def payload_record(content: bytes) -> dict[str, Any]:
@@ -1223,6 +1446,7 @@ def validate_runtime_closure(
         "runner",
         "build_tools",
         "versions",
+        "source_verification",
         "tap",
         "shared_cache_observation",
         "closures",
@@ -1235,6 +1459,45 @@ def validate_runtime_closure(
     ):
         raise ProcedureError("runtime closure candidate identity mismatch")
     return value
+
+
+def load_runtime_source_verification(
+    receipt_path: Path,
+    active_formula_path: Path,
+    candidate_identity: str,
+) -> dict[str, Any]:
+    receipt = read_json(receipt_path)
+    active_formula = read_json(active_formula_path)
+    if (
+        receipt.get("schema_version") != "pq-sequoia-source-verification/v1"
+        or receipt.get("candidate_sha256") != closure_digest(candidate_identity)
+    ):
+        raise ProcedureError("source verification candidate identity mismatch")
+    verified = receipt.get("verified")
+    openssl = verified.get("openssl") if isinstance(verified, dict) else None
+    source_formula = (
+        openssl.get("active_formula") if isinstance(openssl, dict) else None
+    )
+    if (
+        not isinstance(source_formula, dict)
+        or active_formula.get("schema_version")
+        != "pq-sequoia-homebrew-formula-verification/v1"
+    ):
+        raise ProcedureError("active OpenSSL formula verification is missing")
+    identity_fields = (
+        "formula",
+        "formula_path",
+        "formula_relative_path",
+        "formula_sha256",
+        "homebrew_core_revision",
+    )
+    if any(source_formula.get(field) != active_formula.get(field) for field in identity_fields):
+        raise ProcedureError("active OpenSSL formula changed after source verification")
+    return {
+        "receipt_sha256": sha256_file(receipt_path),
+        "receipt": receipt,
+        "active_formula_runtime": active_formula,
+    }
 
 
 def interop_open(arguments: argparse.Namespace) -> None:
@@ -1886,6 +2149,11 @@ def record_runtime(arguments: argparse.Namespace) -> None:
     otool = arguments.otool.resolve(strict=True)
     cache_tool = arguments.dyld_shared_cache_util.resolve(strict=True)
     closure_digest(arguments.candidate_identity)
+    source_verification = load_runtime_source_verification(
+        arguments.source_verification,
+        arguments.active_formula_verification,
+        arguments.candidate_identity,
+    )
     cache_members, cache_observation = shared_cache_membership(cache_tool)
     record = {
         "schema_version": "pq-sequoia-runtime-closure/v1",
@@ -1919,6 +2187,7 @@ def record_runtime(arguments: argparse.Namespace) -> None:
             "sqv": tool_output([str(sqv), "--version"]),
             "openssl": tool_output([str(openssl), "version", "-a"]),
         },
+        "source_verification": source_verification,
         "tap": tap_closure(root, arguments.tap_root.resolve(strict=True)),
         "shared_cache_observation": cache_observation,
         "closures": {
@@ -1960,6 +2229,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     static_parser = subparsers.add_parser("validate-static")
     static_parser.add_argument("--root", type=Path, default=Path.cwd())
+
+    gpg_parser = subparsers.add_parser("verify-gpg-status")
+    gpg_parser.add_argument("--candidate", type=Path, required=True)
+    gpg_parser.add_argument(
+        "--source", choices=("sq", "sqv", "openssl"), required=True
+    )
+    gpg_parser.add_argument("--status", type=Path, required=True)
+    gpg_parser.add_argument("--output", type=Path, required=True)
+
+    archive_parser = subparsers.add_parser("verify-archive-tree")
+    archive_parser.add_argument("--repository", type=Path, required=True)
+    archive_parser.add_argument("--commit", required=True)
+    archive_parser.add_argument("--archive-root", type=Path, required=True)
+    archive_parser.add_argument("--output", type=Path, required=True)
+
+    formula_parser = subparsers.add_parser("verify-homebrew-formula")
+    formula_parser.add_argument("--candidate", type=Path, required=True)
+    formula_parser.add_argument("--core-root", type=Path, required=True)
+    formula_parser.add_argument("--active-formula", type=Path, required=True)
+    formula_parser.add_argument("--output", type=Path, required=True)
 
     envelope_parser = subparsers.add_parser("validate-envelope")
     envelope_parser.add_argument(
@@ -2019,6 +2308,10 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_parser.add_argument("--sq", type=Path, required=True)
     runtime_parser.add_argument("--sqv", type=Path, required=True)
     runtime_parser.add_argument("--openssl", type=Path, required=True)
+    runtime_parser.add_argument("--source-verification", type=Path, required=True)
+    runtime_parser.add_argument(
+        "--active-formula-verification", type=Path, required=True
+    )
     runtime_parser.add_argument("--candidate-identity", required=True)
     runtime_parser.add_argument("--output", type=Path, required=True)
 
@@ -2057,6 +2350,12 @@ def main() -> int:
         if arguments.command == "validate-static":
             validate_static(arguments.root.resolve())
             print("pq-sequoia-macos static surface: valid")
+        elif arguments.command == "verify-gpg-status":
+            verify_gpg_status(arguments)
+        elif arguments.command == "verify-archive-tree":
+            verify_archive_tree(arguments)
+        elif arguments.command == "verify-homebrew-formula":
+            verify_homebrew_formula(arguments)
         elif arguments.command == "validate-envelope":
             validate_envelope_file(
                 arguments.envelope,
