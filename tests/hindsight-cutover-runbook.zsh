@@ -5,6 +5,8 @@ repo_dir="${0:A:h:h}"
 : "${HINDSIGHT_AGENTS_ROOT:?set to the clean reusable lifecycle checkout}"
 agents_root="${HINDSIGHT_AGENTS_ROOT:A}"
 tmp_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/hindsight-cutover-test.XXXXXX")"
+# The command guard requires physical paths, including macOS default /var paths.
+tmp_dir="${tmp_dir:A}"
 /bin/chmod 700 "$tmp_dir"
 trap '/bin/rm -rf -- "$tmp_dir"' EXIT
 
