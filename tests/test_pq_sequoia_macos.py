@@ -104,6 +104,17 @@ class InteroperabilityProtocolTests(unittest.TestCase):
             ["relay-observation-selection.json", "relay-observation-final.json"],
             relay["retained_observations"],
         )
+        self.assertEqual(
+            ["relay-observation-selection.json", "relay-observation-final.json"],
+            relay["rejected_observations"]["files"],
+        )
+        self.assertIn(
+            "failure-only", relay["rejected_observations"]["retention"]
+        )
+        self.assertIn(
+            "explicit rejected outcome and reason",
+            relay["rejected_observations"]["retention"],
+        )
         self.assertIn("queued", relay["duplicate_rule"])
         self.assertIn("completed unsuccessful", relay["duplicate_rule"])
         self.assertIn("Submissions after the final check", relay["temporal_limit"])
@@ -791,6 +802,28 @@ class QualificationProcedureTests(unittest.TestCase):
         self.assertNotIn("--limit 1000", workflow)
         self.assertIn("relay-observation-selection.json", workflow)
         self.assertIn("relay-observation-final.json", workflow)
+        self.assertEqual(2, workflow.count('.decision.outcome == "rejected"'))
+        self.assertIn(
+            "pq-sequoia-macos-rejected-relay-${{ inputs.session_id }}", workflow
+        )
+        rejected_upload = workflow[
+            workflow.index("- name: Upload rejected relay observations") :
+            workflow.index("- name: Clean disposable secret material")
+        ]
+        self.assertIn("if: failure()", rejected_upload)
+        self.assertIn(
+            "rejected-evidence/relay-observation-selection.json",
+            rejected_upload,
+        )
+        self.assertIn(
+            "rejected-evidence/relay-observation-final.json", rejected_upload
+        )
+        self.assertNotIn("/evidence\n", rejected_upload)
+        qualification_upload = workflow[
+            workflow.index("- name: Upload value-free qualification evidence") :
+            workflow.index("- name: Upload rejected relay observations")
+        ]
+        self.assertIn("if: success()", qualification_upload)
         self.assertNotIn(
             '.displayTitle == $target and .status == "completed"', workflow
         )
@@ -835,6 +868,9 @@ class QualificationProcedureTests(unittest.TestCase):
         self.assertIn("record-relay-observation", procedure)
         self.assertIn("relay-observation-selection.json", procedure)
         self.assertIn("relay-observation-final.json", procedure)
+        self.assertIn("failure-only relay artifact", procedure)
+        self.assertIn("explicit rejected", procedure)
+        self.assertIn("outcome and reason", procedure)
         self.assertIn("Submissions after the final check", procedure)
         self.assertIn("not a permanent or global uniqueness", procedure)
 
@@ -1787,7 +1823,7 @@ class QualificationProcedureTests(unittest.TestCase):
                 json.loads(invocation.read_text()),
             )
 
-    def test_relay_selection_rejects_every_observed_matching_duplicate(
+    def test_relay_checks_retain_every_observed_matching_duplicate_before_rejecting(
         self,
     ) -> None:
         title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
@@ -1801,24 +1837,66 @@ class QualificationProcedureTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            output = root / "selection.json"
-            for status, conclusion in (("queued", None), ("completed", "failure")):
-                with self.subTest(status=status):
-                    duplicate = {
-                        **selected,
-                        "databaseId": 654,
-                        "status": status,
-                        "conclusion": conclusion,
-                    }
-                    gh, _ = self.fake_gh(root, [[selected], [duplicate]])
-                    rejected = self.run_cli(
-                        *self.relay_arguments(root, gh)
-                    )
-                    self.assertEqual(1, rejected.returncode)
-                    self.assertIn(
-                        "matching relay duplicate observed", rejected.stderr
-                    )
-                    self.assertFalse(output.exists())
+            for stage in ("selection", "final"):
+                for status, conclusion in (
+                    ("queued", None),
+                    ("completed", "failure"),
+                ):
+                    with self.subTest(stage=stage, status=status):
+                        duplicate = {
+                            **selected,
+                            "databaseId": 654,
+                            "status": status,
+                            "conclusion": conclusion,
+                        }
+                        gh, _ = self.fake_gh(root, [[selected], [duplicate]])
+                        rejected = self.run_cli(
+                            *self.relay_arguments(
+                                root,
+                                gh,
+                                stage=stage,
+                                selected_run_id=(
+                                    "321" if stage == "final" else None
+                                ),
+                            )
+                        )
+
+                        self.assertEqual(1, rejected.returncode)
+                        self.assertIn(
+                            "matching relay duplicate observed", rejected.stderr
+                        )
+                        record = json.loads(
+                            (root / f"{stage}.json").read_text(encoding="utf-8")
+                        )
+                        self.assertEqual(stage, record["stage"])
+                        self.assertEqual(
+                            {
+                                "outcome": "rejected",
+                                "reason": "matching relay duplicate observed",
+                            },
+                            record["decision"],
+                        )
+                        self.assertFalse(record["selection_ready"])
+                        self.assertIsNone(
+                            record["exchange_binding"]["selected_run_id"]
+                        )
+                        self.assertEqual(
+                            [selected, duplicate], record["matching_runs"]
+                        )
+                        self.assertEqual(
+                            {
+                                "endpoint": "/repos/example/project/actions/workflows/pq-sequoia-macos.yml/runs",
+                                "method": "GET",
+                                "named_search_filters": [],
+                                "page_count": 2,
+                                "pagination_complete": True,
+                                "per_page": 100,
+                                "raw_record_count": 2,
+                                "repeated_record_count": 0,
+                                "unique_run_count": 2,
+                            },
+                            record["coverage"],
+                        )
 
     def test_relay_observation_normalizes_identical_overlap(self) -> None:
         title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"

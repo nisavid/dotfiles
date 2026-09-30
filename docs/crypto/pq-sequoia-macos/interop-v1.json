@@ -142,10 +142,15 @@
       "named_search_filters": [],
       "projected_run_fields": ["databaseId", "displayTitle", "event", "headSha", "status", "conclusion"],
       "retained_coverage_fields": ["endpoint", "method", "per_page", "named_search_filters", "pagination_complete", "page_count", "raw_record_count", "unique_run_count", "repeated_record_count"],
-      "failure": "A provider or CLI error, timeout, interruption, malformed page, malformed run, conflicting observation for one database ID, or incomplete traversal rejects without producing an accepted observation. No page or record cutoff is accepted."
+      "failure": "A provider or CLI error, timeout, interruption, malformed page, malformed run, conflicting observation for one database ID, or incomplete traversal rejects without producing an observation. A completed traversal with multiple distinct exact-title matches writes a rejected observation before returning nonzero. No page or record cutoff is accepted."
     },
     "retained_observations": ["relay-observation-selection.json", "relay-observation-final.json"],
     "retention": "Each retained observation records its stage, exact exchange binding, selected run ID, successful pagination completion, endpoint, page size, page and record counts, repeated-record count, absence of named search filters, and every distinct exact title match. Identical repeats of one database ID count once as a run; conflicting values for one database ID reject. The validated relay metadata remains copied into results/macos-ci.json.",
+    "rejected_observations": {
+      "artifact": "pq-sequoia-macos-rejected-relay-{session_id}",
+      "files": ["relay-observation-selection.json", "relay-observation-final.json"],
+      "retention": "After a complete selection or final traversal observes multiple distinct exact-title matches, the command writes the value-free record with no selected run and an explicit rejected outcome and reason, then returns nonzero. The workflow copies only that allowlisted record into the failure-only artifact. The normal qualification artifact remains success-only, and secret-bearing state is excluded."
+    },
     "temporal_limit": "Submissions after the final check are outside the guarantee. The two complete provider traversals are not a permanent or global uniqueness guarantee, do not form an atomic provider snapshot, and make no claim about runs the provider does not return."
   },
   "phase_b_closure_artifact": {

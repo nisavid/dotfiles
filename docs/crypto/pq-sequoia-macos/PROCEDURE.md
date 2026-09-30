@@ -19,7 +19,7 @@ revision and receives separate acceptance.
   the Homebrew/core formula revision, and the Apple Silicon Sequoia bottle.
 - [`interop-v1.json`](interop-v1.json) defines the four-phase exchange with
   dotfiles #148. Its review-candidate SHA-256 is
-  `bd5be95a7731def6b38f15b1794091acdd9ead1caa952d85ffcedd68e1cf76a5`.
+  `23f9564bd798ea766a5266bb94a5cea6bad1f0b8c30a0f23e9f8ec5d315a59a4`.
   Its fixed [message](fixtures/v1/message.bin) is exactly 51 bytes and has SHA-256
   `6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337`.
 - [`pq-sequoia-macos`](../../../scripts/pq-sequoia-macos) validates those
@@ -287,9 +287,14 @@ one database ID reject the traversal.
 
 The command matches the exact title before considering state. More than one
 distinct match rejects, whether the second run is queued, pending, in-progress,
-completed unsuccessfully, or completed successfully. Zero matches or one
-unfinished or unsuccessful match produces `selection_ready=false`, so the
-workflow continues polling. One completed successful match is selected and
+completed unsuccessfully, or completed successfully. After the complete
+traversal, a duplicate writes the value-free observation with every distinct
+match, complete query coverage, no selected run, and an explicit rejected
+outcome and reason before the command returns nonzero. The workflow copies only
+that allowlisted record into a failure-only relay artifact; it excludes private
+state and does not upload the success-only qualification artifact. Zero matches
+or one unfinished or unsuccessful match produces `selection_ready=false`, so
+the workflow continues polling. One completed successful match is selected and
 still must pass the exact relay metadata validator before download. The event
 and commit restrictions are applied locally to that sole match.
 
@@ -306,7 +311,8 @@ filters, and every distinct exact-title match.
 Successful end of pagination and exit zero from `gh api` are mandatory. A
 provider or CLI error, timeout, interruption, malformed page, malformed run,
 conflicting observation, absent selected run at the final check, or incomplete
-traversal rejects without leaving an accepted observation. The 60-second query
+traversal rejects without leaving an observation. A completed duplicate
+traversal leaves only the rejected record described above. The 60-second query
 timeout is an operational fail-closed bound, not an accepted page or record
 cutoff. The relay window remains 45 minutes. Ambiguity, revision drift, or any
 mismatch rejects the session and cleans up; a later job cannot resume it because

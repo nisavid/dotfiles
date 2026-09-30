@@ -91,7 +91,8 @@ jobs:
           [[ -n "${ImageVersion:-}" ]]
 
           scratch="$RUNNER_TEMP/pq-sequoia-$PQ_SESSION_ID"
-          mkdir -p "$scratch/public" "$scratch/private" "$scratch/evidence"
+          mkdir -p "$scratch/public" "$scratch/private" "$scratch/evidence" \
+            "$scratch/rejected-evidence"
           printf '%s' "$PQ_PEER_ENVELOPE_BASE64" | base64 --decode \
             >"$scratch/public/hatchery-phase-a.json"
           (( $(wc -c <"$scratch/public/hatchery-phase-a.json") <= 46000 ))
@@ -463,7 +464,7 @@ jobs:
           target="pq-sequoia-publish-peer-response-$PQ_SESSION_ID-$GITHUB_RUN_ID-$PQ_PHASE_B_SHA256"
           response_run=
           for _ in {1..90}; do
-            scripts/pq-sequoia-macos record-relay-observation \
+            if scripts/pq-sequoia-macos record-relay-observation \
               --repository "$GITHUB_REPOSITORY" \
               --stage selection \
               --session-id "$PQ_SESSION_ID" \
@@ -471,6 +472,26 @@ jobs:
               --phase-b-sha256 "$PQ_PHASE_B_SHA256" \
               --expected-commit "$PQ_CANDIDATE_COMMIT" \
               --output "$PQ_SCRATCH/public/relay-observation-selection.json"
+            then
+              :
+            else
+              relay_status=$?
+              observation="$PQ_SCRATCH/public/relay-observation-selection.json"
+              if jq -e '
+                .schema_version == "pq-sequoia-relay-observation/v1"
+                and .stage == "selection"
+                and .decision.outcome == "rejected"
+                and .decision.reason == "matching relay duplicate observed"
+                and .exchange_binding.selected_run_id == null
+                and .coverage.pagination_complete == true
+                and (.matching_runs | length) > 1
+              ' "$observation" >/dev/null
+              then
+                cp "$observation" \
+                  "$PQ_SCRATCH/rejected-evidence/relay-observation-selection.json"
+              fi
+              exit "$relay_status"
+            fi
             if [[ "$(jq -r '.selection_ready' \
               "$PQ_SCRATCH/public/relay-observation-selection.json")" == true ]]
             then
@@ -531,7 +552,7 @@ jobs:
           set -euo pipefail
           response_run=$(jq -r '.databaseId' \
             "$PQ_SCRATCH/evidence/relay-run.json")
-          scripts/pq-sequoia-macos record-relay-observation \
+          if scripts/pq-sequoia-macos record-relay-observation \
             --repository "$GITHUB_REPOSITORY" \
             --stage final \
             --session-id "$PQ_SESSION_ID" \
@@ -539,7 +560,28 @@ jobs:
             --phase-b-sha256 "$PQ_PHASE_B_SHA256" \
             --expected-commit "$PQ_CANDIDATE_COMMIT" \
             --selected-run-id "$response_run" \
-            --output "$PQ_SCRATCH/evidence/relay-observation-final.json"
+            --output "$PQ_SCRATCH/public/relay-observation-final.json"
+          then
+            cp "$PQ_SCRATCH/public/relay-observation-final.json" \
+              "$PQ_SCRATCH/evidence/relay-observation-final.json"
+          else
+            relay_status=$?
+            observation="$PQ_SCRATCH/public/relay-observation-final.json"
+            if jq -e '
+              .schema_version == "pq-sequoia-relay-observation/v1"
+              and .stage == "final"
+              and .decision.outcome == "rejected"
+              and .decision.reason == "matching relay duplicate observed"
+              and .exchange_binding.selected_run_id == null
+              and .coverage.pagination_complete == true
+              and (.matching_runs | length) > 1
+            ' "$observation" >/dev/null
+            then
+              cp "$observation" \
+                "$PQ_SCRATCH/rejected-evidence/relay-observation-final.json"
+            fi
+            exit "$relay_status"
+          fi
 
       - name: Finalize value-free evidence
         shell: bash
@@ -565,11 +607,23 @@ jobs:
           mv "$sums" "$PQ_SCRATCH/evidence/SHA256SUMS"
 
       - name: Upload value-free qualification evidence
+        if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: pq-sequoia-macos-evidence-${{ inputs.session_id }}
           path: ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/evidence
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload rejected relay observations
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pq-sequoia-macos-rejected-relay-${{ inputs.session_id }}
+          path: |
+            ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/rejected-evidence/relay-observation-selection.json
+            ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/rejected-evidence/relay-observation-final.json
+          if-no-files-found: ignore
           retention-days: 30
 
       - name: Clean disposable secret material
