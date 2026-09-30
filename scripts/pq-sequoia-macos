@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 MESSAGE_SHA256 = "6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337"
-PROTOCOL_SHA256 = "d11f864ed4e8a60e039ae1d6753f033620614309c917b3f409c05a65d07fbe48"
+PROTOCOL_SHA256 = "be53560bb68e68598aba5c2be953d635b6b906979e434b2ca08a0758a0327098"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 FINGERPRINT_RE = re.compile(r"[0-9A-F]{40}")
 IDENTITY_RE = re.compile(r"sha256:[0-9a-f]{64}")
@@ -49,6 +49,11 @@ RELAY_NAMED_SEARCH_FILTERS = {
     "head_sha",
     "status",
 }
+RUNTIME_BOTTLE_COMPONENTS = {
+    "sq": ("sequoia-sq-pqc@1.4.0", "1.4.0"),
+    "sqv": ("sequoia-sqv-pqc@1.5.0", "1.5.0"),
+}
+RUNTIME_BOTTLE_TAG = "arm64_sequoia"
 STATE_MARKER = ".pq-sequoia-disposable-state"
 STATE_MARKER_CONTENT = "pq-sequoia-disposable-state/v1\n"
 PHASE_PAYLOADS = {
@@ -1895,6 +1900,7 @@ def validate_runtime_closure(
         "versions",
         "source_verification",
         "tap",
+        "bottles",
         "shared_cache_observation",
         "closures",
     }
@@ -1905,6 +1911,53 @@ def validate_runtime_closure(
         or value.get("candidate_identity") != expected_candidate_identity
     ):
         raise ProcedureError("runtime closure candidate identity mismatch")
+    validate_runtime_bottles(value.get("bottles"))
+    return value
+
+
+def validate_runtime_bottles(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != set(RUNTIME_BOTTLE_COMPONENTS):
+        raise ProcedureError("runtime bottle map must contain exactly sq and sqv")
+    for name, (formula, version) in RUNTIME_BOTTLE_COMPONENTS.items():
+        record = value.get(name)
+        required = {
+            "formula",
+            "version",
+            "tag",
+            "tap",
+            "tap_git_head",
+            "filename",
+            "local_filename",
+            "metadata",
+            "archive",
+        }
+        if not isinstance(record, dict) or set(record) != required:
+            raise ProcedureError(f"{name} runtime bottle fields mismatch")
+        if (
+            record.get("formula") != formula
+            or record.get("version") != version
+            or record.get("tag") != RUNTIME_BOTTLE_TAG
+        ):
+            raise ProcedureError(f"{name} runtime bottle identity mismatch")
+        for field in ("tap", "tap_git_head", "filename", "local_filename"):
+            if not isinstance(record.get(field), str) or not record[field]:
+                raise ProcedureError(f"{name} runtime bottle {field} is invalid")
+        for identity_name in ("metadata", "archive"):
+            identity = record.get(identity_name)
+            if (
+                not isinstance(identity, dict)
+                or set(identity) != {"path", "size", "sha256"}
+                or not isinstance(identity.get("path"), str)
+                or not identity["path"]
+                or not isinstance(identity.get("size"), int)
+                or isinstance(identity.get("size"), bool)
+                or identity["size"] < 0
+                or not isinstance(identity.get("sha256"), str)
+                or SHA256_RE.fullmatch(identity["sha256"]) is None
+            ):
+                raise ProcedureError(
+                    f"{name} runtime bottle {identity_name} identity is invalid"
+                )
     return value
 
 
@@ -2326,25 +2379,44 @@ def macho_rpaths(path: Path, otool: Path) -> list[str]:
     return values
 
 
-def expand_loader(value: str, loader: Path, executable: Path) -> Path:
-    value = value.replace("@loader_path", str(loader.parent))
-    value = value.replace("@executable_path", str(executable.parent))
-    return Path(value)
+def expand_macho_path(value: str, loader: Path, executable: Path) -> Path:
+    for token, base in (
+        ("@loader_path", loader.parent),
+        ("@executable_path", executable.parent),
+    ):
+        if value == token:
+            return base
+        if value.startswith(token + "/"):
+            return base / value.removeprefix(token + "/")
+    if value.startswith("/"):
+        return Path(value)
+    raise ProcedureError(f"unsupported Mach-O path form: {value}")
+
+
+def resolved_macho_rpaths(
+    path: Path, executable: Path, otool: Path
+) -> list[Path]:
+    return [
+        expand_macho_path(value, path, executable)
+        for value in macho_rpaths(path, otool)
+    ]
 
 
 def resolve_macho_dependency(
-    dependency: str, loader: Path, executable: Path, rpaths: list[str]
+    dependency: str, loader: Path, executable: Path, rpaths: list[Path]
 ) -> Path | None:
     if dependency.startswith("/"):
         candidate = Path(dependency)
         return candidate if candidate.exists() else None
-    if dependency.startswith(("@loader_path", "@executable_path")):
-        candidate = expand_loader(dependency, loader, executable)
+    if dependency.startswith(("@loader_path/", "@executable_path/")):
+        candidate = expand_macho_path(dependency, loader, executable)
         return candidate if candidate.exists() else None
     if dependency.startswith("@rpath/"):
         suffix = dependency.removeprefix("@rpath/")
+        if not suffix:
+            return None
         for rpath in rpaths:
-            candidate = expand_loader(rpath, loader, executable) / suffix
+            candidate = rpath / suffix
             if candidate.exists():
                 return candidate
     return None
@@ -2358,6 +2430,82 @@ def file_identity(path: Path) -> dict[str, Any]:
         "size": len(content),
         "sha256": sha256_bytes(content),
     }
+
+
+def regular_file_identity(path: Path, label: str) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ProcedureError(f"{label} must be one regular non-symlink file")
+    content = path.read_bytes()
+    return {
+        "path": str(path),
+        "size": len(content),
+        "sha256": sha256_bytes(content),
+    }
+
+
+def record_bottle(
+    *,
+    name: str,
+    archive_path: Path,
+    metadata_path: Path,
+    expected_formula: str,
+    expected_version: str,
+    expected_tap_commit: str,
+) -> dict[str, Any]:
+    archive = regular_file_identity(archive_path, f"{name} bottle archive")
+    metadata_identity = regular_file_identity(
+        metadata_path, f"{name} bottle metadata"
+    )
+    metadata = read_json(metadata_path)
+    if not isinstance(metadata, dict) or set(metadata) != {"formula"}:
+        raise ProcedureError(
+            f"{name} bottle metadata must contain exactly one formula record"
+        )
+    formula = metadata.get("formula")
+    if not isinstance(formula, dict):
+        raise ProcedureError(f"{name} bottle formula metadata is invalid")
+    bottle = formula.get("bottle")
+    tags = bottle.get("tags") if isinstance(bottle, dict) else None
+    if not isinstance(tags, dict) or set(tags) != {RUNTIME_BOTTLE_TAG}:
+        raise ProcedureError(
+            f"{name} bottle metadata must contain exactly {RUNTIME_BOTTLE_TAG}"
+        )
+    tag = tags.get(RUNTIME_BOTTLE_TAG)
+    if not isinstance(tag, dict):
+        raise ProcedureError(f"{name} bottle tag metadata is invalid")
+    expected = {
+        "name": expected_formula,
+        "pkg_version": expected_version,
+        "tap_git_head": expected_tap_commit,
+    }
+    if any(formula.get(field) != value for field, value in expected.items()):
+        raise ProcedureError(f"{name} bottle formula, version, or tap mismatch")
+    tap = formula.get("tap")
+    filename = tag.get("filename")
+    local_filename = tag.get("local_filename")
+    if (
+        not isinstance(tap, str)
+        or not tap
+        or not isinstance(filename, str)
+        or not filename
+        or not isinstance(local_filename, str)
+        or not local_filename
+        or local_filename != archive_path.name
+        or tag.get("sha256") != archive["sha256"]
+    ):
+        raise ProcedureError(f"{name} bottle archive does not match its metadata")
+    record = {
+        "formula": expected_formula,
+        "version": expected_version,
+        "tag": RUNTIME_BOTTLE_TAG,
+        "tap": tap,
+        "tap_git_head": expected_tap_commit,
+        "filename": filename,
+        "local_filename": local_filename,
+        "metadata": metadata_identity,
+        "archive": archive,
+    }
+    return record
 
 
 def shared_cache_membership(
@@ -2391,8 +2539,8 @@ def shared_cache_membership(
 def record_macho_closure(
     executable: Path, otool: Path, apple_shared_cache_members: set[str]
 ) -> dict[str, Any]:
-    queue: list[tuple[Path, Path, list[str]]] = [(executable, executable, [])]
-    visited_contexts: set[tuple[Path, tuple[str, ...]]] = set()
+    queue: list[tuple[Path, Path, list[Path]]] = [(executable, executable, [])]
+    visited_contexts: set[tuple[Path, tuple[Path, ...]]] = set()
     objects: dict[Path, dict[str, Any]] = {}
     apple_shared_cache: set[str] = set()
     unresolved: set[str] = set()
@@ -2400,7 +2548,12 @@ def record_macho_closure(
         path, root_executable, inherited_rpaths = queue.pop(0)
         realpath = path.resolve(strict=True)
         effective_rpaths = list(
-            dict.fromkeys([*macho_rpaths(realpath, otool), *inherited_rpaths])
+            dict.fromkeys(
+                [
+                    *resolved_macho_rpaths(realpath, root_executable, otool),
+                    *inherited_rpaths,
+                ]
+            )
         )
         context = (realpath, tuple(effective_rpaths))
         if context in visited_contexts:
@@ -2590,6 +2743,10 @@ def prepare_tap(arguments: argparse.Namespace) -> None:
 
 def record_runtime(arguments: argparse.Namespace) -> None:
     root = arguments.root.resolve()
+    candidate_path = (
+        root / "packaging/homebrew/pq-sequoia-macos/v1/candidate.json"
+    )
+    candidate = read_json(candidate_path)
     sq = arguments.sq.resolve(strict=True)
     sqv = arguments.sqv.resolve(strict=True)
     openssl = arguments.openssl.resolve(strict=True)
@@ -2601,6 +2758,32 @@ def record_runtime(arguments: argparse.Namespace) -> None:
         arguments.active_formula_verification,
         arguments.candidate_identity,
     )
+    tap = tap_closure(root, arguments.tap_root.resolve(strict=True))
+    applications = candidate.get("applications") if isinstance(candidate, dict) else None
+    if not isinstance(applications, dict) or set(applications) != set(
+        RUNTIME_BOTTLE_COMPONENTS
+    ):
+        raise ProcedureError("candidate runtime application map mismatch")
+    bottles: dict[str, Any] = {}
+    for name, (formula, version) in RUNTIME_BOTTLE_COMPONENTS.items():
+        application = applications.get(name)
+        if (
+            not isinstance(application, dict)
+            or application.get("formula") != formula
+            or application.get("version") != version
+        ):
+            raise ProcedureError(f"{name} candidate bottle declaration mismatch")
+        bottles[name] = record_bottle(
+            name=name,
+            archive_path=getattr(arguments, f"{name}_bottle").resolve(strict=True),
+            metadata_path=getattr(
+                arguments, f"{name}_bottle_metadata"
+            ).resolve(strict=True),
+            expected_formula=formula,
+            expected_version=version,
+            expected_tap_commit=tap["commit"],
+        )
+    validate_runtime_bottles(bottles)
     cache_members, cache_observation = shared_cache_membership(cache_tool)
     record = {
         "schema_version": "pq-sequoia-runtime-closure/v1",
@@ -2635,7 +2818,8 @@ def record_runtime(arguments: argparse.Namespace) -> None:
             "openssl": tool_output([str(openssl), "version", "-a"]),
         },
         "source_verification": source_verification,
-        "tap": tap_closure(root, arguments.tap_root.resolve(strict=True)),
+        "tap": tap,
+        "bottles": bottles,
         "shared_cache_observation": cache_observation,
         "closures": {
             "sq": record_macho_closure(sq, otool, cache_members),
@@ -2759,6 +2943,10 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_parser.add_argument(
         "--active-formula-verification", type=Path, required=True
     )
+    runtime_parser.add_argument("--sq-bottle", type=Path, required=True)
+    runtime_parser.add_argument("--sq-bottle-metadata", type=Path, required=True)
+    runtime_parser.add_argument("--sqv-bottle", type=Path, required=True)
+    runtime_parser.add_argument("--sqv-bottle-metadata", type=Path, required=True)
     runtime_parser.add_argument("--candidate-identity", required=True)
     runtime_parser.add_argument("--output", type=Path, required=True)
 

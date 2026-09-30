@@ -44,7 +44,7 @@
     "canonicalization": "Remove control_signature from the complete envelope object, then serialize the remaining JSON recursively with object keys sorted by Unicode code point, ensure_ascii=true, separators ',' and ':', UTF-8 encoding, and no terminal newline.",
     "signature": "control_signature is a detached version-6 ML-DSA-65+Ed25519 signature over the canonical bytes, issued by the exact signing subkey of that phase producer's disposable public certificate.",
     "continuity": "Phase A uses 64 zeroes as parent_envelope_sha256. Phase B names the SHA-256 of the exact received phase-A envelope bytes. Phase C names the SHA-256 of the exact received phase-B envelope bytes and verifies under the same Hatchery certificate authenticated in phase A.",
-    "closure_binding": "For macos-ci-phase-b, producer_closure_sha256 is the SHA-256 of the exact sibling runtime-closure.json bytes emitted by record-runtime after the tap and runtime are fixed. The coordinator reviews that sibling artifact and supplies its digest to the #148 receiver as the independent expected macOS closure; the envelope never establishes its own expected closure. Hatchery phases use the separately reviewed Hatchery closure digest supplied by the coordinator.",
+    "closure_binding": "For macos-ci-phase-b, producer_closure_sha256 is the SHA-256 of the exact sibling runtime-closure.json bytes emitted by record-runtime after the tap, sq and sqv bottle archives, and runtime are fixed. The coordinator reviews that sibling artifact and supplies its digest to the #148 receiver as the independent expected macOS closure; the envelope never establishes its own expected closure. Hatchery phases use the separately reviewed Hatchery closure digest supplied by the coordinator.",
     "protocol_binding": "protocol_sha256 is the SHA-256 of this exact file. The maintained validator embeds and enforces it."
   },
   "phases": [
@@ -70,7 +70,7 @@
         "verify the Hatchery message signature and reject a locally altered message",
         "generate and inspect one disposable certificate with the exact cryptographic shape",
         "sign message.bin, encrypt it to the inspected Hatchery certificate, and exercise local revocations",
-        "record the complete runtime closure, including the exact ephemeral tap commit and live dyld shared-cache membership evidence",
+        "record the complete runtime closure, including the exact sq and sqv bottle identities, ephemeral tap commit, and live dyld shared-cache membership evidence",
         "set the signed producer closure to the SHA-256 of the exact retained runtime-closure.json bytes",
         "sign and publish the parent-chained canonical phase-B transcript",
         "wait for one exact response run bound to this qualifier run, phase-B digest, and reviewed commit"
@@ -168,8 +168,15 @@
   },
   "macho_closure": {
     "hashed": "Every resolved executable and dylib in the recursive closure, including Homebrew and candidate-keg objects.",
+    "run_path_resolution": "Resolve each LC_RPATH in the image that defines it. For an @rpath install name, search the current image's entries in load-command order, then inherited entries from the nearest defining image outward. Keep @executable_path rooted at the root executable. Reject any path form that cannot be modeled exactly.",
     "apple_shared_cache_membership": "Run /usr/bin/dyld_shared_cache_util -list against the live cache. An unresolved install name is accepted only by exact membership in that successful nonempty listing. Retain the utility path, realpath, size, SHA-256, exact command, listing size and SHA-256, listed-name count, and the exact names used by each closure.",
     "failure": "Any unresolved dependency absent from the live shared-cache listing rejects closure recording. Pathname prefixes, including /usr/lib and /System/Library, never establish membership."
+  },
+  "runtime_bottles": {
+    "required": ["sq", "sqv"],
+    "binding": "record-runtime requires each exact same-job bottle archive and its brew bottle --json record before phase B fixes the runtime closure digest.",
+    "validation": "The closed sq and sqv map must match candidate.json's formula and version, the arm64_sequoia tag, the ephemeral tap commit, the metadata local filename, and the archive SHA-256. The closure retains each metadata record's path, byte count, and SHA-256 and each archive's path, byte count, and SHA-256.",
+    "failure": "Missing, extra, ambiguous, malformed, or mismatched metadata or archive inputs reject runtime-closure creation."
   },
   "ephemeral_tap_closure": {
     "pre_build": "prepare-tap copies both frozen formulae into the qualification tap and creates a local unsigned Git commit before either Homebrew build starts.",
@@ -188,7 +195,7 @@
       "both peers enforce the exact RFC 9980 certificate and signature shape",
       "all three canonical phase transcripts verify with exact closure, protocol, session, phase, parent, message, payload, and result bindings",
       "phase C proves continuity with the Hatchery signing key authenticated in phase A",
-      "phase B's signed producer closure equals the exact reviewed runtime-closure.json bytes, including the tap commit and live shared-cache observations",
+      "phase B's signed producer closure equals the exact reviewed runtime-closure.json bytes, including the sq and sqv bottle identities, tap commit, and live shared-cache observations",
       "both peers verify the other's detached signature with exact sqv",
       "both peers reject altered messages",
       "hatchery decrypts macos-ci ciphertext byte-for-byte",

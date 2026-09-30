@@ -1644,6 +1644,7 @@ class QualificationProcedureTests(unittest.TestCase):
             "versions": {},
             "source_verification": {},
             "tap": {"commit": "d" * 40},
+            "bottles": _runtime_bottle_records(),
             "shared_cache_observation": {"listing_sha256": "e" * 64},
             "closures": {},
         }
@@ -1752,6 +1753,7 @@ class QualificationProcedureTests(unittest.TestCase):
                     "versions": {},
                     "source_verification": {},
                     "tap": {},
+                    "bottles": _runtime_bottle_records(),
                     "shared_cache_observation": {},
                     "closures": {},
                 },
@@ -2132,11 +2134,25 @@ class QualificationProcedureTests(unittest.TestCase):
                 "/usr/lib/libSystem.B.dylib\n",
             )
             source_verification, active_formula = _source_verification_fixtures(root)
+            tap_commit = json.loads(tap_record.read_text(encoding="utf-8"))["commit"]
+            sq_bottle, sq_bottle_metadata = _write_bottle_fixture(
+                root,
+                formula="sequoia-sq-pqc@1.4.0",
+                version="1.4.0",
+                tap_commit=tap_commit,
+                content=b"sq bottle fixture",
+            )
+            sqv_bottle, sqv_bottle_metadata = _write_bottle_fixture(
+                root,
+                formula="sequoia-sqv-pqc@1.5.0",
+                version="1.5.0",
+                tap_commit=tap_commit,
+                content=b"sqv bottle fixture",
+            )
             output = root / "runtime.json"
             environment = os.environ.copy()
             environment["PATH"] = str(bin_dir) + os.pathsep + environment["PATH"]
-            result = subprocess.run(
-                [
+            arguments = [
                     str(CLI),
                     "record-runtime",
                     "--root",
@@ -2157,11 +2173,21 @@ class QualificationProcedureTests(unittest.TestCase):
                     str(source_verification),
                     "--active-formula-verification",
                     str(active_formula),
+                    "--sq-bottle",
+                    str(sq_bottle),
+                    "--sq-bottle-metadata",
+                    str(sq_bottle_metadata),
+                    "--sqv-bottle",
+                    str(sqv_bottle),
+                    "--sqv-bottle-metadata",
+                    str(sqv_bottle_metadata),
                     "--candidate-identity",
                     "sha256:" + _sha256(CANDIDATE),
                     "--output",
                     str(output),
-                ],
+                ]
+            result = subprocess.run(
+                arguments,
                 cwd=ROOT,
                 check=False,
                 capture_output=True,
@@ -2185,11 +2211,131 @@ class QualificationProcedureTests(unittest.TestCase):
             self.assertEqual(
                 1, record["shared_cache_observation"]["listed_name_count"]
             )
+            self.assertEqual({"sq", "sqv"}, set(record["bottles"]))
+            self.assertEqual(
+                _sha256(sq_bottle), record["bottles"]["sq"]["archive"]["sha256"]
+            )
+            self.assertEqual(
+                sq_bottle.stat().st_size,
+                record["bottles"]["sq"]["archive"]["size"],
+            )
+            self.assertEqual(
+                _sha256(sq_bottle_metadata),
+                record["bottles"]["sq"]["metadata"]["sha256"],
+            )
             for closure in record["closures"].values():
                 self.assertEqual(
                     ["/usr/lib/libSystem.B.dylib"], closure["apple_shared_cache"]
                 )
             self.assertNotIn("shared_cache_or_unresolved", json.dumps(record))
+
+            def rejected_result(
+                label: str, case_arguments: list[str]
+            ) -> subprocess.CompletedProcess[str]:
+                rejected_output = root / f"runtime-rejected-{label}.json"
+                case_arguments = [
+                    str(rejected_output) if value == str(output) else value
+                    for value in case_arguments
+                ]
+                rejected = subprocess.run(
+                    case_arguments,
+                    cwd=ROOT,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+                self.assertNotEqual(0, rejected.returncode, label)
+                self.assertFalse(rejected_output.exists(), label)
+                return rejected
+
+            missing_arguments = list(arguments)
+            missing_index = missing_arguments.index("--sq-bottle")
+            del missing_arguments[missing_index : missing_index + 2]
+            rejected_result("missing", missing_arguments)
+
+            original_sq_metadata = json.loads(
+                sq_bottle_metadata.read_text(encoding="utf-8")
+            )
+            invalid_metadata = {
+                "extra": {
+                    "name": "unexpected-formula",
+                },
+                **original_sq_metadata,
+            }
+            _write_json(sq_bottle_metadata, invalid_metadata)
+            rejected_result("extra", arguments)
+
+            _write_json(sq_bottle_metadata, {"formula": []})
+            rejected_result("malformed", arguments)
+
+            ambiguous_metadata = json.loads(json.dumps(original_sq_metadata))
+            ambiguous_metadata["formula"]["bottle"]["tags"]["ventura"] = {
+                **ambiguous_metadata["formula"]["bottle"]["tags"][
+                    "arm64_sequoia"
+                ]
+            }
+            _write_json(sq_bottle_metadata, ambiguous_metadata)
+            rejected_result("ambiguous", arguments)
+
+            mismatched_metadata = json.loads(json.dumps(original_sq_metadata))
+            mismatched_metadata["formula"]["pkg_version"] = "1.4.1"
+            _write_json(sq_bottle_metadata, mismatched_metadata)
+            rejected_result("metadata-mismatch", arguments)
+
+            _write_json(sq_bottle_metadata, original_sq_metadata)
+            sq_bottle.write_bytes(b"unrecorded replacement")
+            rejected_result("archive-mismatch", arguments)
+            sq_bottle.write_bytes(b"sq bottle fixture")
+
+            baseline_digest = _sha256(output)
+            for label, archive, metadata, original in (
+                (
+                    "sq",
+                    sq_bottle,
+                    sq_bottle_metadata,
+                    b"sq bottle fixture",
+                ),
+                (
+                    "sqv",
+                    sqv_bottle,
+                    sqv_bottle_metadata,
+                    b"sqv bottle fixture",
+                ),
+            ):
+                with self.subTest(changed_bottle=label):
+                    archive.write_bytes(original + b" changed")
+                    bottle_record = json.loads(metadata.read_text(encoding="utf-8"))
+                    bottle_record["formula"]["bottle"]["tags"][
+                        "arm64_sequoia"
+                    ]["sha256"] = _sha256(archive)
+                    _write_json(metadata, bottle_record)
+                    changed_output = root / f"runtime-{label}-changed.json"
+                    changed_arguments = [
+                        str(changed_output) if value == str(output) else value
+                        for value in arguments
+                    ]
+                    changed = subprocess.run(
+                        changed_arguments,
+                        cwd=ROOT,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                    )
+                    self.assertEqual(0, changed.returncode, changed.stderr)
+                    self.assertNotEqual(baseline_digest, _sha256(changed_output))
+                    _write_bottle_fixture(
+                        root,
+                        formula=(
+                            "sequoia-sq-pqc@1.4.0"
+                            if label == "sq"
+                            else "sequoia-sqv-pqc@1.5.0"
+                        ),
+                        version="1.4.0" if label == "sq" else "1.5.0",
+                        tap_commit=tap_commit,
+                        content=original,
+                    )
 
     def test_validate_relay_command_writes_only_exact_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2675,6 +2821,120 @@ class QualificationProcedureTests(unittest.TestCase):
             finally:
                 module.tool_output = original
 
+    def test_inherited_loader_path_uses_its_defining_image(self) -> None:
+        module = _load_cli()
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / "app"
+            executable = app / "bin" / "candidate-bin"
+            parent = app / "vendor" / "lib" / "libparent.dylib"
+            expected_child = app / "vendor" / "lib" / "libchild.dylib"
+            alternate_child = (
+                app / "vendor" / "vendor" / "lib" / "libchild.dylib"
+            )
+            for path, content in (
+                (executable, b"root fixture"),
+                (parent, b"parent fixture"),
+                (expected_child, b"expected child fixture"),
+                (alternate_child, b"alternate child fixture"),
+            ):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+
+            rpaths = {executable.resolve(): ["@loader_path/../vendor/lib"]}
+            dependencies = {
+                executable.resolve(): ["@rpath/libparent.dylib"],
+                parent.resolve(): ["@rpath/libchild.dylib"],
+                expected_child.resolve(): [],
+                alternate_child.resolve(): [],
+            }
+            original = module.tool_output
+            module.tool_output = _macho_tool_output(rpaths, dependencies)
+            try:
+                closure = module.record_macho_closure(
+                    executable, Path("otool"), set()
+                )
+            finally:
+                module.tool_output = original
+
+            objects = {
+                item["realpath"]: item["sha256"] for item in closure["objects"]
+            }
+            self.assertEqual(_sha256(expected_child), objects[str(expected_child)])
+            self.assertNotIn(str(alternate_child), objects)
+
+    def test_current_image_rpath_precedes_nearest_inherited_rpath(self) -> None:
+        module = _load_cli()
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / "app"
+            executable = app / "bin" / "candidate-bin"
+            parent = app / "lib" / "libparent.dylib"
+            current_child = app / "current" / "libcollision.dylib"
+            inherited_child = app / "inherited" / "libcollision.dylib"
+            for path, content in (
+                (executable, b"root fixture"),
+                (parent, b"parent fixture"),
+                (current_child, b"current child fixture"),
+                (inherited_child, b"inherited child fixture"),
+            ):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+
+            rpaths = {
+                executable.resolve(): ["@loader_path/../inherited"],
+                parent.resolve(): ["@loader_path/../current"],
+            }
+            dependencies = {
+                executable.resolve(): ["@loader_path/../lib/libparent.dylib"],
+                parent.resolve(): ["@rpath/libcollision.dylib"],
+                current_child.resolve(): [],
+                inherited_child.resolve(): [],
+            }
+            original = module.tool_output
+            module.tool_output = _macho_tool_output(rpaths, dependencies)
+            try:
+                closure = module.record_macho_closure(
+                    executable, Path("otool"), set()
+                )
+            finally:
+                module.tool_output = original
+
+            objects = {item["realpath"] for item in closure["objects"]}
+            self.assertIn(str(current_child), objects)
+            self.assertNotIn(str(inherited_child), objects)
+
+    def test_inherited_executable_path_stays_rooted_at_root_executable(self) -> None:
+        module = _load_cli()
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / "app"
+            executable = app / "bin" / "candidate-bin"
+            parent = app / "lib" / "libparent.dylib"
+            child = app / "runtime" / "libchild.dylib"
+            for path, content in (
+                (executable, b"root fixture"),
+                (parent, b"parent fixture"),
+                (child, b"child fixture"),
+            ):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+
+            rpaths = {parent.resolve(): ["@executable_path/../runtime"]}
+            dependencies = {
+                executable.resolve(): ["@loader_path/../lib/libparent.dylib"],
+                parent.resolve(): ["@rpath/libchild.dylib"],
+                child.resolve(): [],
+            }
+            original = module.tool_output
+            module.tool_output = _macho_tool_output(rpaths, dependencies)
+            try:
+                closure = module.record_macho_closure(
+                    executable, Path("otool"), set()
+                )
+            finally:
+                module.tool_output = original
+
+            objects = {item["realpath"] for item in closure["objects"]}
+            self.assertIn(str(child), objects)
+
     def test_apple_shared_cache_requires_exact_live_membership(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2887,6 +3147,75 @@ def _source_verification_fixtures(root: Path) -> tuple[Path, Path]:
     _write_json(source_path, source)
     _write_json(formula_path, formula)
     return source_path, formula_path
+
+
+def _write_bottle_fixture(
+    root: Path,
+    *,
+    formula: str,
+    version: str,
+    tap_commit: str,
+    content: bytes,
+) -> tuple[Path, Path]:
+    filename = f"{formula}--{version}.arm64_sequoia.bottle.tar.gz"
+    archive = root / filename
+    metadata = root / f"{formula}.bottle.json"
+    archive.write_bytes(content)
+    _write_json(
+        metadata,
+        {
+            "formula": {
+                "name": formula,
+                "pkg_version": version,
+                "path": f"/opt/homebrew/Cellar/{formula}/{version}",
+                "tap": "qualification/pq-sequoia",
+                "tap_git_head": tap_commit,
+                "bottle": {
+                    "root_url": "https://example.invalid/bottles",
+                    "prefix": "/opt/homebrew",
+                    "cellar": ":any_skip_relocation",
+                    "rebuild": 0,
+                    "tags": {
+                        "arm64_sequoia": {
+                            "filename": filename,
+                            "local_filename": filename,
+                            "sha256": _sha256(archive),
+                        }
+                    },
+                },
+            }
+        },
+    )
+    return archive, metadata
+
+
+def _runtime_bottle_records() -> dict[str, object]:
+    records: dict[str, object] = {}
+    for name, formula, version, marker in (
+        ("sq", "sequoia-sq-pqc@1.4.0", "1.4.0", "a"),
+        ("sqv", "sequoia-sqv-pqc@1.5.0", "1.5.0", "b"),
+    ):
+        filename = f"{formula}--{version}.arm64_sequoia.bottle.tar.gz"
+        records[name] = {
+            "formula": formula,
+            "version": version,
+            "tag": "arm64_sequoia",
+            "tap": "qualification/pq-sequoia",
+            "tap_git_head": "c" * 40,
+            "filename": filename,
+            "local_filename": filename,
+            "metadata": {
+                "path": f"/fixture/{formula}.bottle.json",
+                "size": 1,
+                "sha256": marker * 64,
+            },
+            "archive": {
+                "path": f"/fixture/{filename}",
+                "size": 1,
+                "sha256": marker * 64,
+            },
+        }
+    return records
 
 
 def _revocations() -> dict[str, object]:
@@ -3227,6 +3556,31 @@ def _write_otool_fixture(path: Path, executable: Path, dependency: str) -> Path:
     )
     path.chmod(0o700)
     return path
+
+
+def _macho_tool_output(
+    rpaths: dict[Path, list[str]], dependencies: dict[Path, list[str]]
+):
+    def output(command: list[str]) -> str:
+        path = Path(command[2]).resolve()
+        if command[1] == "-l":
+            return "".join(
+                "Load command 1\n"
+                "          cmd LC_RPATH\n"
+                "      cmdsize 48\n"
+                f"         path {rpath} (offset 12)\n"
+                for rpath in rpaths.get(path, [])
+            )
+        if command[1] == "-L":
+            lines = [f"{path}:"]
+            lines.extend(
+                f"\t{dependency} (compatibility version 1.0.0)"
+                for dependency in dependencies[path]
+            )
+            return "\n".join(lines)
+        raise AssertionError(command)
+
+    return output
 
 
 if __name__ == "__main__":

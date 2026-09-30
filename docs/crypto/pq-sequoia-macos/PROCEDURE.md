@@ -19,7 +19,7 @@ revision and receives separate acceptance.
   the Homebrew/core formula revision, and the Apple Silicon Sequoia bottle.
 - [`interop-v1.json`](interop-v1.json) defines the four-phase exchange with
   dotfiles #148. Its review-candidate SHA-256 is
-  `d11f864ed4e8a60e039ae1d6753f033620614309c917b3f409c05a65d07fbe48`.
+  `be53560bb68e68598aba5c2be953d635b6b906979e434b2ca08a0758a0327098`.
   Its fixed [message](fixtures/v1/message.bin) is exactly 51 bytes and has SHA-256
   `6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337`.
 - [`pq-sequoia-macos`](../../../scripts/pq-sequoia-macos) validates those
@@ -27,8 +27,10 @@ revision and receives separate acceptance.
   pre-patch archives, binds Homebrew's active OpenSSL formula, commits and
   verifies the ephemeral tap, inspects key-packet versions, controls exact-keg
   selection, records the Mach-O and runtime closures, and opens and closes the
-  live exchange. Its `record-relay-observation` command validates and records
-  complete paginated selection and final relay checks.
+  live exchange. `record-runtime` requires the exact `sq` and `sqv` bottle
+  archives and their `brew bottle --json` records. Its
+  `record-relay-observation` command validates and records complete paginated
+  selection and final relay checks.
 - [`pq-sequoia-macos.yml`](../../../.github/workflows/pq-sequoia-macos.yml) is
   manual-only. It has no push, pull-request, schedule, or release trigger.
 
@@ -92,7 +94,11 @@ fingerprint, signed commit and Git tree, both normalized tree digests, the
 active OpenSSL formula path and digest, and the exact Homebrew/core revision.
 `runtime-closure.json` embeds that receipt and a second active-formula
 observation made after the candidate builds. A difference between the two
-formula observations rejects runtime-closure creation.
+formula observations rejects runtime-closure creation. It also embeds a closed
+`sq`/`sqv` bottle map. Each entry binds the expected candidate formula and
+version, `arm64_sequoia` tag, ephemeral tap commit, metadata bytes, local
+filename, and archive byte count and SHA-256. Missing, extra, ambiguous,
+malformed, or mismatched bottle inputs reject closure creation.
 
 ## Prepare the #148 public opening phase
 
@@ -209,11 +215,16 @@ The qualification job then:
 4. runs the complete upstream `sq` and `sqv` suites against OpenSSL 3.5.8;
 5. copies both exact formulae into the ephemeral tap, creates a local unsigned
    Git commit, and requires the clean committed blobs and working-tree bytes to
-   match `candidate.json` before building and bottling either formula;
+   match `candidate.json` before building and bottling either formula, then
+   retains each same-job bottle archive and its JSON metadata;
 6. proves that a wrong executable digest leaves the selector absent, then
    selects only exact Cellar paths;
 7. rechecks the active formula and core revision, then records every on-disk
-   Mach-O dependency digest and queries the live cache
+   Mach-O dependency digest. Each `LC_RPATH` is resolved in its defining image;
+   current-image entries precede the nearest-to-farthest inherited chain, and
+   `@executable_path` stays rooted at the root executable. Any path form the
+   resolver cannot model exactly rejects closure creation. The workflow queries
+   the live cache
    with `/usr/bin/dyld_shared_cache_util -list`; an unresolved install name is
    accepted only by exact membership in that listing, and the evidence retains
    the utility identity, listing digest, listed-name count, and used members;
@@ -224,10 +235,11 @@ The qualification job then:
    revocation, signing- and encryption-subkey retirement, and 200 sequential
    clean lifecycles of each executable; and
 9. records `runtime-closure.json`, including the source-verification receipt,
-   post-build formula observation, tap commit, and live-cache observation,
-   signs its exact SHA-256 as phase B's producer closure, and uploads the
-   unchanged closure beside `macos-ci-phase-b.json` while keeping the macOS
-   secret certificate only in the still-running job.
+   post-build formula observation, exact `sq` and `sqv` bottle identities, tap
+   commit, and live-cache observation, signs its exact SHA-256 as phase B's
+   producer closure, and uploads the unchanged closure beside
+   `macos-ci-phase-b.json` while keeping the macOS secret certificate only in
+   the still-running job.
 
 ## Complete the live return
 
@@ -363,9 +375,10 @@ preimages, all three envelopes, both peer results with identical seven-artifact
 maps, exact relay-run metadata, both bounded relay observation records, local
 results, bottle metadata, the tap closure, the runtime closure, and
 `SHA256SUMS`. The runtime closure does not contain its own digest; phase B and
-the peer results bind that digest. Envelope, result, closure, observation, and
-index digests remain separate from the reciprocal map because a container
-cannot contain its own digest.
+the peer results bind that digest. The runtime closure itself contains the
+validated metadata and archive identities for both same-job candidate bottles.
+Envelope, result, closure, observation, and index digests remain separate from
+the reciprocal map because a container cannot contain its own digest.
 Acceptance still requires #258 to reconcile the #147 and #148 evidence, a
 fresh independent review tied to the executed revision, the exact workflow
 run and runner image, and a fresh #149 decision.

@@ -401,6 +401,15 @@ jobs:
             --expected-sq-sha256 "$sq_digest" \
             --expected-sqv-sha256 "$sqv_digest" \
             --output "$PQ_SCRATCH/public/selector.env"
+          bottles="$PQ_SCRATCH/evidence/bottles"
+          sq_bottle_metadata="$bottles/sequoia-sq-pqc"'@'"1.4.0.bottle.json"
+          sqv_bottle_metadata="$bottles/sequoia-sqv-pqc"'@'"1.5.0.bottle.json"
+          sq_bottle_name=$(jq -er \
+            '.formula.bottle.tags.arm64_sequoia.local_filename | select(type == "string" and length > 0)' \
+            "$sq_bottle_metadata")
+          sqv_bottle_name=$(jq -er \
+            '.formula.bottle.tags.arm64_sequoia.local_filename | select(type == "string" and length > 0)' \
+            "$sqv_bottle_metadata")
           scripts/pq-sequoia-macos record-runtime \
             --root . --tap-root "$PQ_TAP_ROOT" \
             --otool /usr/bin/otool \
@@ -409,6 +418,10 @@ jobs:
             --openssl "$PQ_OPENSSL_PREFIX/bin/openssl" \
             --source-verification "$PQ_SCRATCH/evidence/source-verification.json" \
             --active-formula-verification "$PQ_SCRATCH/evidence/homebrew-formula-runtime.json" \
+            --sq-bottle "$bottles/$sq_bottle_name" \
+            --sq-bottle-metadata "$sq_bottle_metadata" \
+            --sqv-bottle "$bottles/$sqv_bottle_name" \
+            --sqv-bottle-metadata "$sqv_bottle_metadata" \
             --candidate-identity "$PQ_CANDIDATE_IDENTITY" \
             --output "$PQ_SCRATCH/evidence/runtime-closure.json"
           producer_closure_sha256=$(shasum -a 256 \
