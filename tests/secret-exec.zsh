@@ -836,6 +836,14 @@ exit ${BEST_EFFORT_TARGET_EXIT:-0}
 EOF
 chmod +x "$fake_bin/print-best-effort"
 
+cat > "$fake_bin/print-fallback" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "fallback=${SECRET_EXEC_FALLBACK_PROFILES-unset}" \
+  "marker=${SECRET_EXEC_INJECTED_PROFILES-unset}" \
+  "context7=${CONTEXT7_API_KEY:+set} firecrawl=${FIRECRAWL_API_KEY:+set}"
+EOF
+chmod +x "$fake_bin/print-fallback"
+
 for notifier_name in notify-send osascript; do
   cat > "$fake_bin/$notifier_name" <<'EOF'
 #!/usr/bin/env zsh
@@ -1121,6 +1129,46 @@ done
 output=$(zsh "$launcher" --best-effort context7 -- print-marker)
 [[ $output == 'marker=context7 context7=set firecrawl=' ]] ||
   fail 'best-effort mode must inject normally when the provider is available'
+
+# A fallback records the profile for the rest of the process tree, keeping
+# valid inherited names and dropping malformed ones.
+: > "$FAKE_PASS_ITEM_EXIT_124"
+output=$(env SECRET_EXEC_FALLBACK_PROFILES='firecrawl bad!name' \
+  zsh "$launcher" --best-effort context7 -- print-fallback 2>/dev/null)
+rm -f -- "$FAKE_PASS_ITEM_EXIT_124"
+[[ $output == 'fallback=firecrawl context7 marker=unset context7= firecrawl=' ]] ||
+  fail "a best-effort fallback must export the fallback marker: $output"
+wait_for_notify_log || fail 'a best-effort fallback that records the marker must notify'
+
+# Inside that tree, a launch of a fallen-back profile starts at once without
+# credentials: no provider call, diagnostic, or notification, strict or not.
+for fallback_mode in strict best-effort; do
+  : > "$FAKE_NOTIFY_LOG"
+  : > "$FAKE_PASS_LOG"
+  typeset -a fallback_option=()
+  [[ $fallback_mode == strict ]] || fallback_option=(--best-effort)
+  output=$(env SECRET_EXEC_FALLBACK_PROFILES='context7' \
+    SECRET_EXEC_INJECTED_PROFILES=firecrawl \
+    "$context7_field=inherited-context7" "$firecrawl_field=inherited-firecrawl" \
+    zsh "$launcher" "${fallback_option[@]}" context7 -- print-fallback \
+    2>"$test_dir/fallback-skip.err")
+  [[ $output == 'fallback=context7 marker=unset context7= firecrawl=' ]] ||
+    fail "a $fallback_mode launch of a fallen-back profile must run scrubbed: $output"
+  [[ ! -s $FAKE_PASS_LOG && ! -s $test_dir/fallback-skip.err ]] ||
+    fail "a $fallback_mode launch of a fallen-back profile must skip the provider silently"
+  zmodload zsh/zselect
+  zselect -t 50 2>/dev/null || true
+  [[ ! -s $FAKE_NOTIFY_LOG ]] ||
+    fail "a $fallback_mode launch of a fallen-back profile must not notify again"
+done
+
+# The marker skips only the profiles it names.
+: > "$FAKE_PASS_LOG"
+output=$(env SECRET_EXEC_FALLBACK_PROFILES='firecrawl' \
+  zsh "$launcher" context7 -- print-fallback)
+[[ $output == 'fallback=firecrawl marker=context7 context7=set firecrawl=' &&
+  -s $FAKE_PASS_LOG ]] ||
+  fail "a fallback marker for another profile must not skip resolution: $output"
 
 : > "$FAKE_NOTIFY_LOG"
 for best_effort_contract in \

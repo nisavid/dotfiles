@@ -167,6 +167,19 @@ Standard error keeps the usual value-free diagnostic and gains one `starting
 notification and then execs the target, so the target's own exit status is the
 launch status.
 
+A fallback also adds the profile's name to `SECRET_EXEC_FALLBACK_PROFILES`, a
+non-secret, space-separated marker that the target and its children inherit.
+Inside that process tree, a later launch of a profile the marker names, strict
+or best-effort, starts its target at once without credentials: it removes every
+managed name, skips the readiness helper and the provider, and prints nothing
+and sends no notification. The provider failed moments earlier, and the host
+that fell back has already notified. This keeps hook commands inside a
+fallen-back host from waiting on an unavailable provider or notifying again.
+Launches of other profiles resolve as usual and pass the marker through. A
+`github` launch ignores the marker, as it ignores an inherited provenance
+marker, so it always resolves and checks its identity. A spoofed marker can only
+make a launch start without credentials.
+
 The notification's title is `Credentials unavailable`. Its body names only the
 profile and the command's base name, or `A command` when that name contains
 unusual characters. It never includes a value, locator, or provider output,

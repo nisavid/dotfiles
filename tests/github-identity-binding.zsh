@@ -216,6 +216,13 @@ expect_fail_closed 'GitHub identity self-check failed' \
   fail 'an inherited github profile with a matching identity must start the consumer'
 [[ $(<"$FAKE_CALLS_LOG") == $'pass-cli\ngh\ntarget' ]] ||
   fail 'an inherited github profile must be resolved and checked again'
+# Nor does an inherited fallback marker skip them.
+: > "$FAKE_CALLS_LOG"
+launch_environment=(SECRET_EXEC_FALLBACK_PROFILES=github)
+[[ $(run_launcher) == target-ran ]] ||
+  fail 'a github fallback marker must not stop a checked launch'
+[[ $(<"$FAKE_CALLS_LOG") == $'pass-cli\ngh\ntarget' ]] ||
+  fail 'a github fallback marker must not skip resolution or the identity check'
 launch_environment=()
 
 homebrew_bin=$test_dir/homebrew/Cellar/gh/1.0.0/bin
