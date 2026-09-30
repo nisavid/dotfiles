@@ -1,0 +1,32 @@
+#!/bin/sh
+
+# Get or set branch.<current>.vscode-merge-base, the base VS Code-family
+# editors compare the current branch against.
+
+usage="usage: $(basename "$0") [-f|--force] [origin/<branch>]"
+
+force=false
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -f|--force) force=true; shift ;;
+        -h|--help) echo "$usage"; exit 0 ;;
+        *) break ;;
+    esac
+done
+
+if [ $# -gt 0 ] && [ "$force" = false ]; then
+    case "$1" in
+        origin/*) ;;
+        *)
+            echo "error: branch name must start with 'origin/'; use -f/--force to bypass this check" >&2
+            exit 2 ;;
+    esac
+fi
+
+current="$(git symbolic-ref --short HEAD)" || exit 1
+if [ -z "$current" ]; then
+    echo "error: cannot determine the current branch" >&2
+    exit 1
+fi
+
+git config "branch.$current.vscode-merge-base" "$@"
