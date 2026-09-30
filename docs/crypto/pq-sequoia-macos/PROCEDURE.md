@@ -19,7 +19,7 @@ revision and receives separate acceptance.
   the Homebrew/core formula revision, and the Apple Silicon Sequoia bottle.
 - [`interop-v1.json`](interop-v1.json) defines the four-phase exchange with
   dotfiles #148. Its review-candidate SHA-256 is
-  `23f9564bd798ea766a5266bb94a5cea6bad1f0b8c30a0f23e9f8ec5d315a59a4`.
+  `d11f864ed4e8a60e039ae1d6753f033620614309c917b3f409c05a65d07fbe48`.
   Its fixed [message](fixtures/v1/message.bin) is exactly 51 bytes and has SHA-256
   `6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337`.
 - [`pq-sequoia-macos`](../../../scripts/pq-sequoia-macos) validates those
@@ -71,6 +71,13 @@ declared signing subkey, and its primary-key fingerprint must equal the
 declared primary. Apply the same rule to the OpenSSL detached signature.
 Missing, duplicate, malformed, or mismatched records stop before a source
 receipt is written.
+
+After validation, the workflow copies the exact status bytes into the public
+evidence tree as `source-sq-validsig.status`,
+`source-sqv-validsig.status`, and `source-openssl-validsig.status`. Each
+corresponding signer receipt records the retained file's SHA-256. Downloads,
+source archives, public-key imports, the GnuPG home, and unrelated diagnostics
+remain outside the success artifact.
 
 Extract each Sequoia release archive without patching it, then compare it with
 the tree named by the verified tag commit. The normalization includes every
@@ -163,6 +170,11 @@ resulting published revision, and dispatch that same revision. Observe the
 selected ref immediately before dispatch; the job compares
 `GITHUB_WORKFLOW_SHA`, the checked-out commit, and `candidate_commit` and fails
 if they differ.
+
+Both workflow modes accept only `GITHUB_RUN_ATTEMPT=1`; each job checks this
+before checkout or exchange input use. Do not rerun a failed qualification or
+response job. End that exchange, then use
+a fresh session identifier and new workflow runs.
 
 ```sh
 gh workflow run pq-sequoia-macos.yml \
@@ -280,10 +292,12 @@ scripts/pq-sequoia-macos record-relay-observation \
 The command uses `GET`, `per_page=100`, and `gh api --paginate` on
 `/repos/{owner}/{repo}/actions/workflows/pq-sequoia-macos.yml/runs`. It sends
 none of the named search filters. It validates and normalizes each projected
-page as it arrives, retaining unrelated run identities and normalized records
-only in a temporary on-disk index. Identical repeats of one positive database
-ID count once and increment the repeated-record count; conflicting values for
-one database ID reject the traversal.
+page as it arrives, including each run's `run_attempt`, while retaining
+unrelated run identities and normalized records only in a temporary on-disk
+index. Identical repeats of one positive database ID and run attempt count once
+and increment the repeated-record count. A different attempt of the same run
+remains a distinct observation; conflicting values for one database ID and run
+attempt reject the traversal.
 
 The command matches the exact title before considering state. More than one
 distinct match rejects, whether the second run is queued, pending, in-progress,
@@ -291,12 +305,15 @@ completed unsuccessfully, or completed successfully. After the complete
 traversal, a duplicate writes the value-free observation with every distinct
 match, complete query coverage, no selected run, and an explicit rejected
 outcome and reason before the command returns nonzero. The workflow copies only
-that allowlisted record into a failure-only relay artifact; it excludes private
-state and does not upload the success-only qualification artifact. Zero matches
-or one unfinished or unsuccessful match produces `selection_ready=false`, so
-the workflow continues polling. One completed successful match is selected and
-still must pass the exact relay metadata validator before download. The event
-and commit restrictions are applied locally to that sole match.
+that allowlisted record into a failure-only relay artifact. A matching
+`run_attempt` greater than 1 is rejected and retained the same way, even when it
+is the only matching database ID. The failure upload excludes private state and
+does not upload the success-only qualification artifact. Zero matches or one
+unfinished or unsuccessful first-attempt match produces
+`selection_ready=false`, so the workflow continues polling. One completed
+successful first-attempt match is selected and still must pass the exact relay
+metadata validator before download. The attempt, event, and commit restrictions
+are applied locally to that sole match.
 
 After phase C is authenticated and the live exchange closes, the workflow
 queries again and invokes the same command with `--stage final` and
@@ -304,19 +321,23 @@ queries again and invokes the same command with `--stage final` and
 the selected completed-successful run. The selection and final records are
 retained as `relay-observation-selection.json` and
 `relay-observation-final.json`; each contains the structured exchange binding,
-selected run ID, endpoint, page size, successful pagination completion, page
-and record counts, unique and repeated record counts, absence of named search
-filters, and every distinct exact-title match.
+selected run ID, each matching run attempt, endpoint, page size, successful
+pagination completion, page and record counts, unique and repeated record
+counts, absence of named search filters, and every distinct exact-title run
+attempt. If the final traversal rejects a duplicate or rerun, the failure-only
+artifact retains the byte-identical successful selection observation and the
+rejected final observation. Its upload allowlist contains only those two fixed
+paths.
 
 Successful end of pagination and exit zero from `gh api` are mandatory. A
 provider or CLI error, timeout, interruption, malformed page, malformed run,
 conflicting observation, absent selected run at the final check, or incomplete
-traversal rejects without leaving an observation. A completed duplicate
-traversal leaves only the rejected record described above. The 60-second query
-timeout is an operational fail-closed bound, not an accepted page or record
-cutoff. The relay window remains 45 minutes. Ambiguity, revision drift, or any
-mismatch rejects the session and cleans up; a later job cannot resume it because
-the required secret no longer exists.
+traversal rejects without leaving an observation. A completed duplicate or
+rerun traversal leaves only the fixed rejected observation files described
+above. The 60-second query timeout is an operational fail-closed bound, not an
+accepted page or record cutoff. The relay window remains 45 minutes. Ambiguity,
+revision drift, or any mismatch rejects the session and cleans up; a later job
+cannot resume it because the required secret no longer exists.
 
 Submissions after the final check are outside the guarantee. These traversals
 are not a permanent or global uniqueness guarantee, are not an atomic provider
@@ -332,13 +353,14 @@ diagnostics.
 ## Completion evidence
 
 The final macOS artifact contains the candidate and protocol, fixed message,
-source-verification receipt, all three envelopes, both peer results with
-identical seven-artifact maps, exact relay-run metadata, both bounded relay
-observation records, local results, bottle metadata, the tap closure, the
-runtime closure, and `SHA256SUMS`. The runtime closure does not contain its own
-digest; phase B and the peer results bind that digest. Envelope, result,
-closure, observation, and index digests remain separate from the reciprocal map
-because a container cannot contain its own digest.
+source-verification receipt, the exact `sq`, `sqv`, and OpenSSL GnuPG status
+preimages, all three envelopes, both peer results with identical seven-artifact
+maps, exact relay-run metadata, both bounded relay observation records, local
+results, bottle metadata, the tap closure, the runtime closure, and
+`SHA256SUMS`. The runtime closure does not contain its own digest; phase B and
+the peer results bind that digest. Envelope, result, closure, observation, and
+index digests remain separate from the reciprocal map because a container
+cannot contain its own digest.
 Acceptance still requires #258 to reconcile the #147 and #148 evidence, a
 fresh independent review tied to the executed revision, the exact workflow
 run and runner image, and a fresh #149 decision.

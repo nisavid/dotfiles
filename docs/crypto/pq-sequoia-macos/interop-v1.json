@@ -22,6 +22,7 @@
     "dispatched_envelope_max_bytes": 46000,
     "dispatched_envelope_base64_max_characters": 61500,
     "relay_wait_minutes": 45,
+    "execution_attempts": "The qualification and response jobs accept only workflow run attempt 1. A failed job ends the exchange; restart with a fresh session identifier and new workflow runs instead of rerunning either job.",
     "lifecycle": "The macOS secret certificate exists only in the original running macOS job. The peer response must arrive before that job exits; no later job may resume decryption. Hatchery retains its opening secret through phase C signing, removes it before releasing the already signed phase C bytes, and releases nothing if cleanup fails."
   },
   "cryptographic_shape": {
@@ -131,25 +132,26 @@
     "rule": "The seven finite cryptographic transfer artifacts are the complete reciprocal map. Both peers can observe all seven before phase C. Transport envelopes, result JSON files, and SHA256SUMS are indexed separately because including a container's own digest inside itself is impossible. macOS rejects any missing, extra, or unequal Hatchery record."
   },
   "relay_binding": {
-    "selection": "The relay run title contains the exact session ID, qualifier run ID, and phase-B envelope digest. The qualifier completes a workflow-scoped paginated traversal without named search filters, applies the event, commit, title, and state checks locally, rejects more than one distinct exact title match, waits until the sole match is completed successfully, then validates its exact database ID, event, status, conclusion, and head SHA against the reviewed qualifier commit before download.",
-    "final_check": "Immediately after closing the live exchange and before final evidence indexing, the qualifier repeats the same complete traversal and requires the sole exact title match to be the selected successful run.",
+    "selection": "The relay run title contains the exact session ID, qualifier run ID, and phase-B envelope digest. The qualifier completes a workflow-scoped paginated traversal without named search filters, applies the attempt, event, commit, title, and state checks locally, rejects more than one distinct exact title match or an exact-title response with run_attempt greater than 1, waits until the sole first-attempt match is completed successfully, then validates its exact database ID, run attempt, event, status, conclusion, and head SHA against the reviewed qualifier commit before download.",
+    "final_check": "Immediately after closing the live exchange and before final evidence indexing, the qualifier repeats the same complete traversal and requires the sole exact title match to be the selected successful first-attempt run.",
     "duplicate_rule": "Any second exact title match observed at either check rejects the session, including a queued, pending, in-progress, completed unsuccessful, or completed successful run.",
+    "rerun_rule": "Any exact-title matching response whose run_attempt is greater than 1 rejects the session at either observation. Identical repeated provider records for the same database ID and run attempt are pagination overlap, while different attempts of one database ID remain distinct observations.",
     "observation_coverage": {
       "endpoint": "/repos/{owner}/{repo}/actions/workflows/pq-sequoia-macos.yml/runs",
       "method": "GET",
       "per_page": 100,
       "pagination": "gh api --paginate must reach a successful end before an observation is accepted.",
       "named_search_filters": [],
-      "projected_run_fields": ["databaseId", "displayTitle", "event", "headSha", "status", "conclusion"],
+      "projected_run_fields": ["databaseId", "runAttempt", "displayTitle", "event", "headSha", "status", "conclusion"],
       "retained_coverage_fields": ["endpoint", "method", "per_page", "named_search_filters", "pagination_complete", "page_count", "raw_record_count", "unique_run_count", "repeated_record_count"],
-      "failure": "A provider or CLI error, timeout, interruption, malformed page, malformed run, conflicting observation for one database ID, or incomplete traversal rejects without producing an observation. A completed traversal with multiple distinct exact-title matches writes a rejected observation before returning nonzero. No page or record cutoff is accepted."
+      "failure": "A provider or CLI error, timeout, interruption, malformed page, malformed run, conflicting observation for one database ID and run attempt, or incomplete traversal rejects without producing an observation. A completed traversal with multiple distinct exact-title runs or an exact-title response at run_attempt greater than 1 writes a rejected observation before returning nonzero. No page or record cutoff is accepted."
     },
     "retained_observations": ["relay-observation-selection.json", "relay-observation-final.json"],
-    "retention": "Each retained observation records its stage, exact exchange binding, selected run ID, successful pagination completion, endpoint, page size, page and record counts, repeated-record count, absence of named search filters, and every distinct exact title match. Identical repeats of one database ID count once as a run; conflicting values for one database ID reject. The validated relay metadata remains copied into results/macos-ci.json.",
+    "retention": "Each retained observation records its stage, exact exchange binding, selected run ID, successful pagination completion, endpoint, page size, page and record counts, repeated-record count, absence of named search filters, and every distinct exact-title run attempt. Identical repeats of one database ID and run attempt count once; a different attempt remains distinct, and conflicting values for one database ID and attempt reject. The validated first-attempt relay metadata remains copied into results/macos-ci.json.",
     "rejected_observations": {
       "artifact": "pq-sequoia-macos-rejected-relay-{session_id}",
       "files": ["relay-observation-selection.json", "relay-observation-final.json"],
-      "retention": "After a complete selection or final traversal observes multiple distinct exact-title matches, the command writes the value-free record with no selected run and an explicit rejected outcome and reason, then returns nonzero. The workflow copies only that allowlisted record into the failure-only artifact. The normal qualification artifact remains success-only, and secret-bearing state is excluded."
+      "retention": "After a complete selection or final traversal observes multiple distinct exact-title runs or an exact-title response at run_attempt greater than 1, the command writes the value-free record with no selected run and an explicit rejected outcome and reason, then returns nonzero. A selection rejection retains that record. A final rejection retains the already validated selection record and the rejected final record together. The failure-only artifact accepts only those two fixed paths; the normal qualification artifact remains success-only, and private, downloaded, and secret-bearing state is excluded."
     },
     "temporal_limit": "Submissions after the final check are outside the guarantee. The two complete provider traversals are not a permanent or global uniqueness guarantee, do not form an atomic provider snapshot, and make no claim about runs the provider does not return."
   },
@@ -176,6 +178,7 @@
   },
   "failure_semantics": {
     "identity_digest_signature_or_shape_mismatch": "reject the session before using an unqualified shared command path",
+    "workflow_rerun": "reject a non-first qualification or response attempt before exchange input use; restart with a fresh session identifier and new workflow runs",
     "relay_timeout_or_ambiguity": "reject and clean both local secret workspaces; never resume with a new macOS job",
     "operation_failure": "retain only value-free failure classification and scrubbed diagnostics, then clean local secret material",
     "rollback": "disable the candidate workflow; there is no accepted earlier macOS CI closure"
@@ -194,7 +197,7 @@
       "both peers exercise certificate and subkey revocation locally",
       "both peers report the same complete seven-artifact digest map",
       "both peers report local secret cleanup complete",
-      "the final evidence retains one exact relay run bound to the reviewed commit"
+      "the final evidence retains one exact first-attempt relay run bound to the reviewed commit"
     ],
     "does_not_establish": ["production authority", "persistent installation", "personal Mac behavior", "hardware custody", "runtime acceptance"]
   },

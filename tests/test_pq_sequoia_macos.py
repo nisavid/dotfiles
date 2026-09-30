@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -100,6 +101,7 @@ class InteroperabilityProtocolTests(unittest.TestCase):
         self.assertIn("--paginate", coverage["pagination"])
         self.assertNotIn("requested_limit", coverage)
         self.assertNotIn("accepted_maximum", coverage)
+        self.assertIn("runAttempt", coverage["projected_run_fields"])
         self.assertEqual(
             ["relay-observation-selection.json", "relay-observation-final.json"],
             relay["retained_observations"],
@@ -117,6 +119,8 @@ class InteroperabilityProtocolTests(unittest.TestCase):
         )
         self.assertIn("queued", relay["duplicate_rule"])
         self.assertIn("completed unsuccessful", relay["duplicate_rule"])
+        self.assertIn("greater than 1", relay["rerun_rule"])
+        self.assertIn("fresh session", protocol["session"]["execution_attempts"])
         self.assertIn("Submissions after the final check", relay["temporal_limit"])
         self.assertIn("not a permanent or global uniqueness", relay["temporal_limit"])
 
@@ -380,6 +384,78 @@ class QualificationProcedureTests(unittest.TestCase):
                     self.assertEqual(1, rejected.returncode)
                     self.assertIn("exactly one valid VALIDSIG", rejected.stderr)
                     self.assertFalse(output.exists())
+
+    def test_success_evidence_retains_exact_source_status_preimages(self) -> None:
+        candidate = json.loads(CANDIDATE.read_text(encoding="utf-8"))
+        signers = {
+            "sq": candidate["applications"]["sq"],
+            "sqv": candidate["applications"]["sqv"],
+            "openssl": candidate["openssl"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            candidate_path = root / "candidate.json"
+            _write_json(candidate_path, candidate)
+
+            for source, signer in signers.items():
+                status = root / f"{source}.status"
+                receipt = evidence / f"source-{source}-signer.json"
+                retained = evidence / f"source-{source}-validsig.status"
+                status.write_text(
+                    _validsig_status(
+                        signing=signer["signer_subkey_fingerprint"],
+                        primary=signer["signer_primary_fingerprint"],
+                    ),
+                    encoding="utf-8",
+                )
+                accepted = self.run_cli(
+                    "verify-gpg-status",
+                    "--candidate",
+                    str(candidate_path),
+                    "--source",
+                    source,
+                    "--status",
+                    str(status),
+                    "--output",
+                    str(receipt),
+                )
+                self.assertEqual(0, accepted.returncode, accepted.stderr)
+                shutil.copyfile(status, retained)
+                self.assertEqual(
+                    json.loads(receipt.read_text(encoding="utf-8"))["status_sha256"],
+                    _sha256(retained),
+                )
+
+            self.assertEqual(
+                {
+                    "source-openssl-signer.json",
+                    "source-openssl-validsig.status",
+                    "source-sq-signer.json",
+                    "source-sq-validsig.status",
+                    "source-sqv-signer.json",
+                    "source-sqv-validsig.status",
+                },
+                {path.name for path in evidence.iterdir()},
+            )
+
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            'cp "$signer_status" "$PQ_SCRATCH/evidence/source-$component-validsig.status"',
+            workflow,
+        )
+        self.assertIn(
+            'cp "$openssl_signer_status" "$PQ_SCRATCH/evidence/source-openssl-validsig.status"',
+            workflow,
+        )
+        qualification_upload = workflow[
+            workflow.index("- name: Upload value-free qualification evidence") :
+            workflow.index("- name: Upload rejected relay observations")
+        ]
+        self.assertIn("/evidence", qualification_upload)
+        for forbidden in ("/downloads", "/gnupg", "/private", "pubkeys", ".tar"):
+            self.assertNotIn(forbidden, qualification_upload)
 
     def test_prepatch_archive_must_match_the_signed_commit_tree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -845,6 +921,7 @@ class QualificationProcedureTests(unittest.TestCase):
         self.assertIn("if: always()", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertEqual(2, workflow.count('[[ "$GITHUB_WORKFLOW_SHA" =='))
+        self.assertEqual(2, workflow.count('[[ "${GITHUB_RUN_ATTEMPT:?}" == 1 ]]'))
         self.assertNotIn("home/", workflow)
         self.assertNotIn("actions/cache", workflow)
         self.assertEqual(2, workflow.count("base64 --decode"))
@@ -873,6 +950,191 @@ class QualificationProcedureTests(unittest.TestCase):
         self.assertIn("outcome and reason", procedure)
         self.assertIn("Submissions after the final check", procedure)
         self.assertIn("not a permanent or global uniqueness", procedure)
+        self.assertIn("source-sq-validsig.status", procedure)
+        self.assertIn("source-sqv-validsig.status", procedure)
+        self.assertIn("source-openssl-validsig.status", procedure)
+        self.assertIn("fresh session identifier and new workflow runs", procedure)
+
+    def test_workflow_rejects_reruns_before_exchange_input_use(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        qualify_guard = "- name: Reject a qualification rerun before exchange input use"
+        response_guard = "- name: Reject a response rerun before exchange input use"
+
+        self.assertLess(
+            workflow.index(qualify_guard),
+            workflow.index("- name: Check out the reviewed qualification revision"),
+        )
+        self.assertLess(
+            workflow.index(response_guard),
+            workflow.index("- name: Check out the reviewed relay revision"),
+        )
+
+        for guard in (qualify_guard, response_guard):
+            with self.subTest(guard=guard):
+                step = workflow[workflow.index(guard) :]
+                step = step[: step.index("\n      - name:")]
+                run_lines = step[step.index("        run: |\n") + len("        run: |\n") :]
+                run_script = "\n".join(
+                    line.removeprefix("          ")
+                    for line in run_lines.splitlines()
+                )
+                first_attempt = subprocess.run(
+                    ["bash", "-c", run_script],
+                    cwd=ROOT,
+                    env={**os.environ, "GITHUB_RUN_ATTEMPT": "1"},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                rerun = subprocess.run(
+                    ["bash", "-c", run_script],
+                    cwd=ROOT,
+                    env={**os.environ, "GITHUB_RUN_ATTEMPT": "2"},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(0, first_attempt.returncode, first_attempt.stderr)
+                self.assertNotEqual(0, rerun.returncode)
+
+    def test_final_duplicate_failure_retains_both_observation_preimages(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        step = workflow[
+            workflow.index("- name: Check relay again before final evidence") :
+            workflow.index("- name: Finalize value-free evidence")
+        ]
+        failure_branch = step[step.index("            relay_status=$?") :]
+        failure_script = "false\n" + textwrap.dedent(failure_branch)
+
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory)
+            for name in ("public", "evidence", "rejected-evidence"):
+                (scratch / name).mkdir()
+            selection = scratch / "evidence/relay-observation-selection.json"
+            final = scratch / "public/relay-observation-final.json"
+            selection_bytes = b'{"schema_version":"pq-sequoia-relay-observation/v1","stage":"selection"}\n'
+            final_bytes = (
+                b'{"schema_version":"pq-sequoia-relay-observation/v1",'
+                b'"stage":"final","decision":{"outcome":"rejected",'
+                b'"reason":"matching relay duplicate observed"},'
+                b'"exchange_binding":{"selected_run_id":null},'
+                b'"coverage":{"pagination_complete":true},'
+                b'"matching_runs":[{"databaseId":1},{"databaseId":2}]}\n'
+            )
+            selection.write_bytes(selection_bytes)
+            final.write_bytes(final_bytes)
+
+            retained = subprocess.run(
+                ["bash", "-c", failure_script],
+                cwd=ROOT,
+                env={**os.environ, "PQ_SCRATCH": str(scratch)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(1, retained.returncode, retained.stderr)
+            rejected = scratch / "rejected-evidence"
+            self.assertEqual(
+                {
+                    "relay-observation-final.json",
+                    "relay-observation-selection.json",
+                },
+                {path.name for path in rejected.iterdir()},
+            )
+            self.assertEqual(
+                selection_bytes,
+                (rejected / "relay-observation-selection.json").read_bytes(),
+            )
+            self.assertEqual(
+                final_bytes,
+                (rejected / "relay-observation-final.json").read_bytes(),
+            )
+
+        rejected_upload = workflow[
+            workflow.index("- name: Upload rejected relay observations") :
+            workflow.index("- name: Clean disposable secret material")
+        ]
+        upload_files = {
+            line.rsplit("/", 1)[-1]
+            for line in rejected_upload.splitlines()
+            if "/rejected-evidence/" in line
+        }
+        self.assertEqual(
+            {
+                "relay-observation-final.json",
+                "relay-observation-selection.json",
+            },
+            upload_files,
+        )
+
+    def test_rerun_failures_retain_the_allowlisted_observation_preimages(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        rerun_bytes = (
+            b'{"schema_version":"pq-sequoia-relay-observation/v1",'
+            b'"decision":{"outcome":"rejected",'
+            b'"reason":"matching relay rerun observed"},'
+            b'"exchange_binding":{"selected_run_id":null},'
+            b'"coverage":{"pagination_complete":true},'
+            b'"matching_runs":[{"databaseId":1,"runAttempt":2}],'
+            b'"stage":"STAGE"}\n'
+        )
+        selection_bytes = b'{"schema_version":"pq-sequoia-relay-observation/v1","stage":"selection"}\n'
+
+        for stage, step_start, step_end in (
+            (
+                "selection",
+                "- name: Wait for the matching public peer response",
+                "- name: Close the live interoperability phase",
+            ),
+            (
+                "final",
+                "- name: Check relay again before final evidence",
+                "- name: Finalize value-free evidence",
+            ),
+        ):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                step = workflow[
+                    workflow.index(step_start) : workflow.index(step_end)
+                ]
+                failure_branch = step[step.index("            relay_status=$?") :]
+                if stage == "selection":
+                    failure_branch = failure_branch[
+                        : failure_branch.index("            if [[")
+                    ]
+                failure_script = "false\n" + textwrap.dedent(failure_branch)
+
+                scratch = Path(directory)
+                for name in ("public", "evidence", "rejected-evidence"):
+                    (scratch / name).mkdir()
+                observation = scratch / f"public/relay-observation-{stage}.json"
+                observation_bytes = rerun_bytes.replace(b"STAGE", stage.encode())
+                observation.write_bytes(observation_bytes)
+                if stage == "final":
+                    (scratch / "evidence/relay-observation-selection.json").write_bytes(
+                        selection_bytes
+                    )
+
+                retained = subprocess.run(
+                    ["bash", "-c", failure_script],
+                    cwd=ROOT,
+                    env={**os.environ, "PQ_SCRATCH": str(scratch)},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+                self.assertEqual(1, retained.returncode, retained.stderr)
+                rejected = scratch / "rejected-evidence"
+                self.assertEqual(
+                    observation_bytes,
+                    (rejected / f"relay-observation-{stage}.json").read_bytes(),
+                )
+                if stage == "final":
+                    self.assertEqual(
+                        selection_bytes,
+                        (rejected / "relay-observation-selection.json").read_bytes(),
+                    )
 
     def test_cleanup_refuses_an_unmarked_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1117,6 +1379,7 @@ class QualificationProcedureTests(unittest.TestCase):
         module = _load_cli()
         metadata = {
             "databaseId": 12345,
+            "runAttempt": 1,
             "displayTitle": "expected-title",
             "event": "workflow_dispatch",
             "headSha": "a" * 40,
@@ -1483,6 +1746,7 @@ class QualificationProcedureTests(unittest.TestCase):
                 title = f"pq-sequoia-publish-peer-response-{session}-777-{_sha256(phase_b_path)}"
                 relay = {
                     "databaseId": 888,
+                    "runAttempt": 1,
                     "displayTitle": title,
                     "event": "workflow_dispatch",
                     "headSha": "c" * 40,
@@ -1712,6 +1976,7 @@ class QualificationProcedureTests(unittest.TestCase):
             root = Path(directory)
             metadata = {
                 "databaseId": 321,
+                "runAttempt": 1,
                 "displayTitle": "bound-title",
                 "event": "workflow_dispatch",
                 "headSha": "a" * 40,
@@ -1756,6 +2021,26 @@ class QualificationProcedureTests(unittest.TestCase):
             self.assertEqual(1, rejected.returncode)
             self.assertFalse(output.exists())
 
+            metadata["headSha"] = "a" * 40
+            metadata["runAttempt"] = 2
+            _write_json(source, metadata)
+            rejected_attempt = self.run_cli(
+                "validate-relay",
+                "--metadata",
+                str(source),
+                "--expected-run-id",
+                "321",
+                "--expected-title",
+                "bound-title",
+                "--expected-commit",
+                "a" * 40,
+                "--output",
+                str(output),
+            )
+            self.assertEqual(1, rejected_attempt.returncode)
+            self.assertIn("relay run attempt mismatch", rejected_attempt.stderr)
+            self.assertFalse(output.exists())
+
     def test_relay_selection_finds_a_match_after_page_ten(self) -> None:
         title = (
             "pq-sequoia-publish-peer-response-"
@@ -1769,6 +2054,7 @@ class QualificationProcedureTests(unittest.TestCase):
                     [
                         {
                             "databaseId": page_number * 100 + offset + 1,
+                            "runAttempt": 1,
                             "displayTitle": "unrelated",
                             "event": "push",
                             "headSha": "b" * 40,
@@ -1780,6 +2066,7 @@ class QualificationProcedureTests(unittest.TestCase):
                 )
             pages[-1][-1] = {
                 "databaseId": 1100,
+                "runAttempt": 1,
                 "displayTitle": title,
                 "event": "workflow_dispatch",
                 "headSha": "a" * 40,
@@ -1817,7 +2104,7 @@ class QualificationProcedureTests(unittest.TestCase):
                     "--raw-field",
                     "per_page=100",
                     "--jq",
-                    ".workflow_runs | map({databaseId: .id, displayTitle: .display_title, event: .event, headSha: .head_sha, status: .status, conclusion: .conclusion})",
+                    ".workflow_runs | map({databaseId: .id, runAttempt: .run_attempt, displayTitle: .display_title, event: .event, headSha: .head_sha, status: .status, conclusion: .conclusion})",
                     "/repos/example/project/actions/workflows/pq-sequoia-macos.yml/runs",
                 ],
                 json.loads(invocation.read_text()),
@@ -1829,6 +2116,7 @@ class QualificationProcedureTests(unittest.TestCase):
         title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
         selected = {
             "databaseId": 321,
+            "runAttempt": 1,
             "displayTitle": title,
             "event": "workflow_dispatch",
             "headSha": "a" * 40,
@@ -1898,10 +2186,55 @@ class QualificationProcedureTests(unittest.TestCase):
                             record["coverage"],
                         )
 
+    def test_relay_checks_reject_and_retain_an_observed_response_rerun(
+        self,
+    ) -> None:
+        title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
+        rerun = {
+            "databaseId": 321,
+            "runAttempt": 2,
+            "displayTitle": title,
+            "event": "workflow_dispatch",
+            "headSha": "a" * 40,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for stage in ("selection", "final"):
+                with self.subTest(stage=stage):
+                    gh, _ = self.fake_gh(root, [[rerun]])
+                    rejected = self.run_cli(
+                        *self.relay_arguments(
+                            root,
+                            gh,
+                            stage=stage,
+                            selected_run_id="321" if stage == "final" else None,
+                        )
+                    )
+
+                    self.assertEqual(1, rejected.returncode)
+                    self.assertIn("matching relay rerun observed", rejected.stderr)
+                    record = json.loads(
+                        (root / f"{stage}.json").read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(stage, record["stage"])
+                    self.assertEqual(
+                        {
+                            "outcome": "rejected",
+                            "reason": "matching relay rerun observed",
+                        },
+                        record["decision"],
+                    )
+                    self.assertFalse(record["selection_ready"])
+                    self.assertIsNone(record["exchange_binding"]["selected_run_id"])
+                    self.assertEqual([rerun], record["matching_runs"])
+
     def test_relay_observation_normalizes_identical_overlap(self) -> None:
         title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
         selected = {
             "databaseId": 321,
+            "runAttempt": 1,
             "displayTitle": title,
             "event": "workflow_dispatch",
             "headSha": "a" * 40,
@@ -1925,6 +2258,7 @@ class QualificationProcedureTests(unittest.TestCase):
         title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
         queued = {
             "databaseId": 321,
+            "runAttempt": 1,
             "displayTitle": title,
             "event": "workflow_dispatch",
             "headSha": "a" * 40,
@@ -1948,6 +2282,7 @@ class QualificationProcedureTests(unittest.TestCase):
         title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
         selected = {
             "databaseId": 321,
+            "runAttempt": 1,
             "displayTitle": title,
             "event": "workflow_dispatch",
             "headSha": "a" * 40,
@@ -2011,6 +2346,7 @@ class QualificationProcedureTests(unittest.TestCase):
         title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
         selected = {
             "databaseId": 321,
+            "runAttempt": 1,
             "displayTitle": title,
             "event": "workflow_dispatch",
             "headSha": "a" * 40,
@@ -2037,6 +2373,7 @@ class QualificationProcedureTests(unittest.TestCase):
         title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
         unsuccessful = {
             "databaseId": 321,
+            "runAttempt": 1,
             "displayTitle": title,
             "event": "workflow_dispatch",
             "headSha": "a" * 40,
@@ -2058,6 +2395,7 @@ class QualificationProcedureTests(unittest.TestCase):
         title = f"pq-sequoia-publish-peer-response-{'c' * 64}-987-{'d' * 64}"
         selected = {
             "databaseId": 321,
+            "runAttempt": 1,
             "displayTitle": title,
             "event": "workflow_dispatch",
             "headSha": "a" * 40,

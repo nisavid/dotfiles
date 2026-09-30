@@ -57,6 +57,12 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 360
     steps:
+      - name: Reject a qualification rerun before exchange input use
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_RUN_ATTEMPT:?}" == 1 ]]
+
       - name: Check out the reviewed qualification revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -162,6 +168,7 @@ jobs:
               --candidate "$candidate" --source "$component" \
               --status "$signer_status" \
               --output "$PQ_SCRATCH/evidence/source-$component-signer.json"
+            cp "$signer_status" "$PQ_SCRATCH/evidence/source-$component-validsig.status"
 
             case "$component" in
               sq) archive="$downloads/sequoia-sq-v1.4.0.tar.gz" ;;
@@ -214,6 +221,7 @@ jobs:
             --candidate "$candidate" --source openssl \
             --status "$openssl_signer_status" \
             --output "$PQ_SCRATCH/evidence/source-openssl-signer.json"
+          cp "$openssl_signer_status" "$PQ_SCRATCH/evidence/source-openssl-validsig.status"
 
           bottle_url=$(jq -r '.openssl.arm64_sequoia_bottle_url' "$candidate")
           bottle_digest=$(jq -r '.openssl.arm64_sequoia_bottle_sha256' "$candidate")
@@ -481,10 +489,18 @@ jobs:
                 .schema_version == "pq-sequoia-relay-observation/v1"
                 and .stage == "selection"
                 and .decision.outcome == "rejected"
-                and .decision.reason == "matching relay duplicate observed"
                 and .exchange_binding.selected_run_id == null
                 and .coverage.pagination_complete == true
-                and (.matching_runs | length) > 1
+                and (
+                  (
+                    .decision.reason == "matching relay duplicate observed"
+                    and ([.matching_runs[].databaseId] | unique | length) > 1
+                  )
+                  or (
+                    .decision.reason == "matching relay rerun observed"
+                    and any(.matching_runs[]; .runAttempt > 1)
+                  )
+                )
               ' "$observation" >/dev/null
               then
                 cp "$observation" \
@@ -571,12 +587,22 @@ jobs:
               .schema_version == "pq-sequoia-relay-observation/v1"
               and .stage == "final"
               and .decision.outcome == "rejected"
-              and .decision.reason == "matching relay duplicate observed"
               and .exchange_binding.selected_run_id == null
               and .coverage.pagination_complete == true
-              and (.matching_runs | length) > 1
+              and (
+                (
+                  .decision.reason == "matching relay duplicate observed"
+                  and ([.matching_runs[].databaseId] | unique | length) > 1
+                )
+                or (
+                  .decision.reason == "matching relay rerun observed"
+                  and any(.matching_runs[]; .runAttempt > 1)
+                )
+              )
             ' "$observation" >/dev/null
             then
+              cp "$PQ_SCRATCH/evidence/relay-observation-selection.json" \
+                "$PQ_SCRATCH/rejected-evidence/relay-observation-selection.json"
               cp "$observation" \
                 "$PQ_SCRATCH/rejected-evidence/relay-observation-final.json"
             fi
@@ -644,6 +670,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Reject a response rerun before exchange input use
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_RUN_ATTEMPT:?}" == 1 ]]
+
       - name: Check out the reviewed relay revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
