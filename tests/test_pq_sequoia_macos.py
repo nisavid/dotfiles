@@ -287,6 +287,62 @@ class QualificationProcedureTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("pq-sequoia-macos static surface: valid\n", result.stdout)
 
+    def test_static_validation_binds_closed_runner_declaration_to_workflow(
+        self,
+    ) -> None:
+        expected_runner = {
+            "label": "macos-15",
+            "runner_environment": "github-hosted",
+            "runner_os": "macOS",
+            "runner_arch": "ARM64",
+            "hardware_arch": "arm64",
+            "macos_major": "15",
+        }
+        mutations = {
+            "label": "macos-14",
+            "runner_environment": "self-hosted",
+            "runner_os": "Linux",
+            "runner_arch": "X64",
+            "hardware_arch": "x86_64",
+            "macos_major": "14",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in (
+                "docs/crypto/pq-sequoia-macos",
+                "packaging/homebrew/pq-sequoia-macos/v1",
+                ".github/workflows",
+            ):
+                shutil.copytree(ROOT / relative, root / relative)
+            candidate_path = (
+                root / "packaging/homebrew/pq-sequoia-macos/v1/candidate.json"
+            )
+            candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+            self.assertEqual(expected_runner, candidate["runner"])
+
+            aligned = self.run_cli("validate-static", "--root", str(root))
+            self.assertEqual(0, aligned.returncode, aligned.stderr)
+
+            for field, value in mutations.items():
+                with self.subTest(field=field):
+                    changed = json.loads(json.dumps(candidate))
+                    changed["runner"][field] = value
+                    _write_json(candidate_path, changed)
+                    rejected = self.run_cli(
+                        "validate-static", "--root", str(root)
+                    )
+                    self.assertEqual(1, rejected.returncode)
+                    self.assertIn(
+                        "candidate runner boundary mismatch", rejected.stderr
+                    )
+
+            changed = json.loads(json.dumps(candidate))
+            changed["runner"]["unexpected"] = "unsupported"
+            _write_json(candidate_path, changed)
+            rejected = self.run_cli("validate-static", "--root", str(root))
+            self.assertEqual(1, rejected.returncode)
+            self.assertIn("candidate runner boundary mismatch", rejected.stderr)
+
     def test_source_signature_requires_one_exact_validsig_identity(self) -> None:
         candidate = json.loads(CANDIDATE.read_text(encoding="utf-8"))
         statuses = {
@@ -954,6 +1010,13 @@ class QualificationProcedureTests(unittest.TestCase):
         self.assertIn("source-sqv-validsig.status", procedure)
         self.assertIn("source-openssl-validsig.status", procedure)
         self.assertIn("fresh session identifier and new workflow runs", procedure)
+        normalized_procedure = " ".join(procedure.split())
+        self.assertIn("same locally merged artifact", normalized_procedure)
+        self.assertIn(
+            "creates and verifies a fresh detached signature", normalized_procedure
+        )
+        self.assertIn("decrypts byte-for-byte", normalized_procedure)
+        self.assertIn("leave no output path", normalized_procedure)
 
     def test_workflow_rejects_reruns_before_exchange_input_use(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -1189,6 +1252,51 @@ class QualificationProcedureTests(unittest.TestCase):
             changed = dict(base)
             changed[field] = value
             self.assertNotEqual(original, module.canonical_transcript(changed), field)
+
+    def test_protocol_positive_sizes_reject_booleans_and_accept_integer_boundaries(
+        self,
+    ) -> None:
+        module = _load_cli()
+        one_byte = _payload(b"x")
+        maximum = _payload(b"x" * module.MAX_PAYLOAD_BYTES)
+        self.assertEqual(b"x", module.decode_payload("fixture", one_byte))
+        self.assertEqual(
+            module.MAX_PAYLOAD_BYTES,
+            len(module.decode_payload("fixture", maximum)),
+        )
+
+        revocations = _revocations()
+        module.validate_revocations(revocations)
+        artifacts = {
+            name: {"sha256": hashlib.sha256(name.encode()).hexdigest(), "size": 1}
+            for name in module.EXCHANGE_ARTIFACTS
+        }
+        module.validate_artifact_map(artifacts)
+
+        for boolean in (True, False):
+            with self.subTest(seam="payload", value=boolean):
+                changed_payload = dict(one_byte)
+                changed_payload["size"] = boolean
+                with self.assertRaisesRegex(
+                    module.ProcedureError, "payload size is invalid"
+                ):
+                    module.decode_payload("fixture", changed_payload)
+
+            with self.subTest(seam="revocation", value=boolean):
+                changed_revocations = json.loads(json.dumps(revocations))
+                changed_revocations["emergency_certificate"]["size"] = boolean
+                with self.assertRaisesRegex(
+                    module.ProcedureError, "revocation size is invalid"
+                ):
+                    module.validate_revocations(changed_revocations)
+
+            with self.subTest(seam="artifact-map", value=boolean):
+                changed_artifacts = json.loads(json.dumps(artifacts))
+                changed_artifacts["message.bin"]["size"] = boolean
+                with self.assertRaisesRegex(
+                    module.ProcedureError, "artifact size is invalid"
+                ):
+                    module.validate_artifact_map(changed_artifacts)
 
     def test_composite_certificate_and_signature_shape_is_enforced(self) -> None:
         module = _load_cli()
@@ -1808,6 +1916,118 @@ class QualificationProcedureTests(unittest.TestCase):
             result = self.run_cli("cleanup", "--state-dir", str(state))
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertFalse(state.exists())
+
+    def test_subkey_retirement_pairs_same_artifact_before_and_after(self) -> None:
+        module = _load_cli()
+        harness = _RevocationSubprocessHarness()
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            _write_revocation_workspace(workspace)
+            original_run = module.subprocess.run
+            module.subprocess.run = harness
+            try:
+                results = module.exercise_revocations(
+                    Path("/fixture/sq"),
+                    Path("/fixture/sqv"),
+                    workspace,
+                    {"LC_ALL": "C", "SEQUOIA_HOME": str(workspace / "store")},
+                )
+            finally:
+                module.subprocess.run = original_run
+
+            self.assertEqual(set(module.REVOCATION_CASES), set(results))
+            self.assertTrue(all(record["passed"] is True for record in results.values()))
+
+            signer_calls = [
+                command
+                for command in harness.commands
+                if "sign" in command and "--signer-file" in command
+            ]
+            self.assertEqual(2, len(signer_calls))
+            self.assertEqual(
+                {str(workspace / "signing-subkey-retired-key.pgp")},
+                {
+                    command[command.index("--signer-file") + 1]
+                    for command in signer_calls
+                },
+            )
+            verifier_calls = [
+                command for command in harness.commands if command[0] == "/fixture/sqv"
+            ]
+            self.assertEqual(1, len(verifier_calls))
+            self.assertEqual(
+                str(workspace / "pre-retirement.sig"),
+                verifier_calls[0][verifier_calls[0].index("--signature-file") + 1],
+            )
+
+            encryption_calls = [
+                command
+                for command in harness.commands
+                if "encrypt" in command and "--for-file" in command
+            ]
+            self.assertEqual(2, len(encryption_calls))
+            self.assertEqual(
+                {str(workspace / "encryption-subkey-retired-key.pgp")},
+                {
+                    command[command.index("--for-file") + 1]
+                    for command in encryption_calls
+                },
+            )
+            self.assertEqual(
+                MESSAGE.read_bytes(),
+                (workspace / "pre-retirement-decrypted.bin").read_bytes(),
+            )
+            self.assertFalse((workspace / "post-retirement.sig").exists())
+            self.assertFalse((workspace / "post-retirement.pgp").exists())
+
+    def test_subkey_retirement_rejects_nondiscriminating_evidence(self) -> None:
+        cases = (
+            (
+                "signing artifact fails before retirement",
+                _RevocationSubprocessHarness(fail_before="sign"),
+                "expected success",
+            ),
+            (
+                "encryption artifact fails before retirement",
+                _RevocationSubprocessHarness(fail_before="encrypt"),
+                "expected success",
+            ),
+            (
+                "baseline decryption changes bytes",
+                _RevocationSubprocessHarness(decrypted=b"wrong plaintext"),
+                "pre-retirement decryption mismatch",
+            ),
+            (
+                "rejected signing leaves output",
+                _RevocationSubprocessHarness(leak_after="sign"),
+                "rejected operation produced output",
+            ),
+            (
+                "rejected encryption leaves output",
+                _RevocationSubprocessHarness(leak_after="encrypt"),
+                "rejected operation produced output",
+            ),
+        )
+        for label, harness, error in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
+                module = _load_cli()
+                workspace = Path(directory)
+                _write_revocation_workspace(workspace)
+                original_run = module.subprocess.run
+                module.subprocess.run = harness
+                try:
+                    with self.assertRaisesRegex(module.ProcedureError, error):
+                        module.exercise_revocations(
+                            Path("/fixture/sq"),
+                            Path("/fixture/sqv"),
+                            workspace,
+                            {
+                                "LC_ALL": "C",
+                                "SEQUOIA_HOME": str(workspace / "store"),
+                            },
+                        )
+                finally:
+                    module.subprocess.run = original_run
 
     def test_qualify_local_executes_matrix_and_cleans_workspace(self) -> None:
         module = _load_cli()
@@ -2679,6 +2899,103 @@ def _revocations() -> dict[str, object]:
             "retired_encryption_subkey",
         )
     }
+
+
+def _write_revocation_workspace(workspace: Path) -> None:
+    (workspace / "key.pgp").write_bytes(b"private fixture key")
+    (workspace / "cert.pgp").write_bytes(b"public fixture certificate")
+    (workspace / "message.bin").write_bytes(MESSAGE.read_bytes())
+    (workspace / "message.sig").write_bytes(b"baseline fixture signature")
+    (workspace / "message.pgp").write_bytes(b"baseline fixture ciphertext")
+    (workspace / "emergency-revocation.pgp").write_bytes(
+        b"emergency fixture revocation"
+    )
+
+
+class _RevocationSubprocessHarness:
+    def __init__(
+        self,
+        *,
+        fail_before: str | None = None,
+        decrypted: bytes | None = None,
+        leak_after: str | None = None,
+    ) -> None:
+        self.fail_before = fail_before
+        self.decrypted = MESSAGE.read_bytes() if decrypted is None else decrypted
+        self.leak_after = leak_after
+        self.commands: list[list[str]] = []
+        self.revoked_stores: set[str] = set()
+
+    def __call__(
+        self,
+        command,
+        *,
+        check,
+        capture_output,
+        env,
+        timeout,
+    ) -> subprocess.CompletedProcess[bytes]:
+        arguments = [str(value) for value in command]
+        self.commands.append(arguments)
+        returncode = 0
+        stdout = b""
+
+        if len(arguments) > 1 and arguments[1] == "inspect":
+            stdout = (
+                b"OpenPGP Certificate.\n"
+                b"  Fingerprint : AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+                b"  Subkey : BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n"
+                b"  Key flags : signing\n"
+                b"  Subkey : CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n"
+                b"  Key flags : transport encryption\n"
+            )
+        elif "revoke" in arguments and "--output" in arguments:
+            output = Path(arguments[arguments.index("--output") + 1])
+            output.write_bytes(f"fixture revocation for {output.name}".encode())
+        elif "keyring" in arguments and "merge" in arguments:
+            output = Path(arguments[arguments.index("--output") + 1])
+            output.write_bytes(b"merged private fixture artifact")
+        elif "sign" in arguments and "--signer-file" in arguments:
+            output = Path(arguments[arguments.index("--signature-file") + 1])
+            if output.name == "pre-retirement.sig":
+                if self.fail_before == "sign":
+                    returncode = 1
+                else:
+                    output.write_bytes(b"pre-retirement fixture signature")
+            elif output.name == "post-retirement.sig":
+                returncode = 1
+                if self.leak_after == "sign":
+                    output.write_bytes(b"")
+        elif arguments[0] == "/fixture/sqv":
+            signature = Path(arguments[arguments.index("--signature-file") + 1])
+            returncode = 0 if signature.exists() else 1
+        elif "encrypt" in arguments and "--for-file" in arguments:
+            output = Path(arguments[arguments.index("--output") + 1])
+            if output.name == "pre-retirement.pgp":
+                if self.fail_before == "encrypt":
+                    returncode = 1
+                else:
+                    output.write_bytes(b"pre-retirement fixture ciphertext")
+            elif output.name == "post-retirement.pgp":
+                returncode = 1
+                if self.leak_after == "encrypt":
+                    output.write_bytes(b"")
+        elif "decrypt" in arguments and "--output" in arguments:
+            output = Path(arguments[arguments.index("--output") + 1])
+            output.write_bytes(self.decrypted)
+        elif "cert" in arguments and "import" in arguments:
+            imported = Path(arguments[-1])
+            if "revocation" in imported.name or imported.name == "retired-certificate.pgp":
+                self.revoked_stores.add(env["SEQUOIA_HOME"])
+        elif (
+            "cert" in arguments
+            and "list" in arguments
+            and "--gossip" not in arguments
+            and env["SEQUOIA_HOME"] in self.revoked_stores
+        ):
+            returncode = 1
+
+        return subprocess.CompletedProcess(command, returncode, stdout, b"")
 
 
 def _envelope(module, *, phase, session, closure, parent, payloads, results):

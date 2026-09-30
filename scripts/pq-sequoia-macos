@@ -254,6 +254,27 @@ def validate_static(root: Path) -> None:
         raise ProcedureError("workflow relay observation calls mismatch")
     if candidate.get("schema_version") != "pq-sequoia-macos-candidate/v1":
         raise ProcedureError("candidate version mismatch")
+    runner = candidate.get("runner")
+    expected_runner = {
+        "label": "macos-15",
+        "runner_environment": "github-hosted",
+        "runner_os": "macOS",
+        "runner_arch": "ARM64",
+        "hardware_arch": "arm64",
+        "macos_major": "15",
+    }
+    if runner != expected_runner:
+        raise ProcedureError("candidate runner boundary mismatch")
+    workflow_runner_boundary = (
+        f"runs-on: {runner['label']}",
+        f'[[ "$RUNNER_ENVIRONMENT" == {runner["runner_environment"]} ]]',
+        f'[[ "$RUNNER_OS" == {runner["runner_os"]} ]]',
+        f'[[ "$RUNNER_ARCH" == {runner["runner_arch"]} ]]',
+        f'[[ "$(uname -m)" == {runner["hardware_arch"]} ]]',
+        f'[[ "$(sw_vers -productVersion)" == {runner["macos_major"]}.* ]]',
+    )
+    if not all(fragment in workflow for fragment in workflow_runner_boundary):
+        raise ProcedureError("workflow runner boundary mismatch")
     openssl = candidate.get("openssl", {})
     if (
         openssl.get("version") != "3.5.8"
@@ -526,6 +547,14 @@ def payload_record(content: bytes) -> dict[str, Any]:
     }
 
 
+def is_positive_json_integer(value: object, *, maximum: int | None = None) -> bool:
+    return (
+        type(value) is int
+        and value > 0
+        and (maximum is None or value <= maximum)
+    )
+
+
 def decode_payload(name: str, record: object) -> bytes:
     if not isinstance(record, dict):
         raise ProcedureError(f"{name}: payload record must be an object")
@@ -536,7 +565,7 @@ def decode_payload(name: str, record: object) -> bytes:
     size = record.get("size")
     digest = record.get("sha256")
     encoded = record.get("data")
-    if not isinstance(size, int) or not 0 < size <= MAX_PAYLOAD_BYTES:
+    if not is_positive_json_integer(size, maximum=MAX_PAYLOAD_BYTES):
         raise ProcedureError(f"{name}: payload size is invalid")
     if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
         raise ProcedureError(f"{name}: payload digest is invalid")
@@ -561,7 +590,7 @@ def validate_revocations(results: object) -> None:
             raise ProcedureError(f"{name}: revocation result fields mismatch")
         if result.get("passed") is not True:
             raise ProcedureError(f"{name}: revocation check did not pass")
-        if not isinstance(result.get("size"), int) or result["size"] <= 0:
+        if not is_positive_json_integer(result.get("size")):
             raise ProcedureError(f"{name}: revocation size is invalid")
         if not isinstance(result.get("sha256"), str) or not SHA256_RE.fullmatch(
             result["sha256"]
@@ -843,7 +872,7 @@ def validate_artifact_map(value: object) -> dict[str, dict[str, Any]]:
             record["sha256"]
         ):
             raise ProcedureError(f"{name}: artifact digest is invalid")
-        if not isinstance(record.get("size"), int) or record["size"] <= 0:
+        if not is_positive_json_integer(record.get("size")):
             raise ProcedureError(f"{name}: artifact size is invalid")
     return value
 
@@ -1413,6 +1442,16 @@ def assert_rejected_without_output(
         raise ProcedureError("rejected operation recovered output")
 
 
+def assert_rejected_without_created_output(
+    command: list[str], output: Path, environment: dict[str, str]
+) -> None:
+    if output.exists():
+        raise ProcedureError("rejected operation output path already exists")
+    run_command(command, environment=environment, expected_success=False)
+    if output.exists():
+        raise ProcedureError("rejected operation produced output")
+
+
 def revocation_record(path: Path) -> dict[str, Any]:
     content = path.read_bytes()
     return {"passed": True, "sha256": sha256_bytes(content), "size": len(content)}
@@ -1448,8 +1487,6 @@ def exercise_revocations(
     key = workspace / "key.pgp"
     cert = workspace / "cert.pgp"
     message = workspace / "message.bin"
-    signature = workspace / "message.sig"
-    ciphertext = workspace / "message.pgp"
     fingerprint, signing_subkey, encryption_subkey = inspect_key(sq, key, environment)
     timeline_base = datetime.now(timezone.utc)
     before_revocation = (timeline_base + timedelta(minutes=1)).strftime(
@@ -1506,6 +1543,21 @@ def exercise_revocations(
     )
     signing_revoked = workspace / "signing-subkey-retired-key.pgp"
     merge_revocation(sq, key, signing_revocation, signing_revoked, environment)
+    pre_retirement_signature = workspace / "pre-retirement.sig"
+    run_command(
+        [
+            str(sq),
+            "--time",
+            before_revocation,
+            "sign",
+            "--signer-file",
+            str(signing_revoked),
+            "--signature-file",
+            str(pre_retirement_signature),
+            str(message),
+        ],
+        environment=environment,
+    )
     run_command(
         [
             str(sqv),
@@ -1514,12 +1566,13 @@ def exercise_revocations(
             "--keyring",
             str(signing_revoked),
             "--signature-file",
-            str(signature),
+            str(pre_retirement_signature),
             str(message),
         ],
         environment=environment,
     )
-    run_command(
+    post_retirement_signature = workspace / "post-retirement.sig"
+    assert_rejected_without_created_output(
         [
             str(sq),
             "--time",
@@ -1528,11 +1581,11 @@ def exercise_revocations(
             "--signer-file",
             str(signing_revoked),
             "--signature-file",
-            str(workspace / "post-retirement.sig"),
+            str(post_retirement_signature),
             str(message),
         ],
-        environment=environment,
-        expected_success=False,
+        post_retirement_signature,
+        environment,
     )
 
     encryption_revocation = workspace / "encryption-subkey-revocation.pgp"
@@ -1559,21 +1612,42 @@ def exercise_revocations(
     )
     encryption_revoked = workspace / "encryption-subkey-retired-key.pgp"
     merge_revocation(sq, key, encryption_revocation, encryption_revoked, environment)
+    pre_retirement_ciphertext = workspace / "pre-retirement.pgp"
     run_command(
         [
             str(sq),
             "--time",
-            after_revocation,
+            before_revocation,
+            "encrypt",
+            "--profile",
+            "rfc9580",
+            "--for-file",
+            str(encryption_revoked),
+            "--without-signature",
+            "--output",
+            str(pre_retirement_ciphertext),
+            str(message),
+        ],
+        environment=environment,
+    )
+    run_command(
+        [
+            str(sq),
+            "--time",
+            before_revocation,
             "decrypt",
             "--recipient-file",
             str(encryption_revoked),
             "--output",
             str(workspace / "pre-retirement-decrypted.bin"),
-            str(ciphertext),
+            str(pre_retirement_ciphertext),
         ],
         environment=environment,
     )
-    run_command(
+    if (workspace / "pre-retirement-decrypted.bin").read_bytes() != message.read_bytes():
+        raise ProcedureError("pre-retirement decryption mismatch")
+    post_retirement_ciphertext = workspace / "post-retirement.pgp"
+    assert_rejected_without_created_output(
         [
             str(sq),
             "--time",
@@ -1585,11 +1659,11 @@ def exercise_revocations(
             str(encryption_revoked),
             "--without-signature",
             "--output",
-            str(workspace / "post-retirement.pgp"),
+            str(post_retirement_ciphertext),
             str(message),
         ],
-        environment=environment,
-        expected_success=False,
+        post_retirement_ciphertext,
+        environment,
     )
 
     for name, revocation in (

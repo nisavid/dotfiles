@@ -346,9 +346,14 @@ snapshot, and make no claim about runs the provider does not return.
 Revocation packets do not cross platforms. The accepted contract requires
 each side's emergency certificate, retired certificate, retired signing
 subkey, and retired encryption subkey transitions, but cross-platform behavior
-is detached-signature and encryption interoperability. Results retain only
-pass/fail classifications, packet sizes and SHA-256 values, and scrubbed
-diagnostics.
+is detached-signature and encryption interoperability. Each subkey transition
+uses the same locally merged artifact on both sides of its retirement time.
+Before retirement, the signing pair creates and verifies a fresh detached
+signature, while the encryption pair creates fresh ciphertext and decrypts
+byte-for-byte to the fixed message. After retirement, the same operation with
+the same artifact must reject and leave no output path. A passed record is
+written only after the complete pair succeeds. Results retain only pass/fail
+classifications, packet sizes and SHA-256 values, and scrubbed diagnostics.
 
 ## Completion evidence
 
