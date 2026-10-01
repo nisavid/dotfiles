@@ -167,6 +167,20 @@ Standard error keeps the usual value-free diagnostic and gains one `starting
 notification and then execs the target, so the target's own exit status is the
 launch status.
 
+A fallback also adds the profile's name to `SECRET_EXEC_FALLBACK_PROFILES`, a
+non-secret, space-separated marker that the target and its children inherit.
+Inside that process tree, a later launch of a profile the marker names, strict
+or best-effort, starts its target at once without credentials: it removes every
+managed name, skips the readiness helper and the provider, and prints nothing
+and sends no notification. The provider failed moments earlier, and the host
+that fell back has already notified. This keeps hook commands inside a
+fallen-back host from waiting on an unavailable provider or notifying again.
+Launches of other profiles resolve as usual and pass the marker through. A
+`github` launch ignores the marker, as it ignores an inherited provenance
+marker, so the marker never skips its resolution or identity check. A
+best-effort `github` launch whose provider fails still falls back as described
+above. A spoofed marker can only make a launch start without credentials.
+
 The notification's title is `Credentials unavailable`. Its body names only the
 profile and the command's base name, or `A command` when that name contains
 unusual characters. It never includes a value, locator, or provider output,
@@ -596,6 +610,45 @@ An absolute executable path bypasses command lookup and therefore bypasses the
 shim. The command map, shim directory, and later `PATH` entries are trusted
 user configuration.
 
+### App-boundary injection
+
+Most shims wrap the tool that uses the credential. A few keys are instead
+injected at an application boundary, because the tool that needs them runs as a
+child of an application and cannot fetch them itself. The `jev-axi` hooks in
+Claude Code, Claude Desktop, and Codex read `TYPESAFE_API_KEY` only from their
+environment, a project `.env`, or a plaintext configuration file, and
+`jev-axi setup` owns their hook entries. The command map therefore maps the
+hosts best-effort (`claude-desktop=typesafe?`, `chatgpt=typesafe?`,
+`claude=typesafe?`, and `codex=typesafe?`; `chatgpt` hosts the Codex app), and
+each host's hook subprocesses inherit the key. [ADR
+0002](adr/0002-app-boundary-secret-injection.md) records the decision.
+
+The rule is narrow:
+
+- Only a low-blast-radius key may be injected at an application boundary.
+  Every child of a wrapped host sees it: shell tool calls, MCP servers, and
+  subagents. A nested `secret-exec` launch of another profile still removes it.
+  Identity-bearing credentials, such as GitHub or AWS tokens, stay on the
+  individual tools that use them.
+- The mapping is best-effort, so an unavailable provider never stops the
+  application. It starts without the key and notifies once, and its hooks then
+  run keyless at once (see [Best-effort launches](#best-effort-launches)).
+- `jev-axi` itself stays mapped strictly (`jev-axi=typesafe`). Inside a wrapped
+  host it reuses the injected key without a provider lookup; in a terminal it
+  resolves the key through the provider and fails closed.
+- A wrapped host reads the key once, at launch. Restart the host after rotating
+  the key.
+
+A host inherits the key only when it starts through its shim. Desktop entries
+and launchers must therefore run the host by its bare name, with the shim
+directory first on the graphical session's `PATH`. On Linux, apply manages the
+Claude Desktop login entry and the Claude Code URL handler for that reason: the
+applications write their own copies with absolute paths, which bypass the shim.
+An application update or its "launch at login" setting can rewrite those
+entries; the next apply restores them. On macOS, applications started from
+Finder, the Dock, or a login item do not search `PATH`, so only a host started
+from a terminal inherits the key there.
+
 ## Legacy migration
 
 The migration helper imports supported legacy plaintext sources without
@@ -675,4 +728,6 @@ Rotate one provider at a time:
 4. Revoke the old credential.
 5. Revalidate the consumer and confirm ordinary shells remain clean.
 
-Rotate multi-field credentials as one unit.
+Rotate multi-field credentials as one unit. A key injected at an application
+boundary reaches running hosts only when they restart, so restart each wrapped
+host between steps 2 and 3 (see [App-boundary injection](#app-boundary-injection)).

@@ -502,9 +502,13 @@ expected_gui_source_inventory=$(
   fail 'Darwin-only GUI source inventory changed without updating the Linux gate'
 
 assert_line '.local/share/applications' "$test_root/darwin-ignore"
+assert_line '.config/autostart' "$test_root/darwin-ignore"
+! grep -Fqx -- '.config/autostart' "$test_root/linux-ignore" ||
+  fail 'Linux unexpectedly ignores .config/autostart'
 
 linux_source_inventory=$(
   find \
+    "$repo_root/home/dot_config/autostart" \
     "$repo_root/home/dot_config/systemd" \
     "$repo_root/home/private_dot_local/private_share/applications" \
     -type f -print |
@@ -513,10 +517,13 @@ linux_source_inventory=$(
 )
 expected_linux_source_inventory=$(
   printf '%s\n' \
+    'dot_config/autostart/private_claude-desktop.desktop' \
+    'dot_config/autostart/private_claude.desktop' \
     'dot_config/systemd/user/app-com.anthropic.Claude-.scope.d/50-oom-continue.conf' \
     'dot_config/systemd/user/builds.slice' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
+    'private_dot_local/private_share/applications/claude-code-url-handler.desktop' \
     'private_dot_local/private_share/applications/proton-pass-url-handler.desktop'
 )
 [[ $linux_source_inventory == $expected_linux_source_inventory ]] ||
