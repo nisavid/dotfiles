@@ -1506,12 +1506,14 @@ Use the collector staged above. `RECOVERY_PREIMAGE_COLLECTOR_SHA256` is its
 reviewed manifest digest, not a hash taken from the staged file; the entry gate
 checks both that digest and the digest embedded in `ready.json`.
 
-The frozen planning input observed these classic `main` protections:
+The frozen planning input observed these classic `main` protections. Its
+required-check rows are an example: they show the set that protection required
+at that snapshot.
 
 | Setting | Observed value |
 | --- | --- |
-| Required checks | `check conventional commit compliance` (`15368`), `CodeRabbit` (`347564`), `zsh deployment portability` (`15368`), and `Verify trusted base against candidate data` (`15368`) |
-| Required-check sources | `CodeRabbit` reports a commit status created by `coderabbitai[bot]` (`136622811`); the other three report check runs from app `15368` |
+| Required checks (example: snapshot set) | `check conventional commit compliance` (`15368`), `CodeRabbit` (`347564`), `zsh deployment portability` (`15368`), and `Verify trusted base against candidate data` (`15368`) |
+| Required-check sources (example: snapshot set) | `CodeRabbit` reports a commit status created by `coderabbitai[bot]` (`136622811`); the other checks report check runs from app `15368` |
 | Strict checks | enabled |
 | Pull-request review | one approval; stale reviews dismissed |
 | Administrator enforcement | enabled |
@@ -1521,6 +1523,15 @@ The frozen planning input observed these classic `main` protections:
 | Required signatures, branch lock, and fork syncing | disabled |
 | Effective rules and rulesets | none observed |
 
+The collector fixes no exact count and no check name other than the
+trusted-base check. Live protection must require exactly the required checks
+recorded in the request, each with the app ID recorded there. The request may
+record 1 to 64 checks with unique contexts, and they must include `Verify
+trusted base against candidate data`, the only check the exception removes.
+Every recorded check must name a positive app ID. Classic protection reports a
+check that any source may satisfy with `"app_id": null`, and the collector
+rejects that record, so pin each required check to its app before collection.
+
 This snapshot is only a planning precondition. Establish the merge freeze
 described below before this collection. Build
 the canonical request in a caller-owned mode-`0700` private parent outside both
@@ -1528,6 +1539,10 @@ checkouts. The request contains only public repository evidence, but its mode
 and path rules are the same as the bounded recovery evidence.
 `RECOVERY_REVIEWED_SOURCE` is the reviewed source commit that must occur in the
 pull request's complete commit list; it is not a candidate-supplied authority.
+The `checks` and `sources` lists below hold the example snapshot set. Before
+building the request, replace both lists with live protection's required checks
+and their sources as the reviewed planning input records them, one source per
+check.
 
 ```zsh
 set -euo pipefail
@@ -1595,6 +1610,7 @@ import sys
 
 path, number, base, head, source = sys.argv[1:]
 root = "https://api.github.com/repos/nisavid/dotfiles/branches/main/protection"
+# Example: the snapshot set. Record the reviewed required checks and sources.
 checks = [
     {"context": "check conventional commit compliance", "app_id": 15368},
     {"context": "CodeRabbit", "app_id": 347564},
@@ -2135,7 +2151,7 @@ try:
     ):
         stop("request binding")
     checks = request["required_checks"]
-    if not isinstance(checks, list) or len(checks) != 4:
+    if not isinstance(checks, list) or not 1 <= len(checks) <= 64:
         stop("required checks")
     contexts = set()
     for record in checks:
@@ -2635,7 +2651,8 @@ exit "$merge_command_status"
 ```
 
 Canonicalize and compare the fresh full response with the saved preimage,
-including all four app-pinned checks and every unrelated protection. Repeat the
+including every app-pinned required check recorded in the request and every
+unrelated protection. Repeat the
 effective-rule and ruleset reads. Keep the merge freeze until the comparison
 passes and live `main` is shown to contain the reviewed recovery tree and the
 single new allowed-signer fingerprint.
