@@ -93,7 +93,11 @@ class InteroperabilityProtocolTests(unittest.TestCase):
             "control_signature", protocol["envelopes"]["required_envelope_fields"]
         )
         relay = protocol["relay_binding"]
+        self.assertEqual(45, protocol["session"]["relay_wait_minutes"])
         self.assertIn("phase-B envelope digest", relay["selection"])
+        self.assertIn("one monotonic 2,700-second deadline", relay["selection"])
+        self.assertIn("remaining deadline budget", relay["selection"])
+        self.assertIn("at or after the deadline", relay["selection"])
         coverage = relay["observation_coverage"]
         self.assertEqual("GET", coverage["method"])
         self.assertEqual(100, coverage["per_page"])
@@ -1011,6 +1015,9 @@ class QualificationProcedureTests(unittest.TestCase):
         self.assertIn("source-openssl-validsig.status", procedure)
         self.assertIn("fresh session identifier and new workflow runs", procedure)
         normalized_procedure = " ".join(procedure.split())
+        self.assertIn("one monotonic 2,700-second deadline", normalized_procedure)
+        self.assertIn("remaining aggregate budget", normalized_procedure)
+        self.assertIn("at or after the deadline", normalized_procedure)
         self.assertIn("same locally merged artifact", normalized_procedure)
         self.assertIn(
             "creates and verifies a fresh detached signature", normalized_procedure
@@ -1059,6 +1066,149 @@ class QualificationProcedureTests(unittest.TestCase):
                 )
                 self.assertEqual(0, first_attempt.returncode, first_attempt.stderr)
                 self.assertNotEqual(0, rerun.returncode)
+
+    def test_relay_wait_enforces_one_monotonic_45_minute_deadline(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        step = workflow[
+            workflow.index("- name: Wait for the matching public peer response") :
+            workflow.index("- name: Close the live interoperability phase")
+        ]
+        run_lines = step[step.index("        run: |\n") + len("        run: |\n") :]
+        run_script = "\n".join(
+            line.removeprefix("          ") for line in run_lines.splitlines()
+        )
+        start = run_script.index('target="pq-sequoia-publish-peer-response-')
+        end_marker = '[[ -n "$response_run" ]]'
+        end = run_script.index(end_marker, start) + len(end_marker)
+        relay_wait = run_script[start:end]
+
+        cases = (
+            ("immediately-before", [30] * 44 + [59], 45, 0, "2699"),
+            ("at-deadline", [30] * 44 + [60], 45, 1, "2700"),
+            ("after-deadline", [30] * 44 + [61], 45, 1, "2701"),
+            ("exhausted", [30] * 44 + [25, 1], 0, 1, "2700"),
+        )
+        for name, durations, ready_query, expected_exit, expected_clock in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                tools = root / "tools"
+                scratch = root / "scratch"
+                script_dir = root / "scripts"
+                protocol_dir = root / "docs/crypto/pq-sequoia-macos"
+                for path in (
+                    tools,
+                    scratch / "public",
+                    scratch / "evidence",
+                    scratch / "rejected-evidence",
+                    script_dir,
+                    protocol_dir,
+                ):
+                    path.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(PROTOCOL, protocol_dir / "interop-v1.json")
+
+                clock = root / "clock"
+                queries = root / "queries"
+                sleeps = root / "sleeps"
+                duration_fixture = root / "durations"
+                clock.write_text("0\n", encoding="utf-8")
+                queries.write_text("", encoding="utf-8")
+                sleeps.write_text("", encoding="utf-8")
+                duration_fixture.write_text(
+                    "".join(f"{duration}\n" for duration in durations),
+                    encoding="utf-8",
+                )
+
+                fake_python = tools / "python3"
+                fake_python.write_text(
+                    "#!/bin/sh\n"
+                    "set -eu\n"
+                    "now=$(cat \"$FAKE_CLOCK\")\n"
+                    "printf '%s000000000\\n' \"$now\"\n",
+                    encoding="utf-8",
+                )
+                fake_python.chmod(0o755)
+                fake_sleep = tools / "sleep"
+                fake_sleep.write_text(
+                    "#!/bin/sh\n"
+                    "set -eu\n"
+                    "printf '%s\\n' \"$1\" >>\"$FAKE_SLEEPS\"\n"
+                    "seconds=${1%%.*}\n"
+                    "now=$(cat \"$FAKE_CLOCK\")\n"
+                    "printf '%s\\n' \"$((now + seconds))\" >\"$FAKE_CLOCK\"\n",
+                    encoding="utf-8",
+                )
+                fake_sleep.chmod(0o755)
+
+                relay = script_dir / "pq-sequoia-macos"
+                relay.write_text(
+                    "#!/bin/bash\n"
+                    "set -euo pipefail\n"
+                    "count=$(wc -l <\"$FAKE_QUERIES\")\n"
+                    "count=$((count + 1))\n"
+                    "start=$(cat \"$FAKE_CLOCK\")\n"
+                    "duration=$(sed -n \"${count}p\" \"$FAKE_DURATIONS\")\n"
+                    "duration=${duration:-30}\n"
+                    "output=\n"
+                    "timeout=default\n"
+                    "while (($#)); do\n"
+                    "  case $1 in\n"
+                    "    --output) output=$2; shift 2 ;;\n"
+                    "    --query-timeout-seconds) timeout=$2; shift 2 ;;\n"
+                    "    *) shift ;;\n"
+                    "  esac\n"
+                    "done\n"
+                    "printf '%s %s\\n' \"$start\" \"$timeout\" >>\"$FAKE_QUERIES\"\n"
+                    "printf '%s\\n' \"$((start + duration))\" >\"$FAKE_CLOCK\"\n"
+                    "ready=false\n"
+                    "selected=null\n"
+                    "matching='[]'\n"
+                    "if [[ $count == \"$FAKE_READY_QUERY\" ]]; then\n"
+                    "  ready=true\n"
+                    "  selected=999\n"
+                    "  matching='[{\"databaseId\":999}]'\n"
+                    "fi\n"
+                    "printf '{\"selection_ready\":%s,\"exchange_binding\":{\"selected_run_id\":%s},\"matching_runs\":%s}\\n' \"$ready\" \"$selected\" \"$matching\" >\"$output\"\n",
+                    encoding="utf-8",
+                )
+                relay.chmod(0o755)
+
+                environment = {
+                    **os.environ,
+                    "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+                    "FAKE_CLOCK": str(clock),
+                    "FAKE_DURATIONS": str(duration_fixture),
+                    "FAKE_QUERIES": str(queries),
+                    "FAKE_READY_QUERY": str(ready_query),
+                    "FAKE_SLEEPS": str(sleeps),
+                    "GITHUB_REPOSITORY": "example/project",
+                    "GITHUB_RUN_ID": "123",
+                    "PQ_CANDIDATE_COMMIT": "a" * 40,
+                    "PQ_PHASE_B_SHA256": "b" * 64,
+                    "PQ_SCRATCH": str(scratch),
+                    "PQ_SESSION_ID": "c" * 64,
+                }
+                result = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", relay_wait],
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=10,
+                )
+
+                self.assertEqual(expected_exit, result.returncode, result.stderr)
+                query_records = queries.read_text(encoding="utf-8").splitlines()
+                self.assertEqual(len(durations), len(query_records))
+                self.assertEqual(expected_clock, clock.read_text(encoding="utf-8").strip())
+                selected = scratch / "evidence/relay-observation-selection.json"
+                self.assertEqual(expected_exit == 0, selected.exists())
+                if name == "exhausted":
+                    self.assertEqual("2695 5.000000000", query_records[-1])
+                    self.assertEqual(
+                        "4.000000000",
+                        sleeps.read_text(encoding="utf-8").splitlines()[-1],
+                    )
 
     def test_final_duplicate_failure_retains_both_observation_preimages(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")

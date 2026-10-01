@@ -19,7 +19,7 @@ revision and receives separate acceptance.
   the Homebrew/core formula revision, and the Apple Silicon Sequoia bottle.
 - [`interop-v1.json`](interop-v1.json) defines the four-phase exchange with
   dotfiles #148. Its review-candidate SHA-256 is
-  `be53560bb68e68598aba5c2be953d635b6b906979e434b2ca08a0758a0327098`.
+  `57061f2be265e6d392d36398a193992f46814dccbd72a42e199cbdac563244df`.
   Its fixed [message](fixtures/v1/message.bin) is exactly 51 bytes and has SHA-256
   `6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337`.
 - [`pq-sequoia-macos`](../../../scripts/pq-sequoia-macos) validates those
@@ -346,10 +346,15 @@ provider or CLI error, timeout, interruption, malformed page, malformed run,
 conflicting observation, absent selected run at the final check, or incomplete
 traversal rejects without leaving an observation. A completed duplicate or
 rerun traversal leaves only the fixed rejected observation files described
-above. The 60-second query timeout is an operational fail-closed bound, not an
-accepted page or record cutoff. The relay window remains 45 minutes. Ambiguity,
-revision drift, or any mismatch rejects the session and cleans up; a later job
-cannot resume it because the required secret no longer exists.
+above. The 45-minute relay window is one monotonic 2,700-second deadline for
+the complete selection wait. Before every traversal, the workflow passes the
+smaller of the 60-second per-query limit and the remaining aggregate budget.
+It starts no traversal after exhaustion, refuses a ready response at or after
+the deadline, and caps each 30-second poll sleep to the remaining aggregate
+budget. The per-query timeout remains an operational fail-closed bound, not an
+accepted page or record cutoff. Ambiguity, revision drift, deadline exhaustion,
+or any mismatch rejects the session and cleans up; a later job cannot resume it
+because the required secret no longer exists.
 
 Submissions after the final check are outside the guarantee. These traversals
 are not a permanent or global uniqueness guarantee, are not an atomic provider

@@ -483,10 +483,34 @@ jobs:
         run: |
           set -euo pipefail
           target="pq-sequoia-publish-peer-response-$PQ_SESSION_ID-$GITHUB_RUN_ID-$PQ_PHASE_B_SHA256"
+          relay_wait_minutes=$(jq -er '
+            .session.relay_wait_minutes
+            | select(type == "number" and . > 0 and floor == .)
+          ' docs/crypto/pq-sequoia-macos/interop-v1.json)
+          [[ "$relay_wait_minutes" =~ ^[1-9][0-9]*$ ]]
+          relay_wait_ns=$((relay_wait_minutes * 60 * 1000000000))
+          monotonic_ns() {
+            local value
+            value=$(python3 -c 'import time; print(time.monotonic_ns())')
+            [[ "$value" =~ ^[0-9]+$ ]]
+            printf '%s\n' "$value"
+          }
+          relay_started_ns=$(monotonic_ns)
+          relay_deadline_ns=$((relay_started_ns + relay_wait_ns))
           response_run=
           for _ in {1..90}; do
+            now_ns=$(monotonic_ns)
+            remaining_ns=$((relay_deadline_ns - now_ns))
+            (( remaining_ns > 0 )) || break
+            query_timeout_ns=$remaining_ns
+            (( query_timeout_ns < 60000000000 )) \
+              || query_timeout_ns=60000000000
+            printf -v query_timeout_seconds '%d.%09d' \
+              "$((query_timeout_ns / 1000000000))" \
+              "$((query_timeout_ns % 1000000000))"
             if scripts/pq-sequoia-macos record-relay-observation \
               --repository "$GITHUB_REPOSITORY" \
+              --query-timeout-seconds "$query_timeout_seconds" \
               --stage selection \
               --session-id "$PQ_SESSION_ID" \
               --qualifier-run-id "$GITHUB_RUN_ID" \
@@ -524,6 +548,8 @@ jobs:
             if [[ "$(jq -r '.selection_ready' \
               "$PQ_SCRATCH/public/relay-observation-selection.json")" == true ]]
             then
+              now_ns=$(monotonic_ns)
+              (( now_ns < relay_deadline_ns )) || break
               response_run=$(jq -r '.exchange_binding.selected_run_id' \
                 "$PQ_SCRATCH/public/relay-observation-selection.json")
               cp "$PQ_SCRATCH/public/relay-observation-selection.json" \
@@ -533,7 +559,15 @@ jobs:
                 >"$PQ_SCRATCH/public/relay-run.json"
             fi
             [[ -z "$response_run" ]] || break
-            sleep 30
+            now_ns=$(monotonic_ns)
+            remaining_ns=$((relay_deadline_ns - now_ns))
+            (( remaining_ns > 0 )) || break
+            sleep_ns=$remaining_ns
+            (( sleep_ns < 30000000000 )) || sleep_ns=30000000000
+            printf -v sleep_seconds '%d.%09d' \
+              "$((sleep_ns / 1000000000))" \
+              "$((sleep_ns % 1000000000))"
+            sleep "$sleep_seconds"
           done
           [[ -n "$response_run" ]]
           scripts/pq-sequoia-macos validate-relay \
