@@ -3443,17 +3443,6 @@ class RecoveryPreimageTests(unittest.TestCase):
         finally:
             self._force_process_group_cleanup(int(record["pgid"]))
 
-    def _write_request_with_checks(
-        self, checks: list[dict[str, object]], sources: list[dict[str, object]]
-    ) -> None:
-        request = self._request_value()
-        request["required_checks"] = checks
-        request["required_check_sources"] = sources
-        status = request["expected_protection"]["required_status_checks"]
-        status["contexts"] = [check["context"] for check in checks]
-        status["checks"] = checks
-        self._write_request(request)
-
     def test_request_without_the_recovery_exception_fails_before_state_creation(
         self,
     ) -> None:
@@ -3485,7 +3474,7 @@ class RecoveryPreimageTests(unittest.TestCase):
                     self._required_checks_outcome(checks),
                     {"error": "required checks do not include the recovery exception"},
                 )
-                self._write_request_with_checks(checks, sources)
+                self._use_required_checks(checks, sources)
 
                 self._assert_request_fails_before_state_creation()
 
@@ -3510,7 +3499,7 @@ class RecoveryPreimageTests(unittest.TestCase):
                     self._required_checks_outcome(checks),
                     {"error": "required check context is invalid"},
                 )
-                self._write_request_with_checks(checks, _check_run_sources(checks))
+                self._use_required_checks(checks, _check_run_sources(checks))
 
                 self._assert_request_fails_before_state_creation()
 
@@ -3540,7 +3529,7 @@ class RecoveryPreimageTests(unittest.TestCase):
                 self.assertEqual(self._required_checks_outcome(value), bound_error)
 
         oversized = checks_of(MAX_REQUIRED_CHECKS + 1)
-        self._write_request_with_checks(oversized, _check_run_sources(oversized))
+        self._use_required_checks(oversized, _check_run_sources(oversized))
 
         self._assert_request_fails_before_state_creation()
 
