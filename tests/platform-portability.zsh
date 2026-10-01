@@ -103,8 +103,23 @@ grep -Fq '"$RUNNER_TEMP/age/age-inspect"' "$workflow" ||
   fail 'platform workflow does not install age-inspect'
 grep -Fq 'test "$(age-inspect --version)" = "v${AGE_VERSION}"' "$workflow" ||
   fail 'platform workflow does not verify the age parser version'
-grep -Fq 'python3 -m pip install uv==0.11.32' "$workflow" ||
+grep -Eqx '[[:space:]]+run: python3 -m pip install uv==0\.11\.32' "$workflow" ||
   fail 'platform workflow does not install the pinned uv runtime'
+# Buildkite pins the same chezmoi, Python and uv versions as the workflow, and
+# downloads uv at its pinned version.
+for linux_tool_pin in \
+  'readonly CHEZMOI_VERSION=2.71.0' \
+  'readonly PYTHON_VERSION=3.12' \
+  'readonly UV_VERSION=0.11.32'
+do
+  grep -Fqx -- "$linux_tool_pin" "$linux_runner" ||
+    fail "Buildkite does not pin the tool version the platform workflow pins: $linux_tool_pin"
+done
+grep -Fq 'CHEZMOI_VERSION: "2.71.0"' "$workflow" &&
+  grep -Fq 'python-version: "3.12"' "$workflow" ||
+  fail 'platform workflow does not pin the chezmoi and Python versions Buildkite pins'
+grep -Fq '"https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${uv_asset}.tar.gz" \' "$linux_runner" ||
+  fail 'Buildkite does not download uv at its pinned version'
 grep -Fq \
   "python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'" \
   "$test_groups" ||
