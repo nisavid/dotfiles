@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import json
@@ -106,6 +107,7 @@ GRAPHQL_QUERY_SHA256 = (
 PUBLIC_CHECK_RUN_ID = 100_415_257_548
 FIRST_ID_OVER_SIGNED_32_BIT = 2_147_483_648
 PAYLOAD_ARTIFACT_MAX_BYTES = 4_194_304
+MAX_REQUIRED_CHECKS = 64
 REQUIRED_SUPPORT_TOOLS = (
     "awk",
     "cat",
@@ -181,6 +183,47 @@ FIXTURE_CI_CREATOR = _github_account(
     "https://github.com/apps/fixture-ci",
     "Bot",
 )
+# The owner's planned protection set renames one check and adds a Buildkite
+# commit status. Its Buildkite App and status-creator identities are fixture
+# placeholders, not Buildkite's GitHub identities.
+BUILDKITE_CONTEXT = "buildkite/dotfiles"
+FIXTURE_BUILDKITE_APP_ID = 555_002
+FIXTURE_BUILDKITE_CREATOR = _github_account(
+    "fixture-buildkite[bot]",
+    5_550_002,
+    "BOT_kgDOfixturebk",
+    f"https://avatars.githubusercontent.com/in/{FIXTURE_BUILDKITE_APP_ID}?v=4",
+    "https://github.com/apps/fixture-buildkite",
+    "Bot",
+)
+PLANNED_REQUIRED_CHECKS = [
+    {"context": "check conventional commit compliance", "app_id": 15368},
+    {"context": CODERABBIT_CONTEXT, "app_id": CODERABBIT_APP_ID},
+    {"context": "platform portability", "app_id": 15368},
+    {"context": BUILDKITE_CONTEXT, "app_id": FIXTURE_BUILDKITE_APP_ID},
+    {"context": EXCEPTION_CONTEXT, "app_id": 15368},
+]
+PLANNED_REQUIRED_CHECK_SOURCES = [
+    {
+        "context": "check conventional commit compliance",
+        "source": "check-run",
+        "app_id": 15368,
+    },
+    {
+        "context": CODERABBIT_CONTEXT,
+        "source": "commit-status",
+        "creator_id": CODERABBIT_STATUS_CREATOR_ID,
+        "creator_login": CODERABBIT_STATUS_CREATOR_LOGIN,
+    },
+    {"context": "platform portability", "source": "check-run", "app_id": 15368},
+    {
+        "context": BUILDKITE_CONTEXT,
+        "source": "commit-status",
+        "creator_id": FIXTURE_BUILDKITE_CREATOR["id"],
+        "creator_login": FIXTURE_BUILDKITE_CREATOR["login"],
+    },
+    {"context": EXCEPTION_CONTEXT, "source": "check-run", "app_id": 15368},
+]
 IMPOSTOR_CREATOR = _github_account(
     "fixture-impostor",
     4_242_424,
@@ -284,6 +327,48 @@ def _later_coderabbit_status(
     )
 
 
+def _buildkite_status() -> dict[str, object]:
+    return _commit_status(
+        54_265_840_000,
+        "success",
+        "2026-09-16T07:59:00Z",
+        "Build #1 passed",
+        context=BUILDKITE_CONTEXT,
+        creator=FIXTURE_BUILDKITE_CREATOR,
+    )
+
+
+def _sorted_checks(checks: list[dict[str, object]]) -> list[dict[str, object]]:
+    return sorted(
+        checks, key=lambda check: (str(check["context"]), int(check["app_id"]))
+    )
+
+
+def _check_run_sources(checks: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"context": check["context"], "source": "check-run", "app_id": check["app_id"]}
+        for check in checks
+    ]
+
+
+def _replace_runbook_example(
+    script: str, name: str, example: object, replacement: object
+) -> str:
+    """Swap the runbook's example `name = [...]` literal for another record set."""
+    lines = script.split("\n")
+    starts = [index for index, line in enumerate(lines) if line == f"{name} = ["]
+    if len(starts) != 1:
+        raise AssertionError(f"expected one runbook {name} example")
+    end = lines.index("]", starts[0] + 1)
+    literal = "\n".join(lines[starts[0] : end + 1]).partition(" = ")[2]
+    if ast.literal_eval(literal) != example:
+        raise AssertionError(f"the runbook {name} example is not the snapshot set")
+    if replacement == example:
+        return script
+    lines[starts[0] : end + 1] = [f"{name} = {replacement!r}"]
+    return "\n".join(lines)
+
+
 def _review(
     identifier: int,
     user: dict[str, object],
@@ -369,6 +454,9 @@ class RecoveryPreimageTests(unittest.TestCase):
         self.fixture = self.private / "fixture.json"
         self.request = self.private / "request.json"
         self.state = self.private / "state"
+        self.required_checks = REQUIRED_CHECKS
+        self.required_check_sources = REQUIRED_CHECK_SOURCES
+        self.required_statuses: list[dict[str, object]] = []
         self._write_fixture()
         self._write_fake_gh()
         self._write_request()
@@ -405,9 +493,9 @@ class RecoveryPreimageTests(unittest.TestCase):
             "required_status_checks": {
                 "url": f"{root}/required_status_checks",
                 "strict": True,
-                "contexts": [check["context"] for check in REQUIRED_CHECKS],
+                "contexts": [check["context"] for check in self.required_checks],
                 "contexts_url": f"{root}/required_status_checks/contexts",
-                "checks": REQUIRED_CHECKS,
+                "checks": self.required_checks,
             },
             "required_pull_request_reviews": {
                 "url": f"{root}/required_pull_request_reviews",
@@ -433,11 +521,11 @@ class RecoveryPreimageTests(unittest.TestCase):
     def _fixture_value(self) -> dict[str, object]:
         status_contexts = {
             source["context"]
-            for source in REQUIRED_CHECK_SOURCES
+            for source in self.required_check_sources
             if source["source"] == "commit-status"
         }
         check_runs = []
-        for index, check in enumerate(REQUIRED_CHECKS, start=1):
+        for index, check in enumerate(self.required_checks, start=1):
             if check["context"] in status_contexts:
                 continue
             check_runs.append(
@@ -504,7 +592,10 @@ class RecoveryPreimageTests(unittest.TestCase):
             ],
             "requested_reviewers": {"users": [], "teams": []},
             "check_runs": {"total_count": len(check_runs), "check_runs": check_runs},
-            "statuses": _coderabbit_status_history(),
+            "statuses": [
+                *copy.deepcopy(self.required_statuses),
+                *_coderabbit_status_history(),
+            ],
             "protection": self._protection(),
             "effective_rules": [],
             "rulesets": [],
@@ -929,8 +1020,8 @@ class RecoveryPreimageTests(unittest.TestCase):
             "base_commit": BASE_COMMIT,
             "head_commit": HEAD_COMMIT,
             "reviewed_source_commit": REVIEWED_SOURCE_COMMIT,
-            "required_checks": REQUIRED_CHECKS,
-            "required_check_sources": REQUIRED_CHECK_SOURCES,
+            "required_checks": self.required_checks,
+            "required_check_sources": self.required_check_sources,
             "trusted_reviewers": TRUSTED_REVIEWERS,
             "expected_protection": self._protection(),
             "expected_effective_rules": [],
@@ -941,6 +1032,54 @@ class RecoveryPreimageTests(unittest.TestCase):
         request = self._request_value() if value is None else value
         self.request.write_bytes(_json_bytes(request))
         self.request.chmod(0o600)
+
+    def _use_required_checks(
+        self,
+        checks: list[dict[str, object]],
+        sources: list[dict[str, object]],
+        statuses: tuple[dict[str, object], ...] = (),
+    ) -> None:
+        """Make live protection, its evidence, and the request use another set."""
+        self.required_checks = checks
+        self.required_check_sources = sources
+        self.required_statuses = list(statuses)
+        self._write_fixture()
+        self._write_request()
+
+    def _required_checks_outcome(self, value: object) -> dict[str, object]:
+        """Validate one required-check set with the collector's own function."""
+        script = textwrap.dedent(f"""\
+            import json
+            import runpy
+            import sys
+
+            namespace = runpy.run_path({os.fspath(COLLECTOR)!r}, run_name="unit")
+            try:
+                checks = namespace["_required_checks"](json.load(sys.stdin))
+            except namespace["PreimageError"] as error:
+                outcome = {{"error": str(error)}}
+            else:
+                outcome = {{"checks": checks}}
+            print(json.dumps(outcome))
+            """)
+        result = subprocess.run(
+            [os.fspath(self.python_launcher), "-I", "-B", "-S", "-c", script],
+            input=json.dumps(value).encode("utf-8"),
+            capture_output=True,
+            check=False,
+            timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def _assert_request_fails_before_state_creation(self) -> None:
+        result = self._run()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"recovery preimage preparation failed\n")
+        self.assertFalse(self.state.exists())
+        self.assertFalse(self.calls.exists())
 
     def _set_scenario(self, scenario: str) -> None:
         self.control.write_bytes(_json_bytes({"scenario": scenario}))
@@ -1424,8 +1563,16 @@ class RecoveryPreimageTests(unittest.TestCase):
             blocks.append("\n".join(lines[index + 1 : fence_end]))
             index = fence_end + 1
         self.assertEqual(len(blocks), 1)
+        script = blocks[0]
+        # The runbook's request records the snapshot set as an example; an
+        # operator records the reviewed set for live protection in its place.
+        for name, example, recorded in (
+            ("checks", REQUIRED_CHECKS, self.required_checks),
+            ("sources", REQUIRED_CHECK_SOURCES, self.required_check_sources),
+        ):
+            script = _replace_runbook_example(script, name, example, recorded)
         target = self.private / "recovery-preimage-launcher.zsh"
-        target.write_text("\n".join(blocks) + "\n", encoding="utf-8")
+        target.write_text(script + "\n", encoding="utf-8")
         target.chmod(0o700)
         return target
 
@@ -2050,7 +2197,11 @@ class RecoveryPreimageTests(unittest.TestCase):
             for run in observations["check_runs"]["check_runs"]
             if run["name"] == EXCEPTION_CONTEXT and run["app"]["id"] == 15368
         ]
-        self.assertEqual([run["id"] for run in matches], [4, 101, 102])
+        # The fixture numbers each required check run by its protection position.
+        exception_run_id = 1 + [check["context"] for check in REQUIRED_CHECKS].index(
+            EXCEPTION_CONTEXT
+        )
+        self.assertEqual([run["id"] for run in matches], [exception_run_id, 101, 102])
         self.assertTrue(all(run["status"] == "completed" for run in matches))
         self.assertTrue(all(run["conclusion"] == "failure" for run in matches))
         self._assert_read_only_calls()
@@ -2863,7 +3014,11 @@ class RecoveryPreimageTests(unittest.TestCase):
             )
         self.assertEqual(
             [run["app"] for run in observations["check_runs"]["check_runs"]],
-            [{"id": 15368, "slug": "github-actions"}] * 3,
+            [
+                {"id": source["app_id"], "slug": "github-actions"}
+                for source in REQUIRED_CHECK_SOURCES
+                if source["source"] == "check-run"
+            ],
         )
         self._assert_read_only_calls()
 
@@ -3288,36 +3443,177 @@ class RecoveryPreimageTests(unittest.TestCase):
         finally:
             self._force_process_group_cleanup(int(record["pgid"]))
 
-    def test_request_outside_the_four_check_contract_fails_before_state_creation(
+    def test_request_without_the_recovery_exception_fails_before_state_creation(
         self,
     ) -> None:
-        without_age_check = [
-            check for check in REQUIRED_CHECKS if check["context"] != EXCEPTION_CONTEXT
-        ]
+        def without_exception(
+            records: list[dict[str, object]],
+        ) -> list[dict[str, object]]:
+            return [
+                record for record in records if record["context"] != EXCEPTION_CONTEXT
+            ]
+
+        retired_source = _check_run_sources([RETIRED_REQUIRED_CHECK])
         cases = {
-            "retired check restored": [*REQUIRED_CHECKS, RETIRED_REQUIRED_CHECK],
-            "exception-window set": without_age_check,
-            "age check omitted": [*without_age_check, RETIRED_REQUIRED_CHECK],
+            "exception-window set": (
+                without_exception(REQUIRED_CHECKS),
+                without_exception(REQUIRED_CHECK_SOURCES),
+            ),
+            "exception replaced by a retired check": (
+                [*without_exception(REQUIRED_CHECKS), RETIRED_REQUIRED_CHECK],
+                [*without_exception(REQUIRED_CHECK_SOURCES), *retired_source],
+            ),
+            "planned set without the exception": (
+                without_exception(PLANNED_REQUIRED_CHECKS),
+                without_exception(PLANNED_REQUIRED_CHECK_SOURCES),
+            ),
+        }
+        for name, (checks, sources) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(
+                    self._required_checks_outcome(checks),
+                    {"error": "required checks do not include the recovery exception"},
+                )
+                self._use_required_checks(checks, sources)
+
+                self._assert_request_fails_before_state_creation()
+
+    def test_duplicate_required_check_contexts_fail_before_state_creation(
+        self,
+    ) -> None:
+        portability = PLANNED_REQUIRED_CHECKS[2]
+        cases = {
+            "repeated record": [*PLANNED_REQUIRED_CHECKS, portability],
+            "context under another app": [
+                *PLANNED_REQUIRED_CHECKS,
+                {**portability, "app_id": 15369},
+            ],
+            "repeated exception": [
+                *REQUIRED_CHECKS,
+                {"context": EXCEPTION_CONTEXT, "app_id": 15368},
+            ],
         }
         for name, checks in cases.items():
             with self.subTest(name):
-                request = self._request_value()
-                request["required_checks"] = checks
-                status = request["expected_protection"]["required_status_checks"]
-                status["contexts"] = [check["context"] for check in checks]
-                status["checks"] = checks
-                self.request.write_bytes(_json_bytes(request))
-                self.request.chmod(0o600)
-
-                result = self._run()
-
-                self.assertEqual(result.returncode, 1)
-                self.assertEqual(result.stdout, b"")
                 self.assertEqual(
-                    result.stderr, b"recovery preimage preparation failed\n"
+                    self._required_checks_outcome(checks),
+                    {"error": "required check context is invalid"},
                 )
-                self.assertFalse(self.state.exists())
-                self.assertFalse(self.calls.exists())
+                self._use_required_checks(checks, _check_run_sources(checks))
+
+                self._assert_request_fails_before_state_creation()
+
+    def test_required_check_count_is_bounded(self) -> None:
+        exception = {"context": EXCEPTION_CONTEXT, "app_id": 15368}
+
+        def checks_of(count: int) -> list[dict[str, object]]:
+            others = [
+                {"context": f"fixture check {index:02d}", "app_id": 15368}
+                for index in range(count - 1)
+            ]
+            return [*others, exception]
+
+        bound_error = {
+            "error": f"required checks must contain 1 to {MAX_REQUIRED_CHECKS} records"
+        }
+        largest = checks_of(MAX_REQUIRED_CHECKS)
+        self.assertEqual(
+            self._required_checks_outcome(largest), {"checks": _sorted_checks(largest)}
+        )
+        for name, value in {
+            "empty": [],
+            "over the bound": checks_of(MAX_REQUIRED_CHECKS + 1),
+            "not a list": {EXCEPTION_CONTEXT: exception},
+        }.items():
+            with self.subTest(name):
+                self.assertEqual(self._required_checks_outcome(value), bound_error)
+
+        oversized = checks_of(MAX_REQUIRED_CHECKS + 1)
+        self._use_required_checks(oversized, _check_run_sources(oversized))
+
+        self._assert_request_fails_before_state_creation()
+
+    def _assert_ready_payloads_cover(
+        self, state: Path, checks: list[dict[str, object]]
+    ) -> dict[str, object]:
+        ready = json.loads((state / "ready.json").read_bytes())
+        payloads = {
+            name: json.loads((state / reference["path"]).read_bytes())
+            for name, reference in ready["payloads"].items()
+        }
+        recorded = _sorted_checks(checks)
+        self.assertEqual(ready["binding"]["required_checks"], recorded)
+        self.assertEqual(
+            payloads["restore_checks"], {"strict": True, "checks": recorded}
+        )
+        self.assertEqual(
+            payloads["exception_checks"],
+            {
+                "strict": True,
+                "checks": [
+                    check for check in recorded if check["context"] != EXCEPTION_CONTEXT
+                ],
+            },
+        )
+        status = payloads["protection_preimage"]["required_status_checks"]
+        self.assertEqual(status["checks"], recorded)
+        self.assertEqual(status["contexts"], [check["context"] for check in recorded])
+        return payloads
+
+    def test_five_check_protection_set_is_collected_with_one_exception(self) -> None:
+        self._use_required_checks(
+            PLANNED_REQUIRED_CHECKS,
+            PLANNED_REQUIRED_CHECK_SOURCES,
+            (_buildkite_status(),),
+        )
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(result.stdout, b"recovery preimage ready\n")
+        payloads = self._assert_ready_payloads_cover(
+            self.state, PLANNED_REQUIRED_CHECKS
+        )
+        self.assertEqual(len(payloads["restore_checks"]["checks"]), 5)
+        self.assertEqual(len(payloads["exception_checks"]["checks"]), 4)
+        self.assertIn(_buildkite_status(), payloads["observations"]["statuses"])
+        self._assert_read_only_calls()
+
+    def test_five_check_protection_set_round_trips_through_exception_and_restore(
+        self,
+    ) -> None:
+        self._use_required_checks(
+            PLANNED_REQUIRED_CHECKS,
+            PLANNED_REQUIRED_CHECK_SOURCES,
+            (_buildkite_status(),),
+        )
+
+        self._assert_recovery_outcome("success", "zero", "preimage", 1, 1)
+
+        procedure_private = self.private / "procedure-private"
+        for collection in ("initial", "fresh"):
+            self._assert_ready_payloads_cover(
+                procedure_private / collection, PLANNED_REQUIRED_CHECKS
+            )
+
+    def test_trusted_base_check_alone_is_a_complete_protection_set(self) -> None:
+        only_exception = [{"context": EXCEPTION_CONTEXT, "app_id": 15368}]
+        self._use_required_checks(only_exception, _check_run_sources(only_exception))
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        payloads = self._assert_ready_payloads_cover(self.state, only_exception)
+        self.assertEqual(payloads["exception_checks"], {"strict": True, "checks": []})
+        self._assert_read_only_calls()
+
+    def test_trusted_base_check_alone_round_trips_through_exception_and_restore(
+        self,
+    ) -> None:
+        only_exception = [{"context": EXCEPTION_CONTEXT, "app_id": 15368}]
+        self._use_required_checks(only_exception, _check_run_sources(only_exception))
+
+        self._assert_recovery_outcome("success", "zero", "preimage", 1, 1)
 
     def test_nonpositive_required_app_id_fails_before_state_creation(self) -> None:
         request = self._request_value()
@@ -3454,8 +3750,8 @@ class RecoveryPreimageTests(unittest.TestCase):
         exception = json.loads(
             (self.state / ready["payloads"]["exception_checks"]["path"]).read_bytes()
         )
-        self.assertEqual(len(restore["checks"]), 4)
-        self.assertEqual(len(exception["checks"]), 3)
+        self.assertEqual(restore["checks"], _sorted_checks(REQUIRED_CHECKS))
+        self.assertEqual(len(exception["checks"]), len(REQUIRED_CHECKS) - 1)
         self.assertNotIn(
             EXCEPTION_CONTEXT, {item["context"] for item in exception["checks"]}
         )

@@ -18,8 +18,8 @@ admission App or transition-bundle design.
 ## Bind the procedure to reviewed source
 
 Issue [#286](https://github.com/nisavid/dotfiles/issues/286) owns this
-procedure and its implementation. Before production use, its operational
-handoff must record all of these value-free facts:
+procedure and its implementation. Before production use, a reviewed-source
+record must state all of these value-free facts:
 
 - the immutable, reviewed source commit published by the coordinator;
 - the SHA-256 of
@@ -33,6 +33,16 @@ handoff must record all of these value-free facts:
 - the accepted public signer fingerprint and the source/test results; and
 - the admission-specific live-provider qualification result.
 
+The latest reviewed-source record is the newest such record. Each record is
+published on the issue that tracked its reviewed change and states those facts
+for a complete `issue286-reviewed-source-manifest/v1` manifest at its reviewed
+commit, so the latest record is self-contained. Records are published, oldest
+first, on issue #286 (the original record, for reviewed commit
+`c5a6c972fbb7fac213b0bdcd2ad820275866bfc5`) and issue
+[#370](https://github.com/nisavid/dotfiles/issues/370) (the generalized
+recovery collector, recorded once that change merges). Take every reviewed
+operating input below from the latest record.
+
 A consumer must use that published source revision, not a mutable branch or a
 locally edited copy, and must require its reviewed adapter blob to equal the
 blob in the current trusted base. This remains valid across a squash merge,
@@ -45,7 +55,8 @@ comment.
 
 The provider-free classifier is part of both the trusted wrapper and receipt
 creator. Any revision that adds or changes it requires fresh wrapper and
-creator digests; a handoff from before that revision is stale.
+creator digests; a reviewed-source record from before that revision is
+stale.
 
 The adapter supports one input shape:
 
@@ -89,8 +100,8 @@ Before the provider-free preflight:
 1. The task names one pull request and authorizes transition classification
    plus receipt creation if required. Routine signing on a qualified trusted
    host does not require a key passphrase, owner confirmation, or YubiKey touch.
-2. Issue #286 identifies the reviewed published source revision and the current
-   adapter, trusted-wrapper, and creator digests.
+2. The latest reviewed-source record identifies the reviewed published source
+   revision and the current adapter, trusted-wrapper, and creator digests.
 3. The pull request is open against `main`; its current base and head commits
    are frozen for this run and are present in clean local checkouts. The trusted
    creator checks tracked, untracked, and ignored entries itself.
@@ -124,8 +135,8 @@ that phase:
 
 ### Freeze and verify the exact transition
 
-Set only the inputs needed to classify the transition from the reviewed
-handoff and fresh pull-request state:
+Set only the inputs needed to classify the transition from the latest
+reviewed-source record and fresh pull-request state:
 
 ```zsh
 set -euo pipefail
@@ -294,7 +305,7 @@ signing inputs. Bind the installed adapter to the reviewed published bytes and
 require the trusted base to carry the same source blob:
 
 ```zsh
-: "${PROCEDURE_REVISION:?set the reviewed published revision from issue 286}"
+: "${PROCEDURE_REVISION:?set the revision from the latest reviewed-source record}"
 : "${REVIEWED_ADAPTER_SHA256:?set the reviewed adapter SHA-256}"
 : "${PROTON_PASS_SHARE_ID:?set the private stable share ID}"
 : "${PROTON_PASS_ITEM_ID:?set the private stable item ID}"
@@ -650,18 +661,18 @@ reviewed object database, commit, manifest, and age archive bindings used by
 the fixture contract. The helper refuses to run unless its own file is exactly
 mode `0755` and byte-equal to its manifest entry, but that check runs inside
 the staged bytes, so it cannot vouch for them. Take the manifest SHA-256 from
-the issue #286 handoff and the expected blob digest from that manifest, never
-from the staged file. The block verifies the blob under a temporary name and
-moves it to the run path only after it matches, so a failed staging leaves
-nothing there for the run commands below to execute:
+the latest reviewed-source record and the expected blob digest from that
+manifest, never from the staged file. The block verifies the blob under a
+temporary name and moves it to the run path only after it matches, so a failed
+staging leaves nothing there for the run commands below to execute:
 
 ```zsh
 set -euo pipefail
 umask 077
 : "${REVIEWED_SOURCE_REPOSITORY:?set the reviewed object database}"
-: "${REVIEWED_SOURCE_COMMIT:?set the reviewed source commit from issue 286}"
+: "${REVIEWED_SOURCE_COMMIT:?set the commit from the latest reviewed-source record}"
 : "${REVIEWED_SOURCE_MANIFEST:?set the private reviewed source manifest}"
-: "${REVIEWED_SOURCE_MANIFEST_SHA256:?set the manifest SHA-256 from issue 286}"
+: "${REVIEWED_SOURCE_MANIFEST_SHA256:?set the manifest SHA-256 from the latest reviewed-source record}"
 : "${PROVISIONING_STAGING_ROOT:?set a new private staging root}"
 
 file_mode() {
@@ -1394,11 +1405,11 @@ Before requesting an exception:
 Stage `scripts/prepare-age-admission-recovery-preimage` from its raw blob at
 the reviewed source commit in the verified source manifest. Do not invoke the
 candidate or worktree pathname, and do not fetch implicitly. Take the manifest
-SHA-256 from the issue #286 handoff. The collector's expected SHA-256 is its
-manifest entry, never a hash of the staged file. The staged copy stays mode
-`0600` in a new mode-`0700` directory, and `python3` runs it. Run the preimage
-launcher below in the same shell, or carry both collector variables into it
-unchanged.
+SHA-256 from the latest reviewed-source record. The collector's expected
+SHA-256 is its manifest entry, never a hash of the staged file. The staged copy
+stays mode `0600` in a new mode-`0700` directory, and `python3` runs it. Run
+the preimage launcher below in the same shell, or carry both collector
+variables into it unchanged.
 
 ```zsh
 set -euo pipefail
@@ -1406,7 +1417,7 @@ umask 077
 : "${REVIEWED_SOURCE_REPOSITORY:?set the reviewed object database}"
 : "${RECOVERY_REVIEWED_SOURCE:?set the reviewed source commit}"
 : "${REVIEWED_SOURCE_MANIFEST:?set the private reviewed source manifest}"
-: "${REVIEWED_SOURCE_MANIFEST_SHA256:?set the manifest SHA-256 from issue 286}"
+: "${REVIEWED_SOURCE_MANIFEST_SHA256:?set the manifest SHA-256 from the latest reviewed-source record}"
 : "${RECOVERY_COLLECTOR_STAGING:?set a new private collector directory}"
 
 file_mode() {
@@ -1506,12 +1517,14 @@ Use the collector staged above. `RECOVERY_PREIMAGE_COLLECTOR_SHA256` is its
 reviewed manifest digest, not a hash taken from the staged file; the entry gate
 checks both that digest and the digest embedded in `ready.json`.
 
-The frozen planning input observed these classic `main` protections:
+The frozen planning input observed these classic `main` protections. Its
+required-check rows are an example: they show the set that protection required
+at that snapshot.
 
 | Setting | Observed value |
 | --- | --- |
-| Required checks | `check conventional commit compliance` (`15368`), `CodeRabbit` (`347564`), `zsh deployment portability` (`15368`), and `Verify trusted base against candidate data` (`15368`) |
-| Required-check sources | `CodeRabbit` reports a commit status created by `coderabbitai[bot]` (`136622811`); the other three report check runs from app `15368` |
+| Required checks (example: snapshot set) | `check conventional commit compliance` (`15368`), `CodeRabbit` (`347564`), `zsh deployment portability` (`15368`), and `Verify trusted base against candidate data` (`15368`) |
+| Required-check sources (example: snapshot set) | `CodeRabbit` reports a commit status created by `coderabbitai[bot]` (`136622811`); the other checks report check runs from app `15368` |
 | Strict checks | enabled |
 | Pull-request review | one approval; stale reviews dismissed |
 | Administrator enforcement | enabled |
@@ -1521,6 +1534,20 @@ The frozen planning input observed these classic `main` protections:
 | Required signatures, branch lock, and fork syncing | disabled |
 | Effective rules and rulesets | none observed |
 
+The collector fixes no exact count and no check name other than the
+trusted-base check. Live protection must require exactly the required checks
+recorded in the request, each with the app ID recorded there. The collector
+accepts 1 to 64 recorded checks with unique contexts, and they must include
+`Verify trusted base against candidate data`, the only check the exception
+removes. Every recorded check must name a positive app ID. Classic protection
+reports a check that any source may satisfy with `"app_id": null`, and the
+collector rejects that record, so pin each required check to its app before
+collection. With only the trusted-base check required, the exception PATCH
+body is `{"strict": true, "checks": []}`. GitHub's handling of an empty
+`checks` list is assumed, not verified against GitHub; if the observed
+exception state differs, the procedure fails closed: it refuses the merge and
+attempts verified restoration, exiting 125 if restoration cannot be verified.
+
 This snapshot is only a planning precondition. Establish the merge freeze
 described below before this collection. Build
 the canonical request in a caller-owned mode-`0700` private parent outside both
@@ -1528,6 +1555,10 @@ checkouts. The request contains only public repository evidence, but its mode
 and path rules are the same as the bounded recovery evidence.
 `RECOVERY_REVIEWED_SOURCE` is the reviewed source commit that must occur in the
 pull request's complete commit list; it is not a candidate-supplied authority.
+The `checks` and `sources` lists below hold the example snapshot set. Before
+building the request, replace both lists with live protection's required checks
+and their sources as the reviewed planning input records them, one source per
+check.
 
 ```zsh
 set -euo pipefail
@@ -1595,6 +1626,7 @@ import sys
 
 path, number, base, head, source = sys.argv[1:]
 root = "https://api.github.com/repos/nisavid/dotfiles/branches/main/protection"
+# Example: the snapshot set. Record the reviewed required checks and sources.
 checks = [
     {"context": "check conventional commit compliance", "app_id": 15368},
     {"context": "CodeRabbit", "app_id": 347564},
@@ -2135,7 +2167,7 @@ try:
     ):
         stop("request binding")
     checks = request["required_checks"]
-    if not isinstance(checks, list) or len(checks) != 4:
+    if not isinstance(checks, list):
         stop("required checks")
     contexts = set()
     for record in checks:
@@ -2635,7 +2667,8 @@ exit "$merge_command_status"
 ```
 
 Canonicalize and compare the fresh full response with the saved preimage,
-including all four app-pinned checks and every unrelated protection. Repeat the
+including every app-pinned required check recorded in the request and every
+unrelated protection. Repeat the
 effective-rule and ruleset reads. Keep the merge freeze until the comparison
 passes and live `main` is shown to contain the reviewed recovery tree and the
 single new allowed-signer fingerprint.
@@ -2724,11 +2757,11 @@ PR #323's registration is recorded
 in [issue #286](https://github.com/nisavid/dotfiles/issues/286#issuecomment-5822092645).
 An earlier base or head observed for any consumer is not a reusable operating
 input. Before any later operation, each
-consumer must independently load the published, reviewed issue #286 revision,
-record that revision plus the refreshed adapter, trusted-wrapper, and creator
-digests, and refresh its own then-current base and head. A local candidate, an
-earlier digest handoff, or another consumer's transition is not an operating
-input.
+consumer must independently load the reviewed published revision named by the
+latest reviewed-source record, record that revision plus the refreshed
+adapter, trusted-wrapper, and creator digests, and refresh its own
+then-current base and head. A local candidate, an earlier digest handoff, or
+another consumer's transition is not an operating input.
 
 Each owning task may, under its separate authority, create a new receipt
 through the routine path, replace that PR's prior marker, and require a fresh

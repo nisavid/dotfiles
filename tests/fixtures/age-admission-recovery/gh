@@ -12,6 +12,15 @@ signal_parent_repeatedly() {
   kill -HUP "$PPID"
 }
 
+# A required-check PATCH must name exactly the checks of the protection it
+# installs: the exception state, or the preimage it restores.
+patch_names_checks_of() {
+  jq -e --slurpfile expected "$FAKE_GH_STATE_DIR/$1" '
+    ([.checks[] | [.context, .app_id]] | sort) ==
+    ([$expected[0].required_status_checks.checks[] | [.context, .app_id]] | sort)
+  ' "$input_file" >/dev/null
+}
+
 print -r -- "$*" >>"$FAKE_GH_STATE_DIR/calls.log"
 
 if [[ ${1:-} == api ]]; then
@@ -70,7 +79,6 @@ if [[ ${1:-} == api ]]; then
   fi
 
   if [[ $method == PATCH ]]; then
-    check_count=$(jq -r '.checks | length' "$input_file")
     jq -e '
       (keys | sort) == ["checks", "strict"] and
       .strict == true and
@@ -79,15 +87,10 @@ if [[ ${1:-} == api ]]; then
         (.app_id | type) == "number" and .app_id > 0 and
         .app_id == (.app_id | floor))
     ' "$input_file" >/dev/null || return 65
-    if [[ $check_count == 3 ]]; then
-      jq -e '
-        ([.checks[] | [.context, .app_id]] | sort) ==
-        ([
-          ["check conventional commit compliance", 15368],
-          ["CodeRabbit", 347564],
-          ["zsh deployment portability", 15368]
-        ] | sort)
-      ' "$input_file" >/dev/null || return 65
+    if jq -e --arg omitted 'Verify trusted base against candidate data' '
+      all(.checks[]; .context != $omitted)
+    ' "$input_file" >/dev/null; then
+      patch_names_checks_of exception.json || return 65
       cp "$FAKE_GH_STATE_DIR/exception.json" "$FAKE_GH_STATE_DIR/protection.json"
       case "$FAKE_GH_SCENARIO" in
         exception-patch-ambiguous|finalizer-repeated-signals|finalizer-child-self-term)
@@ -108,15 +111,7 @@ if [[ ${1:-} == api ]]; then
           ;;
       esac
     else
-      jq -e '
-        ([.checks[] | [.context, .app_id]] | sort) ==
-        ([
-          ["check conventional commit compliance", 15368],
-          ["CodeRabbit", 347564],
-          ["zsh deployment portability", 15368],
-          ["Verify trusted base against candidate data", 15368]
-        ] | sort)
-      ' "$input_file" >/dev/null || return 65
+      patch_names_checks_of preimage.json || return 65
       case "$FAKE_GH_SCENARIO" in
         restore-fails)
           return 75
