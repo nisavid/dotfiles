@@ -50,6 +50,7 @@ group_shell_bindings() {
     tests/secret-exec-migrate.zsh \
     tests/secret-exec.zsh \
     tests/secret-injection-bindings.zsh \
+    tests/ydotool-session-binding.zsh \
     tests/private-skill-transaction.d/*.zsh
   zsh -f tests/claude-skill-sync.zsh
   zsh -f tests/platform-portability.zsh
@@ -62,6 +63,7 @@ group_shell_bindings() {
   zsh -f tests/secret-exec-migrate.zsh
   zsh -f tests/secret-injection-bindings.zsh
   zsh -f tests/proton-pass-startup-bindings.zsh
+  zsh -f tests/ydotool-session-binding.zsh
   GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 \
     zsh -f tests/global-agents-policy.zsh
   if [[ "$(uname -s)" == Linux ]]; then

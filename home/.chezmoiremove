@@ -9,3 +9,4 @@
 .claude/skills/writing-plans
 .claude/skills/yeet
 .codex/scripts/block_pr_fill.py
+.config/systemd/user/default.target.wants/ydotool.service

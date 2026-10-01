@@ -521,8 +521,10 @@ expected_linux_source_inventory=$(
     'dot_config/autostart/private_claude.desktop' \
     'dot_config/systemd/user/app-com.anthropic.Claude-.scope.d/50-oom-continue.conf' \
     'dot_config/systemd/user/builds.slice' \
+    'dot_config/systemd/user/graphical-session.target.wants/symlink_ydotool.service' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
+    'dot_config/systemd/user/ydotool.service.d/50-graphical-session.conf' \
     'private_dot_local/private_share/applications/claude-code-url-handler.desktop' \
     'private_dot_local/private_share/applications/proton-pass-url-handler.desktop'
 )
