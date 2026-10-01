@@ -1132,6 +1132,7 @@ output=$(zsh "$launcher" --best-effort context7 -- print-marker)
 
 # A fallback records the profile for the rest of the process tree, keeping
 # valid inherited names and dropping malformed ones.
+: > "$FAKE_NOTIFY_LOG"
 : > "$FAKE_PASS_ITEM_EXIT_124"
 output=$(env SECRET_EXEC_FALLBACK_PROFILES='firecrawl bad!name' \
   zsh "$launcher" --best-effort context7 -- print-fallback 2>/dev/null)

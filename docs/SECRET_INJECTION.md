@@ -177,8 +177,9 @@ that fell back has already notified. This keeps hook commands inside a
 fallen-back host from waiting on an unavailable provider or notifying again.
 Launches of other profiles resolve as usual and pass the marker through. A
 `github` launch ignores the marker, as it ignores an inherited provenance
-marker, so it always resolves and checks its identity. A spoofed marker can only
-make a launch start without credentials.
+marker, so the marker never skips its resolution or identity check. A
+best-effort `github` launch whose provider fails still falls back as described
+above. A spoofed marker can only make a launch start without credentials.
 
 The notification's title is `Credentials unavailable`. Its body names only the
 profile and the command's base name, or `A command` when that name contains

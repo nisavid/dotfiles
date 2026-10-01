@@ -34,8 +34,9 @@ applications. A host that falls back starts without the key, notifies once, and
 records the fallback in a non-secret marker. Hooks inside it then run keyless at
 once, instead of waiting on the provider past their timeouts or sending another
 notification. A spoofed marker can only make a launch start without
-credentials. A GitHub launch ignores the marker, so it always resolves and
-checks its identity.
+credentials. A GitHub launch ignores the marker, so the marker never skips its
+resolution or identity check; a best-effort GitHub launch whose provider fails
+still falls back like any other.
 
 A host reads the key once, when it starts. Rotating the key therefore requires
 restarting every wrapped host. A host also inherits the key only when it starts
