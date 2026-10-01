@@ -2095,6 +2095,17 @@ def interop_open(arguments: argparse.Namespace) -> None:
         )
         generate_key(sq, state, environment)
         local_certificate_shape = inspect_certificate(sq, state / "cert.pgp", environment)
+        with tempfile.TemporaryDirectory(
+            prefix="revocations-", dir=state
+        ) as revocation_directory:
+            revocation_workspace = Path(revocation_directory)
+            os.chmod(revocation_workspace, 0o700)
+            for name in ("key.pgp", "cert.pgp", "emergency-revocation.pgp"):
+                shutil.copy2(state / name, revocation_workspace / name)
+            shutil.copy2(message, revocation_workspace / "message.bin")
+            live_revocations = exercise_revocations(
+                sq, sqv, revocation_workspace, environment
+            )
         run_command(
             [
                 str(sq),
@@ -2148,7 +2159,7 @@ def interop_open(arguments: argparse.Namespace) -> None:
             "results": {
                 "peer_signature_verified": True,
                 "altered_message_rejected": True,
-                "local_revocation_results": local_result["local_revocation_results"],
+                "local_revocation_results": live_revocations,
                 "local_cleanup_pending": True,
             },
         }

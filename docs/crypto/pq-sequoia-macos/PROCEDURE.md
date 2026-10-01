@@ -233,13 +233,16 @@ The qualification job then:
    altered-message rejection, encryption/decryption, tampered-ciphertext
    rejection without recovered output, emergency and explicit certificate
    revocation, signing- and encryption-subkey retirement, and 200 sequential
-   clean lifecycles of each executable; and
+   clean lifecycles of each executable, retaining that local matrix as
+   `local-result.json`; and
 9. records `runtime-closure.json`, including the source-verification receipt,
    post-build formula observation, exact `sq` and `sqv` bottle identities, tap
-   commit, and live-cache observation, signs its exact SHA-256 as phase B's
-   producer closure, and uploads the unchanged closure beside
-   `macos-ci-phase-b.json` while keeping the macOS secret certificate only in
-   the still-running job.
+   commit, and live-cache observation, then opens phase B with a new disposable
+   certificate. It exercises all four revocation transitions on isolated copies
+   of that live certificate and key, records those live-certificate results in
+   phase B, signs the closure's exact SHA-256 as phase B's producer closure, and
+   uploads the unchanged closure beside `macos-ci-phase-b.json` while keeping
+   the macOS secret certificate only in the still-running job.
 
 ## Complete the live return
 

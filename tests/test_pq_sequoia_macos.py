@@ -1848,6 +1848,165 @@ class QualificationProcedureTests(unittest.TestCase):
             self.assertEqual(0, cleaned.returncode, cleaned.stderr)
             self.assertFalse(state.exists())
 
+    def test_phase_b_revocations_use_live_certificate_copies(self) -> None:
+        module = _load_cli()
+        session = "a" * 64
+        peer_closure = "b" * 64
+        candidate_identity = "sha256:" + _sha256(CANDIDATE)
+        phase_a = _envelope(
+            module,
+            phase="hatchery-phase-a",
+            session=session,
+            closure=peer_closure,
+            parent="0" * 64,
+            payloads={
+                "hatchery-cert.pgp": _payload(b"hatchery certificate"),
+                "hatchery-message.sig": _payload(b"hatchery message signature"),
+            },
+            results={
+                "local_revocation_results": _revocations(),
+                "local_cleanup_pending": True,
+            },
+        )
+        phase_a["control_signature"] = _payload(b"hatchery control signature")
+        local_matrix_revocations = {
+            name: {"passed": True, "sha256": "a" * 64, "size": 1}
+            for name in module.REVOCATION_CASES
+        }
+        live_revocations = {
+            name: {"passed": True, "sha256": "b" * 64, "size": 2}
+            for name in module.REVOCATION_CASES
+        }
+        shape = _certificate_shape()
+        signature_shape = {
+            "version": 6,
+            "algorithm": "ML-DSA-65+Ed25519",
+            "issuer_fingerprint": shape["signing_fingerprint"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            phase_a_path = root / "phase-a.json"
+            local_result_path = root / "local-result.json"
+            runtime_closure_path = root / "runtime-closure.json"
+            phase_b_path = root / "phase-b.json"
+            state = root / "state"
+            _write_json(phase_a_path, phase_a)
+            _write_json(
+                local_result_path,
+                {
+                    "schema_version": "pq-sequoia-local-result/v1",
+                    "candidate_identity": candidate_identity,
+                    "message_sha256": module.MESSAGE_SHA256,
+                    "local_cleanup_complete": True,
+                    "local_revocation_results": local_matrix_revocations,
+                },
+            )
+            _write_json(
+                runtime_closure_path,
+                {
+                    "schema_version": "pq-sequoia-runtime-closure/v1",
+                    "candidate_identity": candidate_identity,
+                    "workflow": {},
+                    "runner": {},
+                    "build_tools": {},
+                    "versions": {},
+                    "source_verification": {},
+                    "tap": {},
+                    "bottles": _runtime_bottle_records(),
+                    "shared_cache_observation": {},
+                    "closures": {},
+                },
+            )
+            live_key = b"live certificate B secret key"
+            live_certificate = b"live certificate B public certificate"
+            live_emergency_revocation = b"live certificate B emergency revocation"
+            observed_revocation_workspaces: list[Path] = []
+            originals = (
+                module.generate_key,
+                module.inspect_certificate,
+                module.inspect_signature,
+                module.verify_control_signature,
+                module.exercise_revocations,
+                module.run_command,
+            )
+
+            def fake_generate_key(sq, workspace, environment):
+                (workspace / "key.pgp").write_bytes(live_key)
+                (workspace / "cert.pgp").write_bytes(live_certificate)
+                (workspace / "emergency-revocation.pgp").write_bytes(
+                    live_emergency_revocation
+                )
+
+            def fake_exercise_revocations(sq, sqv, workspace, environment):
+                observed_revocation_workspaces.append(workspace)
+                self.assertNotEqual(state, workspace)
+                self.assertEqual(state, workspace.parent)
+                self.assertEqual(live_key, (workspace / "key.pgp").read_bytes())
+                self.assertEqual(
+                    live_certificate, (workspace / "cert.pgp").read_bytes()
+                )
+                self.assertEqual(
+                    live_emergency_revocation,
+                    (workspace / "emergency-revocation.pgp").read_bytes(),
+                )
+                self.assertEqual(
+                    MESSAGE.read_bytes(), (workspace / "message.bin").read_bytes()
+                )
+                return live_revocations
+
+            def fake_run(command, *, environment, expected_success=True):
+                if "sign" in command and "--signature-file" in command:
+                    Path(command[command.index("--signature-file") + 1]).write_bytes(
+                        b"macos signature"
+                    )
+                if "encrypt" in command:
+                    Path(command[command.index("--output") + 1]).write_bytes(
+                        b"ciphertext to hatchery"
+                    )
+                return subprocess.CompletedProcess(command, 0, b"", b"")
+
+            module.generate_key = fake_generate_key
+            module.inspect_certificate = lambda *args: shape
+            module.inspect_signature = lambda *args: signature_shape
+            module.verify_control_signature = lambda *args: None
+            module.exercise_revocations = fake_exercise_revocations
+            module.run_command = fake_run
+            try:
+                module.interop_open(
+                    SimpleNamespace(
+                        root=ROOT,
+                        sq=Path("/bin/true"),
+                        sqv=Path("/bin/true"),
+                        candidate_identity=candidate_identity,
+                        producer_closure=runtime_closure_path,
+                        expected_peer_closure_sha256=peer_closure,
+                        session_id=session,
+                        peer_envelope=phase_a_path,
+                        local_result=local_result_path,
+                        state_dir=state,
+                        output=phase_b_path,
+                    )
+                )
+            finally:
+                (
+                    module.generate_key,
+                    module.inspect_certificate,
+                    module.inspect_signature,
+                    module.verify_control_signature,
+                    module.exercise_revocations,
+                    module.run_command,
+                ) = originals
+
+            self.assertEqual(1, len(observed_revocation_workspaces))
+            phase_b = json.loads(phase_b_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                live_revocations, phase_b["results"]["local_revocation_results"]
+            )
+            self.assertNotEqual(
+                local_matrix_revocations,
+                phase_b["results"]["local_revocation_results"],
+            )
+
     def test_open_and_close_execute_authenticated_reconciled_exchange(self) -> None:
         module = _load_cli()
         session = "a" * 64
@@ -1915,12 +2074,16 @@ class QualificationProcedureTests(unittest.TestCase):
                 module.inspect_certificate,
                 module.inspect_signature,
                 module.verify_control_signature,
+                module.exercise_revocations,
                 module.run_command,
             )
 
             def fake_generate_key(sq, workspace, environment):
                 (workspace / "key.pgp").write_bytes(b"local secret placeholder")
                 (workspace / "cert.pgp").write_bytes(b"macos certificate")
+                (workspace / "emergency-revocation.pgp").write_bytes(
+                    b"macos emergency revocation"
+                )
 
             def fake_run(command, *, environment, expected_success=True):
                 if "--signature-file" in command and "sign" in command:
@@ -1941,6 +2104,7 @@ class QualificationProcedureTests(unittest.TestCase):
             module.inspect_certificate = lambda *args: shape
             module.inspect_signature = lambda *args: signature_shape
             module.verify_control_signature = fake_verify_control
+            module.exercise_revocations = lambda *args: _revocations()
             module.run_command = fake_run
             try:
                 module.interop_open(
@@ -2053,6 +2217,7 @@ class QualificationProcedureTests(unittest.TestCase):
                     module.inspect_certificate,
                     module.inspect_signature,
                     module.verify_control_signature,
+                    module.exercise_revocations,
                     module.run_command,
                 ) = originals
 
@@ -3648,6 +3813,7 @@ Public-Subkey Packet, new CTB
     sq.write_text(
         "#!/usr/bin/env python3\n"
         "import base64\n"
+        "import os\n"
         "import pathlib\n"
         "import sys\n"
         f"inspection = {inspection!r}\n"
@@ -3655,6 +3821,8 @@ Public-Subkey Packet, new CTB
         f"signature_dump = {signature_dump!r}\n"
         f"message = base64.b64decode({message!r})\n"
         "args = sys.argv[1:]\n"
+        "if args[:1] == ['--time']:\n"
+        "    args = args[2:]\n"
         "if args[0] == 'inspect':\n"
         "    print(inspection, end='')\n"
         "elif args[:2] == ['packet', 'dump']:\n"
@@ -3664,9 +3832,26 @@ Public-Subkey Packet, new CTB
         "    pathlib.Path(args[args.index('--rev-cert') + 1]).write_bytes(b'public test revocation placeholder')\n"
         "elif args[:2] == ['key', 'delete']:\n"
         "    pathlib.Path(args[args.index('--output') + 1]).write_bytes(b'public test certificate placeholder')\n"
+        "elif args[:2] == ['key', 'revoke']:\n"
+        "    pathlib.Path(args[args.index('--output') + 1]).write_bytes(b'certificate retirement')\n"
+        "elif args[:3] == ['key', 'subkey', 'revoke']:\n"
+        "    pathlib.Path(args[args.index('--output') + 1]).write_bytes(b'subkey retirement')\n"
+        "elif args[:2] == ['keyring', 'merge']:\n"
+        "    pathlib.Path(args[args.index('--output') + 1]).write_bytes(b'retired key fixture')\n"
+        "elif args[:2] == ['cert', 'import']:\n"
+        "    if 'revocation' in pathlib.Path(args[-1]).name or args[-1].endswith('retired-certificate.pgp'):\n"
+        "        pathlib.Path(os.environ['SEQUOIA_HOME'], 'revoked').write_text('1')\n"
+        "elif args[:2] == ['cert', 'list']:\n"
+        "    revoked = pathlib.Path(os.environ['SEQUOIA_HOME'], 'revoked').exists()\n"
+        "    if revoked and '--unusable' not in args:\n"
+        "        raise SystemExit(1)\n"
         "elif args[0] == 'sign':\n"
+        "    if args[args.index('--signature-file') + 1].endswith('post-retirement.sig'):\n"
+        "        raise SystemExit(1)\n"
         "    pathlib.Path(args[args.index('--signature-file') + 1]).write_bytes(b'public test signature placeholder')\n"
         "elif args[0] == 'encrypt':\n"
+        "    if args[args.index('--output') + 1].endswith('post-retirement.pgp'):\n"
+        "        raise SystemExit(1)\n"
         "    pathlib.Path(args[args.index('--output') + 1]).write_bytes(b'public test ciphertext placeholder')\n"
         "elif args[0] == 'decrypt':\n"
         "    if 'tampered' in args[-1]:\n"
