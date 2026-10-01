@@ -607,7 +607,6 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 encoding="ascii",
             )
             (base / "AGENTS.md").write_text("trusted fixture guidance\n", encoding="ascii")
-            (base / "CLAUDE.md").symlink_to("AGENTS.md")
             shutil.copy2(ADMITTER, base / "scripts/admit-age-envelopes")
             shutil.copy2(TRUSTED_LAUNCHER, base / "scripts/run-trusted-age-admission")
             for script_name in (
