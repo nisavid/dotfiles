@@ -44,8 +44,11 @@ Library
 .local/bin/ninja
 .local/lib/builds-slice
 
-# Only Linux desktops read freedesktop desktop entries; this tree currently
-# holds only the protonpass:// scheme handler. The inventory test requires an
-# explicit policy update before another target can be added beneath this tree.
+# Only Linux desktops read freedesktop desktop entries. These trees hold the
+# protonpass:// and claude-cli:// scheme handlers and the Claude Desktop login
+# entries, which launch through the secret-exec shims. The inventory test
+# requires an explicit policy update before another target can be added beneath
+# them.
+.config/autostart
 .local/share/applications
 {{ end }}

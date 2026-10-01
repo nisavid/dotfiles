@@ -1,0 +1,6 @@
+[Desktop Entry]
+Hidden=true
+Type=Application
+Name=Claude
+Exec=claude-desktop --startup
+X-GNOME-Autostart-enabled=true
