@@ -562,10 +562,12 @@ expected_linux_source_inventory=$(
     'dot_config/systemd/user/builds.slice' \
     'dot_config/systemd/user/codex-usage-safeguard.service.tmpl' \
     'dot_config/systemd/user/default.target.wants/symlink_memory-telemetry.service' \
+    'dot_config/systemd/user/graphical-session.target.wants/symlink_ydotool.service' \
     'dot_config/systemd/user/memory-telemetry.service' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
     'dot_config/systemd/user/proton-drive-desktop.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
+    'dot_config/systemd/user/ydotool.service.d/50-graphical-session.conf' \
     'private_dot_local/private_share/applications/claude-code-url-handler.desktop' \
     'private_dot_local/private_share/applications/proton-drive.desktop.tmpl' \
     'private_dot_local/private_share/applications/proton-pass-url-handler.desktop'
