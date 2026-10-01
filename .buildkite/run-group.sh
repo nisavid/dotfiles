@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Provision a Buildkite hosted agent and run one scripts/ci-test-group group.
 #
-# Tool versions and digests match .github/workflows/platform-portability.yml.
+# Tool versions and the macOS digests match .github/workflows/platform-portability.yml;
+# the Linux digests live only here. .buildkite/pipeline.yml runs only Linux jobs,
+# and the macOS path is kept so the battery can move back onto Buildkite macOS.
 # Linux jobs start as root in an ubuntu:24.04 container, so the tests run as
 # an unprivileged user, as they do on GitHub-hosted runners.
 set -euo pipefail
