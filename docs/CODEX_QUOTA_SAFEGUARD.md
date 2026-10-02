@@ -22,8 +22,8 @@ encrypted-source and admission procedure.
 ```toml
 [data.codexQuotaSafeguard]
 enabled = true
-releaseCommit = "754aa6c0c7c5a8c7ceb529b1adbd01749f8303c0"
-archiveSha256 = "2801c997b2735d3c8b42637ea5e346f1aff5499819bf11b262599e29f13e9b3e"
+releaseCommit = "86c5696ee4f06c2829c5c7ab85a99ee821a01af2"
+archiveSha256 = "5346b74f6c4d955f0f5178c5bad88fd7724a033c02f66e40e2b998c3c4bfb96a"
 configFile = "/home/test-user/.config/codex-quota-safeguard/config.json"
 stateDir = "/home/test-user/.local/state/codex-quota-safeguard"
 sharedLock = "/home/test-user/.local/state/legacy-shared.lock"
@@ -58,7 +58,7 @@ Before opting in:
    Obtain and verify the SHA-256 of
    `https://github.com/nisavid/agents/archive/COMMIT.tar.gz`. The disabled public
    default pins the reviewed source revision shown above. Its published archive
-   was verified against all 223 tracked files and their types in that Git tree.
+   was verified against all 226 tracked files and their types in that Git tree.
    Changing the source revision requires verifying and changing its checksum too.
 2. Confirm that the pinned release contains `controller.py`, `companion.py`,
    `status.py`, `package.json` and its lockfile. Record the existing state/lock
@@ -107,6 +107,13 @@ launcher with `companion` as its sole argument. Forward the genuine
 never serialize a discovered socket path as a durable default. A configured MCP
 child's startup is not proof of a valid thread/turn registration, delivery
 acknowledgement or immediate app-start renewal.
+
+An account change can invalidate a cloud safeguard owner even when the companion
+publishes the current socket. Inspect the source-owned connection diagnostics;
+installation or source-pin approval does not authorize changing `nativeContext`
+or the notification parent. Keep the service stopped during an authorized
+maintenance handoff if the stored owner is rejected, and resolve those separate
+authorization decisions before activation. Never replay old notifications.
 
 ## Upgrade and rollback
 
