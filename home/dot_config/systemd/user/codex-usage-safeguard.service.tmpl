@@ -1,0 +1,13 @@
+# Materialization only: chezmoi does not reload, enable, start, or restart this unit.
+[Unit]
+Description=Codex quota safeguard
+
+[Service]
+Type=simple
+ExecStart="%h/.local/bin/codex-quota-safeguard" controller
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target
