@@ -4,7 +4,7 @@
 # The groups split the portability test battery so CI can run it in parallel.
 # GitHub Actions runs every group on macOS and Linux
 # (.github/workflows/platform-portability.yml);
-# tests/ci-test-group.zsh checks those lists.
+# tests/ci-test-group.zsh checks those lists and the shell syntax check.
 # Each group expects the workflow's dependencies on PATH: zsh, chezmoi, age tooling
 # (AGE_TOOLING_DIRECTORY), python3 with uv/uvx, jq, rg, bat, and flock on macOS.
 # age-admission and age-provisioning also need AGE_TOOLING_ARCHIVE and
@@ -37,14 +37,47 @@ groups=(
   zsh-deployment
 )
 
-group_shell_bindings() {
-  zsh -f tests/ci-test-group.zsh
-  bash -n \
+# Run a syntax check function on each file, and fail if any file fails.
+# bash -n reads only its first operand as the script, and one zcompile call
+# stops at the first file that fails, so each file is checked on its own.
+check_each() {
+  local check=$1 file failed=0
+  shift
+  for file in "$@"; do
+    if ! "$check" "$file"; then
+      printf '%s: syntax check failed\n' "$file" >&2
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+
+bash_syntax() {
+  bash -n -- "$1"
+}
+
+# zsh -n misjudges valid files: it flips its exit status on each top-level !
+# pipeline it skips, so a valid file can exit 1 silently, and zsh 5.9 still
+# reads each $(<file) in an assignment or argument, warning when the file is
+# missing. zcompile only parses the file, so its status is the parse result.
+zsh_syntax() {
+  local zwc_dir check_status=0
+  zwc_dir="$(mktemp -d)"
+  zsh -f -c 'zcompile -U -- "$1" "$2"' zsh "$zwc_dir/check.zwc" "$1" ||
+    check_status=$?
+  rm -rf -- "$zwc_dir"
+  return "$check_status"
+}
+
+# Check both lists even when the first fails, so one run reports every file.
+check_shell_syntax() {
+  local failed=0
+  check_each bash_syntax \
     home/run_after_restore-acl.sh \
     home/run_before_save-acl.sh \
     scripts/private-skill-transaction \
-    scripts/private-skill-transaction.d/*.bash
-  zsh -n \
+    scripts/private-skill-transaction.d/*.bash || failed=1
+  check_each zsh_syntax \
     home/run_after_sync-global-agent-skills-to-claude.zsh \
     tests/claude-skill-sync.zsh \
     tests/container-runtime-bindings.zsh \
@@ -61,7 +94,13 @@ group_shell_bindings() {
     tests/secret-exec-migrate.zsh \
     tests/secret-exec.zsh \
     tests/secret-injection-bindings.zsh \
-    tests/private-skill-transaction.d/*.zsh
+    tests/private-skill-transaction.d/*.zsh || failed=1
+  return "$failed"
+}
+
+group_shell_bindings() {
+  zsh -f tests/ci-test-group.zsh
+  check_shell_syntax
   zsh -f tests/claude-skill-sync.zsh
   zsh -f tests/platform-portability.zsh
   zsh -f tests/container-runtime-bindings.zsh
@@ -245,4 +284,7 @@ main() {
   return 64
 }
 
-main "$@"
+# tests/ci-test-group.zsh sources this file to call its functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

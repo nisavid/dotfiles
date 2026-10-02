@@ -1,6 +1,7 @@
 #!/usr/bin/env zsh
 # Keep every CI definition running exactly the groups in scripts/ci-test-group,
-# and keep test commands in the script rather than in the workflow.
+# and keep test commands in the script rather than in the workflow. Also check
+# the script's shell syntax check, which checks each listed file on its own.
 #
 # Both CI definitions are pinned below, apart from comments and blank lines.
 # YAML can spell a skip, a condition, a soft fail, a block step, a container
@@ -388,7 +389,8 @@ fi
 # provisioning stubbed, downloads blocked and a fake scripts/ci-test-group.
 # Every group must run alone and exit with its own status. A failed apt-get, a
 # failed download on a fresh agent, and a failed buildkite-agent must not turn
-# a job green.
+# a job green. The shell syntax checks at the end of this file reuse the scratch
+# copy of the checkout.
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
 trap 'rm -rf -- "$scratch"; exit 1' HUP INT TERM
@@ -481,5 +483,107 @@ run_job zsh-deployment 1
 unset GUARD_AGENT_FAILS
 (( run_status == 1 )) ||
   fail ".buildkite/run-group.sh must keep a failed group's status when buildkite-agent fails: the job exited $run_status"$'\n'"$(job_log)"
+
+# shell-bindings checks each file's syntax on its own, because bash -n and
+# zsh -n check only their first operand, and checks zsh files with zcompile,
+# because zsh -n misjudges valid files. The only -n call allowed is
+# bash_syntax's, which checks one file. The scan guards against accidental
+# multi-file -n calls: it must flag every line in n_call_samples and none in
+# n_call_safe_samples, and spellings beyond those are not covered.
+n_call_pattern='(^|[^[:alnum:]_-])(bash|zsh)([[:space:]]+([-+][oO][[:space:]]+[^[:space:]]+|--?[[:alnum:]][[:alnum:]_-]*))*[[:space:]]+-[[:alpha:]]*n[[:alpha:]]*([[:space:]]|$)'
+n_call_samples=(
+  'zsh -n a b'
+  'zsh -fn a b'
+  'bash -x -n a b'
+  'bash -O extglob -n a b'
+  'zsh --no-rcs -n a b'
+)
+n_call_safe_samples=(
+  "zsh -f -c 'print -n x'"
+  'zsh -f -c "print hi" zsh'
+  'zsh -f tests/ci-test-group.zsh'
+)
+for sample in "${n_call_samples[@]}"; do
+  grep -qE "$n_call_pattern" <<<"$sample" ||
+    fail "the -n call scan misses: $sample"
+done
+for sample in "${n_call_safe_samples[@]}"; do
+  if grep -qE "$n_call_pattern" <<<"$sample"; then
+    fail "the -n call scan flags a line with no -n call: $sample"
+  fi
+done
+if direct=$(grep -nE "$n_call_pattern" "$script"); then
+  direct=$(grep -Ev '^[0-9]+:[[:space:]]*(#|bash -n -- "\$1"$)' <<<"$direct") || (( $? == 1 )) ||
+    fail 'could not filter the scan of scripts/ci-test-group for -n calls'
+  [[ -z $direct ]] ||
+    fail "the only -n call allowed in scripts/ci-test-group is bash_syntax's one-file bash -n -- \"\$1\"; found:"$'\n'"$direct"
+elif (( $? > 1 )); then
+  fail 'could not scan scripts/ci-test-group for -n calls'
+fi
+# These checks reuse the run-group.sh checks' scratch copy of the checkout,
+# where run_job left a fake scripts/ci-test-group; put the real one back.
+cp -p -- "$script" "$scratch/job/scripts/ci-test-group"
+# Run bash code in the scratch copy, with scripts/ci-test-group's functions.
+job_bash() {
+  (cd "$scratch/job" && bash -c 'source scripts/ci-test-group; eval "$1"' bash "$1") 2>&1
+}
+output=$(job_bash check_shell_syntax) ||
+  fail "the shell syntax checks must pass on the repository's files:"$'\n'"$output"
+# Valid files that zsh -n misjudges. It flips its exit status on each
+# top-level ! pipeline it skips, so the first exits 1 silently on zsh 5.9 and
+# 5.9.2. zsh 5.9 still reads $(<file), so the second warns that the file is
+# missing and exits 1 there.
+print -r -- '! true' >"$scratch/misjudged-negation.zsh"
+print -r -- 'lines=("${(@f)$(<"$missing_dir/missing")}")' >"$scratch/misjudged-read.zsh"
+output=$(job_bash "check_each zsh_syntax ${(qq)scratch}/misjudged-negation.zsh ${(qq)scratch}/misjudged-read.zsh") ||
+  fail "zsh_syntax must pass valid files that zsh -n misjudges:"$'\n'"$output"
+# List each check_each call as its check, file count, first file and last file.
+syntax_lists=$(job_bash '
+  check_each() {
+    printf "%s %s %s %s\n" "$1" "$(($# - 1))" "$2" "${!#}"
+  }
+  check_shell_syntax') || fail "could not list the shell syntax checks:"$'\n'"$syntax_lists"
+[[ ${(j: :)${(@)${(@f)syntax_lists}%% *}} == 'bash_syntax zsh_syntax' ]] ||
+  fail "expected one bash and one zsh syntax check, got:"$'\n'"$syntax_lists"
+# Replace files in the scratch copy with a syntax error, or put them back.
+break_files() {
+  local file
+  for file; do
+    cp -p -- "$scratch/job/$file" "$scratch/syntax-original-${file//\//%}"
+    print -r -- 'if then fi fi (' >"$scratch/job/$file"
+  done
+}
+restore_files() {
+  local file
+  for file; do
+    cp -p -- "$scratch/syntax-original-${file//\//%}" "$scratch/job/$file"
+  done
+}
+# Breaking the first or the last file of either list must fail the check and
+# name that file. With all four broken, one run must name them all, so a
+# failing file stops neither the rest of its list nor the other list.
+end_files=()
+for line in "${(@f)syntax_lists}"; do
+  words=(${=line})
+  # Require more than one file, so the first and last are different files.
+  (( words[2] > 1 )) || fail "check_each $words[1] must cover more than one file"
+  end_files+=($words[3] $words[4])
+  for broken in $words[3] $words[4]; do
+    break_files $broken
+    output=$(job_bash check_shell_syntax) &&
+      fail "check_each $words[1] must fail when $broken is broken"
+    [[ $output == *"$broken: syntax check failed"* ]] ||
+      fail "check_each $words[1] must name its broken file, $broken:"$'\n'"$output"
+    restore_files $broken
+  done
+done
+break_files "${end_files[@]}"
+output=$(job_bash check_shell_syntax) &&
+  fail 'check_shell_syntax must fail when the first and last file of each list are broken'
+for broken in "${end_files[@]}"; do
+  [[ $output == *"$broken: syntax check failed"* ]] ||
+    fail "check_shell_syntax must name every broken file in one run, including $broken:"$'\n'"$output"
+done
+restore_files "${end_files[@]}"
 
 print -r -- 'ci test group checks passed'
