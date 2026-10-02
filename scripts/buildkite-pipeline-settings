@@ -41,6 +41,7 @@ import difflib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -367,9 +368,11 @@ def check(record: dict[str, Any], label: str) -> int:
     print(f"{PROG}: pipeline {slug} differs from {label} in {len(found)} of {settings_count(count)}:")
     for difference in found:
         print("\n".join(describe(difference)))
+    # The suggested apply must use the record that check compared.
+    record_option = "" if label == record_label(DEFAULT_RECORD) else f" --record {shlex.quote(label)}"
     print(
         "Restore the committed values, with the owner's approval, by running"
-        f" scripts/{PROG} apply --yes, or update {label} if the change is intended."
+        f" scripts/{PROG}{record_option} apply --yes, or update {label} if the change is intended."
     )
     return 1
 

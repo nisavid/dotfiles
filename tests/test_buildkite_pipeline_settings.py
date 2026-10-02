@@ -343,7 +343,20 @@ class BuildkitePipelineSettingsTests(unittest.TestCase):
         ):
             with self.subTest(line=line):
                 self.assertIn(line, result.stdout)
-        self.assertIn("apply --yes", result.stdout)
+        self.assertIn(" by running scripts/buildkite-pipeline-settings apply --yes,", result.stdout)
+        self.assertNotIn("--record", result.stdout)
+        self.assertEqual(self.patches(), [])
+
+    def test_check_suggests_applying_the_record_it_compared(self) -> None:
+        self.settings["publish_blocked_as_pending"] = False
+        path = self.scratch / "other record.json"
+        path.write_text(json.dumps(self.record), encoding="utf-8")
+        result = self.run_script("--record", str(path), "check")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(
+            f" by running scripts/buildkite-pipeline-settings --record '{path}' apply --yes,",
+            result.stdout,
+        )
         self.assertEqual(self.patches(), [])
 
     def test_check_shows_line_ending_differences(self) -> None:
