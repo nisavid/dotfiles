@@ -34,3 +34,9 @@ chezmoi apply
 
 - [Hindsight](docs/HINDSIGHT.md): retain reusable templates and a reviewed
   release pin, with no active consumer binding.
+
+## Optional Codex quota safeguard
+
+The [quota safeguard adapter](docs/CODEX_QUOTA_SAFEGUARD.md) installs a reviewed
+`nisavid/agents` revision on Linux when explicitly selected. It is disabled by
+default and never activates the watcher or MCP companion during chezmoi apply.

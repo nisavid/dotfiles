@@ -555,6 +555,7 @@ expected_linux_source_inventory=$(
     'dot_config/autostart/private_claude.desktop' \
     'dot_config/systemd/user/app-com.anthropic.Claude-.scope.d/50-oom-continue.conf' \
     'dot_config/systemd/user/builds.slice' \
+    'dot_config/systemd/user/codex-usage-safeguard.service.tmpl' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
     'private_dot_local/private_share/applications/claude-code-url-handler.desktop' \

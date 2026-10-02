@@ -1,0 +1,34 @@
+{{- $selection := includeTemplate "codex-quota-safeguard-selection.tmpl" . | fromJson -}}
+#!/usr/bin/env python3
+"""Dispatch the selected immutable release using the existing private state."""
+import json
+import os
+from pathlib import Path
+import sys
+
+CONFIG = Path({{ $selection.configFile | toJson }})
+STATE = Path({{ $selection.stateDir | toJson }})
+LOCK = Path({{ $selection.sharedLock | toJson }})
+RELEASE = Path({{ joinPath .chezmoi.homeDir ".local/share/codex-quota-safeguard/releases" $selection.releaseCommit "tooling/codex-usage-safeguard" | toJson }})
+
+if len(sys.argv) != 2 or sys.argv[1] not in ("controller", "companion", "status"):
+    raise SystemExit("usage: codex-quota-safeguard controller|companion|status")
+try:
+    config = json.loads(CONFIG.read_text())
+except (OSError, ValueError) as error:
+    raise SystemExit(f"existing private configuration unavailable: {type(error).__name__}")
+if not isinstance(config, dict):
+    raise SystemExit("existing private configuration must be a JSON object")
+if config.get("sharedLock") != str(LOCK):
+    raise SystemExit("sharedLock differs from the declared existing singleton lock")
+if config.get("stateDir") != str(STATE):
+    raise SystemExit("stateDir differs from the declared existing episode state")
+if not STATE.is_dir() or not LOCK.is_file():
+    raise SystemExit("existing stateDir and sharedLock must exist; refusing to create replacement state")
+if LOCK.resolve() == (STATE / "observer.lock").resolve():
+    raise SystemExit("sharedLock must be distinct from stateDir/observer.lock; both locks are acquired")
+entry = RELEASE / (sys.argv[1] + ".py")
+if not entry.is_file():
+    raise SystemExit("selected safeguard release is unavailable; install the reviewed pinned archive")
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+os.execv(sys.executable, [sys.executable, str(entry), "--config", str(CONFIG), "--state-dir", str(STATE)])

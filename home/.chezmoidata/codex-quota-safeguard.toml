@@ -1,0 +1,8 @@
+# Opt-in consumer binding. Fill exact reviewed pins and existing paths before enabling.
+[codexQuotaSafeguard]
+enabled = false
+releaseCommit = ""
+archiveSha256 = ""
+configFile = ""
+stateDir = ""
+sharedLock = ""

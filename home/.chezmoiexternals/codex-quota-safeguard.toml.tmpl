@@ -1,0 +1,8 @@
+{{- $selection := includeTemplate "codex-quota-safeguard-selection.tmpl" . | fromJson -}}
+{{- if $selection.enabled }}
+[{{ printf ".local/share/codex-quota-safeguard/releases/%s" $selection.releaseCommit | quote }}]
+type = "archive"
+url = "https://github.com/nisavid/agents/archive/{{ $selection.releaseCommit }}.tar.gz"
+stripComponents = 1
+checksum.sha256 = {{ $selection.archiveSha256 | quote }}
+{{ end -}}
