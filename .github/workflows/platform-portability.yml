@@ -1,6 +1,7 @@
 name: Platform portability
 
-# User-session deployment contracts are also verified by zsh-deployment-portability.yml.
+# Runs the portability test battery on macOS. Buildkite runs the same groups
+# on Linux (.buildkite/pipeline.yml).
 on:
   pull_request:
   push:
@@ -22,22 +23,21 @@ env:
 
 jobs:
   verify:
-    name: ${{ matrix.os }} · ${{ matrix.group }}
-    runs-on: ${{ matrix.os }}
+    name: macos-14 · ${{ matrix.group }}
+    runs-on: macos-14
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - macos-14
-          - ubuntu-24.04
-        # scripts/ci-test-group defines each group's commands; Buildkite runs
-        # the same groups (.buildkite/pipeline.yml).
+        # scripts/ci-test-group defines each group's commands.
         group:
           - shell-bindings
           - proton-pass
           - discover
           - python-checks
+          - age-admission
+          - age-provisioning
+          - zsh-deployment
 
     steps:
       - name: Check out source
@@ -55,7 +55,6 @@ jobs:
         run: python3 -m pip install uv==0.11.32
 
       - name: Install macOS dependencies
-        if: runner.os == 'macOS'
         shell: bash
         # Reuse runner tooling without upgrading unrelated installed packages.
         env:
@@ -107,45 +106,6 @@ jobs:
             "$RUNNER_TEMP/chezmoi-bin"
           printf '%s\n' "$RUNNER_TEMP/chezmoi-bin" >>"$GITHUB_PATH"
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get -qq update
-          sudo apt-get -qq install -y acl bat curl jq ripgrep zsh
-          sudo ln -s /usr/bin/batcat /usr/local/bin/bat
-          archive=chezmoi_${CHEZMOI_VERSION}_linux_amd64.tar.gz
-          package="$RUNNER_TEMP/$archive"
-          curl --fail --location --silent --show-error \
-            --output "$package" \
-            "https://github.com/twpayne/chezmoi/releases/download/v${CHEZMOI_VERSION}/$archive"
-          printf '%s  %s\n' \
-            6ea2040ecc0e82d3dac604289e100b0157afefcd94ebb818e5f6e31655156d34 \
-            "$package" | sha256sum --check
-          mkdir -p "$RUNNER_TEMP/chezmoi-bin"
-          tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
-          age_archive=age-v${AGE_VERSION}-linux-amd64.tar.gz
-          age_digest=bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377
-          age_package="$RUNNER_TEMP/$age_archive"
-          curl --fail --location --silent --show-error \
-            --output "$age_package" \
-            "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/$age_archive"
-          printf '%s  %s\n' \
-            "$age_digest" \
-            "$age_package" | sha256sum --check
-          {
-            printf 'AGE_TOOLING_ARCHIVE=%s\n' "$age_package"
-            printf 'AGE_TOOLING_ARCHIVE_SHA256=%s\n' "$age_digest"
-          } >>"$GITHUB_ENV"
-          tar -xzf "$age_package" -C "$RUNNER_TEMP"
-          install -m 0755 \
-            "$RUNNER_TEMP/age/age" \
-            "$RUNNER_TEMP/age/age-keygen" \
-            "$RUNNER_TEMP/age/age-inspect" \
-            "$RUNNER_TEMP/chezmoi-bin"
-          printf '%s\n' "$RUNNER_TEMP/chezmoi-bin" >>"$GITHUB_PATH"
-
       - name: Verify chezmoi version
         shell: bash
         run: chezmoi --version | grep -Fq "chezmoi version v${CHEZMOI_VERSION},"
@@ -163,3 +123,17 @@ jobs:
           AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin
           GROUP: ${{ matrix.group }}
         run: bash scripts/ci-test-group "$GROUP"
+
+  # This job is the required check for the whole matrix.
+  aggregate:
+    name: platform portability
+    if: always()
+    needs:
+      - verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every group
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+        run: test "$VERIFY_RESULT" = success

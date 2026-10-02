@@ -2,11 +2,13 @@
 # Run one named group of the portability test battery from the repository root.
 #
 # The groups split the portability test battery so CI can run it in parallel.
-# .github/workflows/platform-portability.yml runs every group but zsh-deployment
-# as a matrix, zsh-deployment-portability.yml runs zsh-deployment, and
-# .buildkite/pipeline.yml runs them all; tests/ci-test-group.zsh checks those lists.
+# GitHub Actions runs every group on macOS (.github/workflows/platform-portability.yml),
+# and Buildkite runs every group on Linux (.buildkite/pipeline.yml);
+# tests/ci-test-group.zsh checks those lists.
 # Each group expects the workflow's dependencies on PATH: zsh, chezmoi, age tooling
 # (AGE_TOOLING_DIRECTORY), python3 with uv/uvx, jq, rg, bat, and flock on macOS.
+# age-admission and age-provisioning also need AGE_TOOLING_ARCHIVE and
+# AGE_TOOLING_ARCHIVE_SHA256.
 set -euo pipefail
 
 usage() {
@@ -15,16 +17,25 @@ Usage: ci-test-group GROUP
        ci-test-group --list
 
 Groups:
-  shell-bindings   CI group check, shell syntax, zsh binding tests, privacy scan,
-                   private-skill transaction
-  proton-pass      Proton Pass startup and session behavior tests
-  discover         agent-equipment unittest discovery suite
-  python-checks    remaining unittests, pyrefly, JSON Schema checks
-  zsh-deployment   user-session deployment contracts
+  shell-bindings    CI group check, shell syntax, zsh bindings, privacy scan, skills
+  proton-pass       Proton Pass startup and session behavior tests
+  discover          agent-equipment unittest discovery suite
+  python-checks     pyrefly, agent-equipment and remaining unittests, JSON Schema
+  age-admission     age admission, recovery, procedure and envelope unittests
+  age-provisioning  age admission provisioning unittests
+  zsh-deployment    user-session deployment contracts
 EOF
 }
 
-groups=(shell-bindings proton-pass discover python-checks zsh-deployment)
+groups=(
+  shell-bindings
+  proton-pass
+  discover
+  python-checks
+  age-admission
+  age-provisioning
+  zsh-deployment
+)
 
 group_shell_bindings() {
   zsh -f tests/ci-test-group.zsh
@@ -100,21 +111,6 @@ group_python_checks() {
   REQUIRE_AGE_TOOLING=1 \
     python3 -m unittest tests/test_agent_equipment_public_data.py
   python3 -m unittest tests/test_privacy_age_integrity_gate.py
-  python3 -m unittest tests/test_proton_pass_age_admission.py
-  AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
-  AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
-  REQUIRE_AGE_TOOLING=1 \
-    python3 -B -m unittest -v tests.test_age_admission_provider_fixture
-  AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
-  AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
-  REQUIRE_AGE_TOOLING=1 \
-    python3 -B -m unittest -v tests.test_age_admission_provisioning
-  python3 -B -m unittest -v tests.test_age_admission_recovery_preimage
-  python3 -B -m unittest -v tests.test_age_admission_procedure
-  REQUIRE_AGE_TOOLING=1 \
-    python3 -m unittest tests/test_privacy_age_admission.py
-  REQUIRE_AGE_TOOLING=1 \
-    python3 -m unittest tests/test_privacy_age_envelopes.py
   uvx --from check-jsonschema==0.35.0 \
     check-jsonschema --check-metaschema \
     docs/agent-equipment/adapter-contract-v1.schema.json \
@@ -173,6 +169,27 @@ group_python_checks() {
       return 1
       ;;
   esac
+}
+
+group_age_admission() {
+  python3 -m unittest tests/test_proton_pass_age_admission.py
+  AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
+  AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
+  REQUIRE_AGE_TOOLING=1 \
+    python3 -B -m unittest -v tests.test_age_admission_provider_fixture
+  python3 -B -m unittest -v tests.test_age_admission_recovery_preimage
+  python3 -B -m unittest -v tests.test_age_admission_procedure
+  REQUIRE_AGE_TOOLING=1 \
+    python3 -m unittest tests/test_privacy_age_admission.py
+  REQUIRE_AGE_TOOLING=1 \
+    python3 -m unittest tests/test_privacy_age_envelopes.py
+}
+
+group_age_provisioning() {
+  AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
+  AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
+  REQUIRE_AGE_TOOLING=1 \
+    python3 -B -m unittest -v tests.test_age_admission_provisioning
 }
 
 group_zsh_deployment() {
