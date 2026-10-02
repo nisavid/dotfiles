@@ -13,6 +13,9 @@ identity_partial="$source_root/.chezmoitemplates/$identity_partial_name"
 checkpoint_partial_name=git-checkpointing.tmpl
 checkpoint_partial="$source_root/.chezmoitemplates/$checkpoint_partial_name"
 claude_git_rule_template="$source_root/dot_claude/rules/private_git-defaults.md.tmpl"
+review_partial_name=review-before-shipping.tmpl
+review_partial="$source_root/.chezmoitemplates/$review_partial_name"
+claude_review_rule_template="$source_root/dot_claude/rules/review-before-shipping.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
@@ -22,16 +25,19 @@ claude_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-rule.XXXXXX")
 claude_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-state.XXXXXX")
 claude_git_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-git-rule.XXXXXX")
 identity_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-identity-policy.XXXXXX")
+claude_review_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-review-rule.XXXXXX")
+review_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-review-policy.XXXXXX")
 render_source_root=$source_root
 render_template=$template
 render_claude_rule_template=$claude_rule_template
 render_claude_git_rule_template=$claude_git_rule_template
+render_claude_review_rule_template=$claude_review_rule_template
 render_fixture=
 chmod 600 "$rendered"
 chmod 600 "$target_state"
 chmod 600 "$git_policy"
 chmod 600 "$pr_policy"
-trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
+trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -44,6 +50,24 @@ mode_of() {
     Linux) stat -c '%a' -- "$1" ;;
     *) fail "unsupported test platform: $(uname -s)" ;;
   esac
+}
+
+# Each sentence of a shared partial appears once in the Codex policy, and no
+# source template copies it inline instead of including the partial.
+assert_partial_carried_once() {
+  local partial_text=$1 label=$2 sentence source_template
+  shift 2
+  local -a sentences
+  sentences=(${(s:. :)${${partial_text//$'\n'/. }//: /. }})
+  for sentence in $sentences; do
+    ((${#sentence} >= 30)) || continue
+    [[ $(grep -Fo -- "$sentence" "$rendered" | wc -l | tr -d ' ') == 1 ]] ||
+      fail "Codex policy must carry the $label exactly once"
+    for source_template in "$@"; do
+      ! grep -Fq -- "$sentence" "$source_template" ||
+        fail "${source_template:t} duplicates $label text instead of including the partial"
+    done
+  done
 }
 
 [[ -f "$template" ]] || fail "private source template is missing"
@@ -60,7 +84,7 @@ source_git_mode=$(git -C "$repo_root" ls-files --stage -- home/dot_codex/private
 [[ $(mode_of "$claude_rule_template") == 644 ]] || fail "Claude rule template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$claude_rule_template") == "$HOME/.claude/rules/ticket-tracker-preflight.md" ]] ||
   fail "Claude rule template targets the wrong file"
-for partial in "$identity_partial" "$checkpoint_partial"; do
+for partial in "$identity_partial" "$checkpoint_partial" "$review_partial"; do
   [[ -f "$partial" ]] || fail "${partial:t} partial is missing"
   [[ $(mode_of "$partial") == 644 ]] || fail "${partial:t} partial mode must be 0644"
 done
@@ -68,6 +92,10 @@ done
 [[ $(mode_of "$claude_git_rule_template") == 644 ]] || fail "Claude Git defaults rule source template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$claude_git_rule_template") == "$HOME/.claude/rules/git-defaults.md" ]] ||
   fail "Claude Git defaults rule template targets the wrong file"
+[[ -f "$claude_review_rule_template" ]] || fail "Claude review rule template is missing"
+[[ $(mode_of "$claude_review_rule_template") == 644 ]] || fail "Claude review rule source template mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_review_rule_template") == "$HOME/.claude/rules/review-before-shipping.md" ]] ||
+  fail "Claude review rule template targets the wrong file"
 
 if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   render_fixture=$(mktemp -d "${TMPDIR:-/tmp}/global-agents-source.XXXXXX")
@@ -82,6 +110,7 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$preflight_partial" "$render_fixture/.chezmoitemplates/$preflight_partial_name"
   cp -p -- "$identity_partial" "$render_fixture/.chezmoitemplates/$identity_partial_name"
   cp -p -- "$checkpoint_partial" "$render_fixture/.chezmoitemplates/$checkpoint_partial_name"
+  cp -p -- "$review_partial" "$render_fixture/.chezmoitemplates/$review_partial_name"
   cp -p -- "$source_root/.chezmoiignore" "$render_fixture/.chezmoiignore"
   mkdir -m 700 "$render_fixture/.chezmoidata"
   sed 's/^publicFixture = false$/publicFixture = true/' \
@@ -92,6 +121,8 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$claude_rule_template" "$render_claude_rule_template"
   render_claude_git_rule_template="$render_fixture/dot_claude/rules/${claude_git_rule_template:t}"
   cp -p -- "$claude_git_rule_template" "$render_claude_git_rule_template"
+  render_claude_review_rule_template="$render_fixture/dot_claude/rules/${claude_review_rule_template:t}"
+  cp -p -- "$claude_review_rule_template" "$render_claude_review_rule_template"
   render_source_root=$render_fixture
 fi
 
@@ -241,16 +272,7 @@ awk '
 [[ $(<"$claude_rule") == "# Ticket Tracker Preflight"$'\n\n'"$preflight" ]] ||
   fail "Claude rule is not the heading plus the shared preflight"
 
-preflight_sentences=(${(s:. :)${${preflight//$'\n'/. }//: /. }})
-for preflight_sentence in $preflight_sentences; do
-  ((${#preflight_sentence} >= 30)) || continue
-  [[ $(grep -Fo -- "$preflight_sentence" "$rendered" | wc -l | tr -d ' ') == 1 ]] ||
-    fail "Codex policy must carry the preflight exactly once"
-  for source_template in "$template" "$claude_rule_template"; do
-    ! grep -Fq -- "$preflight_sentence" "$source_template" ||
-      fail "${source_template:t} duplicates preflight text instead of including the partial"
-  done
-done
+assert_partial_carried_once "$preflight" preflight "$template" "$claude_rule_template"
 
 preflight_required=(
   'Before you read, draft, create, or change any ticket, find the instructions governing the tracking, handoff, or escalation method the task plausibly uses.'
@@ -325,6 +347,74 @@ for ((i = 1; i <= ${#identity_required}; i++)); do
   grep -Fq -- "$identity_required[$i]" "$identity_policy" || fail "identity defaults are missing required clause $i"
 done
 
+chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/review-before-shipping.md" > "$claude_state"
+[[ $(jq -r '.[".claude/rules/review-before-shipping.md"].perm' "$claude_state") == 420 ]] ||
+  fail "Claude review rule target mode is not 0644"
+
+(
+  cd "$render_source_root"
+  chezmoi -S "$render_source_root" execute-template < "$render_claude_review_rule_template" > "$claude_review_rule"
+)
+review=$(render_partial "$review_partial_name")
+[[ -n $review ]] || fail "review partial renders empty"
+[[ $(<"$claude_review_rule") == "# Review Before Shipping"$'\n\n'"$review" ]] ||
+  fail "Claude review rule is not the heading plus the shared review partial"
+
+awk '
+  $0 == "## Review Before Shipping" { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+' "$rendered" > "$review_policy"
+# The section carries the shared partial and nothing else, so Codex-only text
+# can't stand in for a clause the Claude rule lacks.
+[[ $(<"$review_policy") == $'\n'"$review" ]] || fail "Codex policy does not carry the review partial in Review Before Shipping"
+assert_partial_carried_once "$review" "review policy" "$template" "$claude_review_rule_template"
+
+review_required=(
+  'Review code, configuration, and protected paths before they ship.'
+  'Agent-instruction files (`SKILL.md`, `AGENTS.md`, rule files, and prompt templates) count as configuration.'
+  'Docs-only and typo changes outside protected paths are exempt.'
+  'A trivial or mechanical change needs one review pass; a substantive change needs the review-and-revise loop in rule 4.'
+  '1. Review at commit and push time, against the final commit itself rather than the working tree, and push only reviewed commits.'
+  "Changing a commit makes its review stale, but a rebase that leaves the change's own diff byte-identical keeps its review unless the new base changes something the change or its review's evidence depends on; a review kept this way counts as a review of the rebased commit."
+  "2. Don't open a pull request as ready for review, or move one there, until a code review of its head is clean, with no unresolved valid blockers."
+  "3. Fixes for review feedback get an independent review before they're pushed."
+  'When a change is too broad to review well, recommend splitting, deferring, or narrowing it.'
+  '4. Before declaring work finished, review and revise until a review comes back clean.'
+  "Reviews are independent: run Tricritical's \`review\`, or \`loop\` for rule 4, so its critics (\`intent\`, \`runtime\`, and \`structure\`, chosen to fit the change) execute as subagents, never as the author's own pass."
+  'An adjudicator subagent, not the author, decides which findings are valid.'
+  'A Tricritical critic, adjudicator, or reviser execution follows its own skill contract rather than rules 1–4; the agent that invoked it owns the review and runs the rule-4 `loop` only at the top level, never nested inside another review, a revision, or the adjudication of external feedback.'
+  'A result Tricritical labels `non-independent / degraded`, `clean / degraded`, or `incomplete / non-clean` is not clean.'
+  '`tightening-code-for-review` may run alongside for code-quality passes, but it never stands in for the Tricritical review a rule requires.'
+  "A review-and-revise loop ends only when a review comes back clean, when the loop degenerates (revisions stop making measurable progress or keep reproducing the same cause), when you escalate to Ivan with a different approach or another remedy that automated review can't supply, or when another blocking problem interrupts it."
+  'A round count is never a reason to stop, and any ending other than a clean review means the work isn'"'"'t finished or clean.'
+  "Until Provingkit alpha.4 is installed (nisavid/provingkit#187): Installed Tricritical skills may cite references/topology.json; that file is intentionally absent. Don't look for it or any copy of it: not in a working tree, checkout, candidate, cache, or other revision. Use only the edges your installed SKILL.md and invocation boundary state, and make no claim about topology."
+)
+for ((i = 1; i <= ${#review_required}; i++)); do
+  grep -Fq -- "$review_required[$i]" "$review_policy" || fail "review policy is missing required clause $i"
+done
+# The settled clauses are the whole partial, so an added sentence can't
+# weaken one of them unnoticed.
+review_residue=$review
+for clause in $review_required; do
+  review_residue=${review_residue//"$clause"/}
+done
+[[ $review_residue != *[^[:space:]]* ]] || fail "review policy carries text beyond its settled clauses"
+
+# The same words reach both harnesses, so none of them may name one.
+review_harness_specific=(
+  'Claude'
+  'Codex'
+  'AskUserQuestion'
+  'Agent tool'
+  'Task tool'
+  'spawn_agent'
+  'request_user_input'
+)
+for phrase in $review_harness_specific; do
+  ! grep -Fiq -- "$phrase" "$review_partial" || fail "review policy names a harness: $phrase"
+done
+
 repo_agents_forbidden=(
   'ivan@nisavid.io'
   'Ivan D Vasin'
@@ -348,6 +438,9 @@ writing_line=$(grep -n '^## Writing$' "$rendered" | cut -d: -f1)
 next_heading=$(awk '$0 == "## Development Work" { found = 1; next } found && /^## / { print; exit }' "$rendered")
 [[ $next_heading == '## Git Checkpoints And Publication' ]] || \
   fail 'another section appears between Development Work and the Git checkpoint policy'
+next_heading=$(awk '$0 == "## Git Checkpoints And Publication" { found = 1; next } found && /^## / { print; exit }' "$rendered")
+[[ $next_heading == '## Review Before Shipping' ]] || \
+  fail 'review policy is not immediately after the Git checkpoint policy'
 
 git_policy_words=$(wc -w < "$git_policy" | tr -d ' ')
 ((git_policy_words <= 160)) || fail "Git checkpoint policy exceeds 160 words ($git_policy_words)"
