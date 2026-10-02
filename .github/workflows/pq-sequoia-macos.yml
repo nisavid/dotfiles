@@ -1,0 +1,774 @@
+name: PQ Sequoia macOS qualification
+run-name: pq-sequoia-${{ inputs.mode }}-${{ inputs.session_id }}-${{ inputs.qualifier_run_id }}-${{ inputs.parent_envelope_sha256 }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Run the macOS qualification or relay Hatchery's public response
+        required: true
+        default: qualify
+        type: choice
+        options:
+          - qualify
+          - publish-peer-response
+      candidate_commit:
+        description: Reviewed 40-hex dotfiles commit containing this workflow
+        required: true
+        type: string
+      session_id:
+        description: Shared 64-hex interoperability session identity
+        required: true
+        type: string
+      peer_envelope_base64:
+        description: Base64 of hatchery-phase-a.json or hatchery-phase-c.json
+        required: true
+        type: string
+      peer_envelope_sha256:
+        description: SHA-256 of the decoded peer envelope bytes
+        required: true
+        type: string
+      peer_closure_sha256:
+        description: Reviewed SHA-256 closure digest for the Hatchery producer
+        required: true
+        type: string
+      qualifier_run_id:
+        description: Qualifier run ID; required only for publish-peer-response
+        required: false
+        default: ''
+        type: string
+      parent_envelope_sha256:
+        description: Phase-B envelope SHA-256; required only for publish-peer-response
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: pq-sequoia-${{ inputs.mode }}-${{ inputs.session_id }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  qualify:
+    if: inputs.mode == 'qualify'
+    runs-on: macos-15
+    timeout-minutes: 360
+    steps:
+      - name: Reject a qualification rerun before exchange input use
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_RUN_ATTEMPT:?}" == 1 ]]
+
+      - name: Check out the reviewed qualification revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate immutable inputs and runner boundary
+        shell: bash
+        env:
+          PQ_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          PQ_SESSION_ID: ${{ inputs.session_id }}
+          PQ_PEER_ENVELOPE_BASE64: ${{ inputs.peer_envelope_base64 }}
+          PQ_PEER_ENVELOPE_SHA256: ${{ inputs.peer_envelope_sha256 }}
+          PQ_PEER_CLOSURE_SHA256: ${{ inputs.peer_closure_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$PQ_CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PQ_SESSION_ID" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PQ_PEER_ENVELOPE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PQ_PEER_CLOSURE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          (( ${#PQ_PEER_ENVELOPE_BASE64} <= 61500 ))
+          [[ "$(git rev-parse HEAD)" == "$PQ_CANDIDATE_COMMIT" ]]
+          [[ "$GITHUB_WORKFLOW_SHA" == "$PQ_CANDIDATE_COMMIT" ]]
+          [[ "$RUNNER_ENVIRONMENT" == github-hosted ]]
+          [[ "$RUNNER_OS" == macOS ]]
+          [[ "$RUNNER_ARCH" == ARM64 ]]
+          [[ "$(uname -m)" == arm64 ]]
+          [[ "$(sw_vers -productVersion)" == 15.* ]]
+          [[ -n "${ImageOS:-}" ]]
+          [[ -n "${ImageVersion:-}" ]]
+
+          scratch="$RUNNER_TEMP/pq-sequoia-$PQ_SESSION_ID"
+          mkdir -p "$scratch/public" "$scratch/private" "$scratch/evidence" \
+            "$scratch/rejected-evidence"
+          printf '%s' "$PQ_PEER_ENVELOPE_BASE64" | base64 --decode \
+            >"$scratch/public/hatchery-phase-a.json"
+          (( $(wc -c <"$scratch/public/hatchery-phase-a.json") <= 46000 ))
+          printf '%s  %s\n' "$PQ_PEER_ENVELOPE_SHA256" \
+            "$scratch/public/hatchery-phase-a.json" | shasum -a 256 --check
+          candidate_digest=$(shasum -a 256 \
+            packaging/homebrew/pq-sequoia-macos/v1/candidate.json | awk '{print $1}')
+          printf 'PQ_SCRATCH=%s\n' "$scratch" >>"$GITHUB_ENV"
+          printf 'PQ_CANDIDATE_IDENTITY=sha256:%s\n' "$candidate_digest" >>"$GITHUB_ENV"
+
+          scripts/pq-sequoia-macos validate-static --root .
+          python3 -m unittest tests.test_pq_sequoia_macos
+          scripts/pq-sequoia-macos validate-envelope \
+            --phase hatchery-phase-a \
+            --session-id "$PQ_SESSION_ID" \
+            --expected-producer-closure-sha256 "$PQ_PEER_CLOSURE_SHA256" \
+            --expected-parent-sha256 "$(printf '0%.0s' {1..64})" \
+            "$scratch/public/hatchery-phase-a.json"
+
+      - name: Verify signed sources, locks, and the LTS closure
+        shell: bash
+        env:
+          PQ_SESSION_ID: ${{ inputs.session_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          candidate=packaging/homebrew/pq-sequoia-macos/v1/candidate.json
+          downloads="$PQ_SCRATCH/downloads"
+          sources="$PQ_SCRATCH/sources"
+          gnupg="$PQ_SCRATCH/gnupg"
+          mkdir -p "$downloads" "$sources" "$gnupg"
+          chmod 700 "$gnupg"
+
+          openssl_key_url=$(jq -r '.openssl.signer_key_url' "$candidate")
+          openssl_key_digest=$(jq -r '.openssl.signer_key_bundle_sha256' "$candidate")
+          curl --fail --location --silent --show-error \
+            --output "$gnupg/openssl-pubkeys.asc" "$openssl_key_url"
+          printf '%s  %s\n' "$openssl_key_digest" "$gnupg/openssl-pubkeys.asc" \
+            | shasum -a 256 --check
+
+          sequoia_key_url=$(jq -r '.applications.sq.signer_key_url' "$candidate")
+          curl --fail --location --silent --show-error \
+            --output "$gnupg/sequoia-release.asc" "$sequoia_key_url"
+          GNUPGHOME="$gnupg" gpg --batch --quiet --import \
+            "$gnupg/openssl-pubkeys.asc" "$gnupg/sequoia-release.asc"
+
+          for component in sq sqv; do
+            repository=$(jq -r ".applications.$component.repository" "$candidate")
+            tag=$(jq -r ".applications.$component.tag" "$candidate")
+            tag_object=$(jq -r ".applications.$component.tag_object" "$candidate")
+            commit=$(jq -r ".applications.$component.commit" "$candidate")
+            source_url=$(jq -r ".applications.$component.source_url" "$candidate")
+            source_digest=$(jq -r ".applications.$component.source_sha256" "$candidate")
+            patch_path=$(jq -r ".applications.$component.patch_path" "$candidate")
+            patch_digest=$(jq -r ".applications.$component.patch_sha256" "$candidate")
+            lock_digest=$(jq -r ".applications.$component.lock_sha256" "$candidate")
+            repository_path="$sources/$component.git"
+            git init --bare "$repository_path" >/dev/null
+            git -C "$repository_path" fetch --quiet --depth=1 "$repository" \
+              "refs/tags/$tag:refs/tags/$tag"
+            [[ "$(git -C "$repository_path" rev-parse "refs/tags/$tag")" == "$tag_object" ]]
+            [[ "$(git -C "$repository_path" rev-parse "refs/tags/$tag^{}")" == "$commit" ]]
+            signer_status="$downloads/$component-validsig.status"
+            GNUPGHOME="$gnupg" git -C "$repository_path" \
+              verify-tag --raw "$tag" >"$signer_status" 2>&1
+            scripts/pq-sequoia-macos verify-gpg-status \
+              --candidate "$candidate" --source "$component" \
+              --status "$signer_status" \
+              --output "$PQ_SCRATCH/evidence/source-$component-signer.json"
+            cp "$signer_status" "$PQ_SCRATCH/evidence/source-$component-validsig.status"
+
+            case "$component" in
+              sq) archive="$downloads/sequoia-sq-v1.4.0.tar.gz" ;;
+              sqv) archive="$downloads/sequoia-sqv-v1.5.0.tar.bz2" ;;
+            esac
+            curl --fail --location --silent --show-error \
+              --output "$archive" "$source_url"
+            printf '%s  %s\n' "$source_digest" "$archive" | shasum -a 256 --check
+            printf '%s  %s\n' "$patch_digest" "$patch_path" | shasum -a 256 --check
+            mkdir -p "$sources/$component"
+            case "$archive" in
+              *.tar.gz) tar -xzf "$archive" -C "$sources/$component" --strip-components=1 ;;
+              *.tar.bz2) tar -xjf "$archive" -C "$sources/$component" --strip-components=1 ;;
+            esac
+            scripts/pq-sequoia-macos verify-archive-tree \
+              --repository "$repository_path" --commit "$commit" \
+              --archive-root "$sources/$component" \
+              --output "$PQ_SCRATCH/evidence/source-$component-tree.json"
+            patch -d "$sources/$component" -p1 --forward <"$patch_path"
+            printf '%s  %s\n' "$lock_digest" "$sources/$component/Cargo.lock" \
+              | shasum -a 256 --check
+          done
+
+          openssl_source_url=$(jq -r '.openssl.source_url' "$candidate")
+          openssl_source_digest=$(jq -r '.openssl.source_sha256' "$candidate")
+          openssl_signature_url=$(jq -r '.openssl.source_signature_url' "$candidate")
+          openssl_signature_digest=$(jq -r '.openssl.source_signature_sha256' "$candidate")
+          openssl_formula_url=$(jq -r '.openssl.formula_url' "$candidate")
+          openssl_formula_digest=$(jq -r '.openssl.formula_sha256' "$candidate")
+          openssl_source="$downloads/openssl-3.5.8.tar.gz"
+          openssl_signature="$downloads/openssl-3.5.8.tar.gz.asc"
+          openssl_formula="$downloads/openssl@3.5.rb"
+          curl --fail --location --silent --show-error \
+            --output "$openssl_source" "$openssl_source_url"
+          curl --fail --location --silent --show-error \
+            --output "$openssl_signature" "$openssl_signature_url"
+          curl --fail --location --silent --show-error \
+            --output "$openssl_formula" "$openssl_formula_url"
+          printf '%s  %s\n' "$openssl_source_digest" "$openssl_source" \
+            | shasum -a 256 --check
+          printf '%s  %s\n' "$openssl_signature_digest" "$openssl_signature" \
+            | shasum -a 256 --check
+          printf '%s  %s\n' "$openssl_formula_digest" "$openssl_formula" \
+            | shasum -a 256 --check
+          openssl_signer_status="$downloads/openssl-validsig.status"
+          GNUPGHOME="$gnupg" gpg --batch --status-fd 1 \
+            --verify "$openssl_signature" "$openssl_source" \
+            >"$openssl_signer_status" 2>/dev/null
+          scripts/pq-sequoia-macos verify-gpg-status \
+            --candidate "$candidate" --source openssl \
+            --status "$openssl_signer_status" \
+            --output "$PQ_SCRATCH/evidence/source-openssl-signer.json"
+          cp "$openssl_signer_status" "$PQ_SCRATCH/evidence/source-openssl-validsig.status"
+
+          bottle_url=$(jq -r '.openssl.arm64_sequoia_bottle_url' "$candidate")
+          bottle_digest=$(jq -r '.openssl.arm64_sequoia_bottle_sha256' "$candidate")
+          bottle="$downloads/openssl@3.5--3.5.8.arm64_sequoia.bottle.tar.gz"
+          token=$(curl --fail --silent --show-error \
+            'https://ghcr.io/token?scope=repository%3Ahomebrew%2Fcore%2Fopenssl%2F3.5%3Apull&service=ghcr.io' \
+            | jq -r .token)
+          [[ -n "$token" ]]
+          curl --fail --location --silent --show-error \
+            -H "Authorization: Bearer $token" --output "$bottle" "$bottle_url"
+          unset token
+          printf '%s  %s\n' "$bottle_digest" "$bottle" | shasum -a 256 --check
+
+      - name: Install disposable build dependencies and pinned OpenSSL bottle
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_FROM_API=1
+          candidate=packaging/homebrew/pq-sequoia-macos/v1/candidate.json
+          core_commit=$(jq -r '.openssl.homebrew_core_commit' "$candidate")
+          if ! core_root=$(brew --repository homebrew/core 2>/dev/null) \
+            || [[ ! -d "$core_root" ]]
+          then
+            brew tap homebrew/core
+            core_root=$(brew --repository homebrew/core)
+          fi
+          git -C "$core_root" fetch --quiet --depth=1 origin "$core_commit"
+          git -C "$core_root" checkout --quiet --detach "$core_commit"
+          active_openssl_formula=$(brew ruby -e \
+            'puts Formulary.factory("openssl@3.5").path')
+          scripts/pq-sequoia-macos verify-homebrew-formula \
+            --candidate "$candidate" --core-root "$core_root" \
+            --active-formula "$active_openssl_formula" \
+            --output "$PQ_SCRATCH/evidence/homebrew-formula-source.json"
+
+          python3 - "$candidate" "$PQ_SCRATCH/evidence" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          candidate_path = pathlib.Path(sys.argv[1])
+          evidence = pathlib.Path(sys.argv[2])
+          candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+
+          def load(name):
+              return json.loads((evidence / name).read_text(encoding="utf-8"))
+
+          receipt = {
+              "schema_version": "pq-sequoia-source-verification/v1",
+              "candidate_sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
+              "verified": {},
+          }
+          for component in ("sq", "sqv"):
+              application = candidate["applications"][component]
+              receipt["verified"][component] = {
+                  field: application[field]
+                  for field in (
+                      "tag_object",
+                      "commit",
+                      "source_sha256",
+                      "patch_sha256",
+                      "lock_sha256",
+                      "signer_primary_fingerprint",
+                      "signer_subkey_fingerprint",
+                  )
+              }
+              receipt["verified"][component]["observed_signer"] = load(
+                  f"source-{component}-signer.json"
+              )
+              receipt["verified"][component]["archive_tree"] = load(
+                  f"source-{component}-tree.json"
+              )
+          openssl = candidate["openssl"]
+          receipt["verified"]["openssl"] = {
+              field: openssl[field]
+              for field in (
+                  "source_sha256",
+                  "source_signature_sha256",
+                  "formula_sha256",
+                  "arm64_sequoia_bottle_sha256",
+                  "homebrew_core_commit",
+                  "homebrew_core_formula_path",
+                  "signer_primary_fingerprint",
+                  "signer_subkey_fingerprint",
+              )
+          }
+          receipt["verified"]["openssl"]["observed_signer"] = load(
+              "source-openssl-signer.json"
+          )
+          receipt["verified"]["openssl"]["active_formula"] = load(
+              "homebrew-formula-source.json"
+          )
+          (evidence / "source-verification.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          {
+            printf 'HOMEBREW_NO_INSTALL_FROM_API=1\n'
+            printf 'PQ_HOMEBREW_CORE_ROOT=%s\n' "$core_root"
+            printf 'PQ_OPENSSL_FORMULA_PATH=%s\n' "$active_openssl_formula"
+          } >>"$GITHUB_ENV"
+          brew install capnp gnupg pkgconf
+          brew install "$PQ_SCRATCH/downloads/openssl@3.5--3.5.8.arm64_sequoia.bottle.tar.gz"
+          openssl_prefix=$(brew --prefix openssl@3.5)
+          [[ "$("$openssl_prefix/bin/openssl" version)" == "OpenSSL 3.5.8 "* ]]
+          "$openssl_prefix/bin/openssl" list -signature-algorithms | grep -F ML-DSA-65 >/dev/null
+          "$openssl_prefix/bin/openssl" list -kem-algorithms | grep -F ML-KEM-768 >/dev/null
+          printf 'PQ_OPENSSL_PREFIX=%s\n' "$openssl_prefix" >>"$GITHUB_ENV"
+
+      - name: Run complete upstream suites with the reviewed locks
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENSSL_DIR="$PQ_OPENSSL_PREFIX"
+          export OPENSSL_NO_VENDOR=1
+          export ASSET_OUT_DIR="$PQ_SCRATCH/sources/sq/target"
+          cargo test --manifest-path "$PQ_SCRATCH/sources/sq/Cargo.toml" \
+            --locked --no-default-features --features crypto-openssl
+          export ASSET_OUT_DIR="$PQ_SCRATCH/sources/sqv"
+          cargo test --manifest-path "$PQ_SCRATCH/sources/sqv/Cargo.toml" \
+            --locked --no-default-features --features crypto-openssl
+
+      - name: Build and bottle the keg-only candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          brew tap-new qualification/pq-sequoia >/dev/null
+          tap_root=$(brew --repository qualification/pq-sequoia)
+          scripts/pq-sequoia-macos prepare-tap \
+            --root . --tap-root "$tap_root" \
+            --output "$PQ_SCRATCH/evidence/tap-closure.json"
+          printf 'PQ_TAP_ROOT=%s\n' "$tap_root" >>"$GITHUB_ENV"
+          brew install --build-bottle qualification/pq-sequoia/sequoia-sq-pqc@1.4.0
+          brew install --build-bottle qualification/pq-sequoia/sequoia-sqv-pqc@1.5.0
+          mkdir -p "$PQ_SCRATCH/evidence/bottles"
+          (
+            cd "$PQ_SCRATCH/evidence/bottles"
+            brew bottle --json qualification/pq-sequoia/sequoia-sq-pqc@1.4.0 \
+              >sequoia-sq-pqc@1.4.0.bottle.json
+            brew bottle --json qualification/pq-sequoia/sequoia-sqv-pqc@1.5.0 \
+              >sequoia-sqv-pqc@1.5.0.bottle.json
+          )
+          cellar=$(brew --cellar)
+          sq="$cellar/sequoia-sq-pqc@1.4.0/1.4.0/bin/sq"
+          sqv="$cellar/sequoia-sqv-pqc@1.5.0/1.5.0/bin/sqv"
+          [[ -x "$sq" && -x "$sqv" ]]
+          printf 'PQ_SQ=%s\nPQ_SQV=%s\n' "$sq" "$sqv" >>"$GITHUB_ENV"
+
+      - name: Prove exact-keg selection and record the closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate=packaging/homebrew/pq-sequoia-macos/v1/candidate.json
+          scripts/pq-sequoia-macos verify-homebrew-formula \
+            --candidate "$candidate" --core-root "$PQ_HOMEBREW_CORE_ROOT" \
+            --active-formula "$PQ_OPENSSL_FORMULA_PATH" \
+            --output "$PQ_SCRATCH/evidence/homebrew-formula-runtime.json"
+          sq_digest=$(shasum -a 256 "$PQ_SQ" | awk '{print $1}')
+          sqv_digest=$(shasum -a 256 "$PQ_SQV" | awk '{print $1}')
+          disabled="$PQ_SCRATCH/public/disabled-selector.env"
+          if scripts/pq-sequoia-macos select-kegs \
+            --sq "$PQ_SQ" --sqv "$PQ_SQV" \
+            --expected-sq-sha256 "$(printf '0%.0s' {1..64})" \
+            --expected-sqv-sha256 "$sqv_digest" --output "$disabled"
+          then
+            printf 'identity-mismatch selector unexpectedly succeeded\n' >&2
+            exit 1
+          fi
+          [[ ! -e "$disabled" ]]
+          scripts/pq-sequoia-macos select-kegs \
+            --sq "$PQ_SQ" --sqv "$PQ_SQV" \
+            --expected-sq-sha256 "$sq_digest" \
+            --expected-sqv-sha256 "$sqv_digest" \
+            --output "$PQ_SCRATCH/public/selector.env"
+          bottles="$PQ_SCRATCH/evidence/bottles"
+          sq_bottle_metadata="$bottles/sequoia-sq-pqc"'@'"1.4.0.bottle.json"
+          sqv_bottle_metadata="$bottles/sequoia-sqv-pqc"'@'"1.5.0.bottle.json"
+          sq_bottle_name=$(jq -er \
+            '.formula.bottle.tags.arm64_sequoia.local_filename | select(type == "string" and length > 0)' \
+            "$sq_bottle_metadata")
+          sqv_bottle_name=$(jq -er \
+            '.formula.bottle.tags.arm64_sequoia.local_filename | select(type == "string" and length > 0)' \
+            "$sqv_bottle_metadata")
+          scripts/pq-sequoia-macos record-runtime \
+            --root . --tap-root "$PQ_TAP_ROOT" \
+            --otool /usr/bin/otool \
+            --dyld-shared-cache-util /usr/bin/dyld_shared_cache_util \
+            --sq "$PQ_SQ" --sqv "$PQ_SQV" \
+            --openssl "$PQ_OPENSSL_PREFIX/bin/openssl" \
+            --source-verification "$PQ_SCRATCH/evidence/source-verification.json" \
+            --active-formula-verification "$PQ_SCRATCH/evidence/homebrew-formula-runtime.json" \
+            --sq-bottle "$bottles/$sq_bottle_name" \
+            --sq-bottle-metadata "$sq_bottle_metadata" \
+            --sqv-bottle "$bottles/$sqv_bottle_name" \
+            --sqv-bottle-metadata "$sqv_bottle_metadata" \
+            --candidate-identity "$PQ_CANDIDATE_IDENTITY" \
+            --output "$PQ_SCRATCH/evidence/runtime-closure.json"
+          producer_closure_sha256=$(shasum -a 256 \
+            "$PQ_SCRATCH/evidence/runtime-closure.json" | awk '{print $1}')
+          printf 'PQ_PRODUCER_CLOSURE_SHA256=%s\n' "$producer_closure_sha256" \
+            >>"$GITHUB_ENV"
+
+      - name: Run the local RFC 9980 matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/pq-sequoia-macos qualify-local \
+            --root . --sq "$PQ_SQ" --sqv "$PQ_SQV" \
+            --candidate-identity "$PQ_CANDIDATE_IDENTITY" \
+            --work-root "$PQ_SCRATCH/private/local" \
+            --output "$PQ_SCRATCH/evidence/local-result.json"
+
+      - name: Open the live interoperability phase
+        shell: bash
+        env:
+          PQ_SESSION_ID: ${{ inputs.session_id }}
+          PQ_PEER_CLOSURE_SHA256: ${{ inputs.peer_closure_sha256 }}
+        run: |
+          set -euo pipefail
+          scripts/pq-sequoia-macos interop-open \
+            --root . --sq "$PQ_SQ" --sqv "$PQ_SQV" \
+            --candidate-identity "$PQ_CANDIDATE_IDENTITY" \
+            --producer-closure "$PQ_SCRATCH/evidence/runtime-closure.json" \
+            --expected-peer-closure-sha256 "$PQ_PEER_CLOSURE_SHA256" \
+            --session-id "$PQ_SESSION_ID" \
+            --peer-envelope "$PQ_SCRATCH/public/hatchery-phase-a.json" \
+            --local-result "$PQ_SCRATCH/evidence/local-result.json" \
+            --state-dir "$PQ_SCRATCH/private/live" \
+            --output "$PQ_SCRATCH/evidence/macos-ci-phase-b.json"
+          [[ "$(jq -r '.producer_closure_sha256' \
+            "$PQ_SCRATCH/evidence/macos-ci-phase-b.json")" \
+            == "$PQ_PRODUCER_CLOSURE_SHA256" ]]
+          phase_b_sha256=$(shasum -a 256 \
+            "$PQ_SCRATCH/evidence/macos-ci-phase-b.json" | awk '{print $1}')
+          printf 'PQ_PHASE_B_SHA256=%s\n' "$phase_b_sha256" >>"$GITHUB_ENV"
+
+      - name: Upload the public phase for Hatchery
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pq-sequoia-macos-phase-b-${{ inputs.session_id }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/evidence/macos-ci-phase-b.json
+            ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/evidence/runtime-closure.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Wait for the matching public peer response
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PQ_SESSION_ID: ${{ inputs.session_id }}
+          PQ_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          PQ_PEER_CLOSURE_SHA256: ${{ inputs.peer_closure_sha256 }}
+        run: |
+          set -euo pipefail
+          target="pq-sequoia-publish-peer-response-$PQ_SESSION_ID-$GITHUB_RUN_ID-$PQ_PHASE_B_SHA256"
+          relay_wait_minutes=$(jq -er '
+            .session.relay_wait_minutes
+            | select(type == "number" and . > 0 and floor == .)
+          ' docs/crypto/pq-sequoia-macos/interop-v1.json)
+          [[ "$relay_wait_minutes" =~ ^[1-9][0-9]*$ ]]
+          relay_wait_ns=$((relay_wait_minutes * 60 * 1000000000))
+          monotonic_ns() {
+            local value
+            value=$(python3 -c 'import time; print(time.monotonic_ns())')
+            [[ "$value" =~ ^[0-9]+$ ]]
+            printf '%s\n' "$value"
+          }
+          relay_started_ns=$(monotonic_ns)
+          relay_deadline_ns=$((relay_started_ns + relay_wait_ns))
+          response_run=
+          for _ in {1..90}; do
+            now_ns=$(monotonic_ns)
+            remaining_ns=$((relay_deadline_ns - now_ns))
+            (( remaining_ns > 0 )) || break
+            query_timeout_ns=$remaining_ns
+            (( query_timeout_ns < 60000000000 )) \
+              || query_timeout_ns=60000000000
+            printf -v query_timeout_seconds '%d.%09d' \
+              "$((query_timeout_ns / 1000000000))" \
+              "$((query_timeout_ns % 1000000000))"
+            if scripts/pq-sequoia-macos record-relay-observation \
+              --repository "$GITHUB_REPOSITORY" \
+              --query-timeout-seconds "$query_timeout_seconds" \
+              --stage selection \
+              --session-id "$PQ_SESSION_ID" \
+              --qualifier-run-id "$GITHUB_RUN_ID" \
+              --phase-b-sha256 "$PQ_PHASE_B_SHA256" \
+              --expected-commit "$PQ_CANDIDATE_COMMIT" \
+              --output "$PQ_SCRATCH/public/relay-observation-selection.json"
+            then
+              :
+            else
+              relay_status=$?
+              observation="$PQ_SCRATCH/public/relay-observation-selection.json"
+              if jq -e '
+                .schema_version == "pq-sequoia-relay-observation/v1"
+                and .stage == "selection"
+                and .decision.outcome == "rejected"
+                and .exchange_binding.selected_run_id == null
+                and .coverage.pagination_complete == true
+                and (
+                  (
+                    .decision.reason == "matching relay duplicate observed"
+                    and ([.matching_runs[].databaseId] | unique | length) > 1
+                  )
+                  or (
+                    .decision.reason == "matching relay rerun observed"
+                    and any(.matching_runs[]; .runAttempt > 1)
+                  )
+                )
+              ' "$observation" >/dev/null
+              then
+                cp "$observation" \
+                  "$PQ_SCRATCH/rejected-evidence/relay-observation-selection.json"
+              fi
+              exit "$relay_status"
+            fi
+            if [[ "$(jq -r '.selection_ready' \
+              "$PQ_SCRATCH/public/relay-observation-selection.json")" == true ]]
+            then
+              now_ns=$(monotonic_ns)
+              (( now_ns < relay_deadline_ns )) || break
+              response_run=$(jq -r '.exchange_binding.selected_run_id' \
+                "$PQ_SCRATCH/public/relay-observation-selection.json")
+              cp "$PQ_SCRATCH/public/relay-observation-selection.json" \
+                "$PQ_SCRATCH/evidence/relay-observation-selection.json"
+              jq '.matching_runs[0]' \
+                "$PQ_SCRATCH/public/relay-observation-selection.json" \
+                >"$PQ_SCRATCH/public/relay-run.json"
+            fi
+            [[ -z "$response_run" ]] || break
+            now_ns=$(monotonic_ns)
+            remaining_ns=$((relay_deadline_ns - now_ns))
+            (( remaining_ns > 0 )) || break
+            sleep_ns=$remaining_ns
+            (( sleep_ns < 30000000000 )) || sleep_ns=30000000000
+            printf -v sleep_seconds '%d.%09d' \
+              "$((sleep_ns / 1000000000))" \
+              "$((sleep_ns % 1000000000))"
+            sleep "$sleep_seconds"
+          done
+          [[ -n "$response_run" ]]
+          scripts/pq-sequoia-macos validate-relay \
+            --metadata "$PQ_SCRATCH/public/relay-run.json" \
+            --expected-run-id "$response_run" \
+            --expected-title "$target" \
+            --expected-commit "$PQ_CANDIDATE_COMMIT" \
+            --output "$PQ_SCRATCH/evidence/relay-run.json"
+          mkdir -p "$PQ_SCRATCH/public/peer-response"
+          gh run download "$response_run" \
+            --name "pq-sequoia-peer-response-$PQ_SESSION_ID-$GITHUB_RUN_ID-$PQ_PHASE_B_SHA256" \
+            --dir "$PQ_SCRATCH/public/peer-response"
+          scripts/pq-sequoia-macos validate-envelope \
+            --phase hatchery-phase-c \
+            --session-id "$PQ_SESSION_ID" \
+            --expected-producer-closure-sha256 "$PQ_PEER_CLOSURE_SHA256" \
+            --expected-parent-sha256 "$PQ_PHASE_B_SHA256" \
+            "$PQ_SCRATCH/public/peer-response/hatchery-phase-c.json"
+
+      - name: Close the live interoperability phase
+        shell: bash
+        env:
+          PQ_SESSION_ID: ${{ inputs.session_id }}
+          PQ_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+        run: |
+          set -euo pipefail
+          scripts/pq-sequoia-macos interop-close \
+            --root . --sq "$PQ_SQ" --sqv "$PQ_SQV" \
+            --session-id "$PQ_SESSION_ID" \
+            --peer-envelope "$PQ_SCRATCH/public/peer-response/hatchery-phase-c.json" \
+            --state-dir "$PQ_SCRATCH/private/live" \
+            --relay-metadata "$PQ_SCRATCH/evidence/relay-run.json" \
+            --expected-relay-run-id "$(jq -r '.databaseId' "$PQ_SCRATCH/evidence/relay-run.json")" \
+            --expected-relay-title "pq-sequoia-publish-peer-response-$PQ_SESSION_ID-$GITHUB_RUN_ID-$PQ_PHASE_B_SHA256" \
+            --candidate-commit "$PQ_CANDIDATE_COMMIT" \
+            --output "$PQ_SCRATCH/evidence/results/macos-ci.json"
+
+      - name: Check relay again before final evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PQ_SESSION_ID: ${{ inputs.session_id }}
+          PQ_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+        run: |
+          set -euo pipefail
+          response_run=$(jq -r '.databaseId' \
+            "$PQ_SCRATCH/evidence/relay-run.json")
+          if scripts/pq-sequoia-macos record-relay-observation \
+            --repository "$GITHUB_REPOSITORY" \
+            --stage final \
+            --session-id "$PQ_SESSION_ID" \
+            --qualifier-run-id "$GITHUB_RUN_ID" \
+            --phase-b-sha256 "$PQ_PHASE_B_SHA256" \
+            --expected-commit "$PQ_CANDIDATE_COMMIT" \
+            --selected-run-id "$response_run" \
+            --output "$PQ_SCRATCH/public/relay-observation-final.json"
+          then
+            cp "$PQ_SCRATCH/public/relay-observation-final.json" \
+              "$PQ_SCRATCH/evidence/relay-observation-final.json"
+          else
+            relay_status=$?
+            observation="$PQ_SCRATCH/public/relay-observation-final.json"
+            if jq -e '
+              .schema_version == "pq-sequoia-relay-observation/v1"
+              and .stage == "final"
+              and .decision.outcome == "rejected"
+              and .exchange_binding.selected_run_id == null
+              and .coverage.pagination_complete == true
+              and (
+                (
+                  .decision.reason == "matching relay duplicate observed"
+                  and ([.matching_runs[].databaseId] | unique | length) > 1
+                )
+                or (
+                  .decision.reason == "matching relay rerun observed"
+                  and any(.matching_runs[]; .runAttempt > 1)
+                )
+              )
+            ' "$observation" >/dev/null
+            then
+              cp "$PQ_SCRATCH/evidence/relay-observation-selection.json" \
+                "$PQ_SCRATCH/rejected-evidence/relay-observation-selection.json"
+              cp "$observation" \
+                "$PQ_SCRATCH/rejected-evidence/relay-observation-final.json"
+            fi
+            exit "$relay_status"
+          fi
+
+      - name: Finalize value-free evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp packaging/homebrew/pq-sequoia-macos/v1/candidate.json \
+            "$PQ_SCRATCH/evidence/candidate.json"
+          cp docs/crypto/pq-sequoia-macos/interop-v1.json \
+            "$PQ_SCRATCH/evidence/interop-v1.json"
+          cp docs/crypto/pq-sequoia-macos/fixtures/v1/message.bin \
+            "$PQ_SCRATCH/evidence/message.bin"
+          cp "$PQ_SCRATCH/public/hatchery-phase-a.json" \
+            "$PQ_SCRATCH/evidence/hatchery-phase-a.json"
+          cp "$PQ_SCRATCH/public/peer-response/hatchery-phase-c.json" \
+            "$PQ_SCRATCH/evidence/hatchery-phase-c.json"
+          sums="$PQ_SCRATCH/SHA256SUMS"
+          (
+            cd "$PQ_SCRATCH/evidence"
+            find . -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 shasum -a 256 >"$sums"
+          )
+          mv "$sums" "$PQ_SCRATCH/evidence/SHA256SUMS"
+
+      - name: Upload value-free qualification evidence
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pq-sequoia-macos-evidence-${{ inputs.session_id }}
+          path: ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload rejected relay observations
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pq-sequoia-macos-rejected-relay-${{ inputs.session_id }}
+          path: |
+            ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/rejected-evidence/relay-observation-selection.json
+            ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/rejected-evidence/relay-observation-final.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Clean disposable secret material
+        if: always()
+        shell: bash
+        env:
+          PQ_SESSION_ID: ${{ inputs.session_id }}
+        run: |
+          set -euo pipefail
+          state="$RUNNER_TEMP/pq-sequoia-$PQ_SESSION_ID/private/live"
+          if [[ -x scripts/pq-sequoia-macos ]]; then
+            scripts/pq-sequoia-macos cleanup --state-dir "$state"
+          fi
+          test ! -e "$state"
+
+  publish-peer-response:
+    if: inputs.mode == 'publish-peer-response'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Reject a response rerun before exchange input use
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_RUN_ATTEMPT:?}" == 1 ]]
+
+      - name: Check out the reviewed relay revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.candidate_commit }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate and stage the public Hatchery response
+        shell: bash
+        env:
+          PQ_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          PQ_SESSION_ID: ${{ inputs.session_id }}
+          PQ_PEER_ENVELOPE_BASE64: ${{ inputs.peer_envelope_base64 }}
+          PQ_PEER_ENVELOPE_SHA256: ${{ inputs.peer_envelope_sha256 }}
+          PQ_PEER_CLOSURE_SHA256: ${{ inputs.peer_closure_sha256 }}
+          PQ_QUALIFIER_RUN_ID: ${{ inputs.qualifier_run_id }}
+          PQ_PARENT_ENVELOPE_SHA256: ${{ inputs.parent_envelope_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$PQ_CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PQ_SESSION_ID" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PQ_PEER_ENVELOPE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PQ_PEER_CLOSURE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PQ_QUALIFIER_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PQ_PARENT_ENVELOPE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          (( ${#PQ_PEER_ENVELOPE_BASE64} <= 61500 ))
+          [[ "$(git rev-parse HEAD)" == "$PQ_CANDIDATE_COMMIT" ]]
+          [[ "$GITHUB_WORKFLOW_SHA" == "$PQ_CANDIDATE_COMMIT" ]]
+          response="$RUNNER_TEMP/hatchery-phase-c.json"
+          printf '%s' "$PQ_PEER_ENVELOPE_BASE64" | base64 --decode >"$response"
+          (( $(wc -c <"$response") <= 46000 ))
+          printf '%s  %s\n' "$PQ_PEER_ENVELOPE_SHA256" "$response" \
+            | sha256sum --check
+          scripts/pq-sequoia-macos validate-static --root .
+          python3 -m unittest tests.test_pq_sequoia_macos
+          scripts/pq-sequoia-macos validate-envelope \
+            --phase hatchery-phase-c --session-id "$PQ_SESSION_ID" \
+            --expected-producer-closure-sha256 "$PQ_PEER_CLOSURE_SHA256" \
+            --expected-parent-sha256 "$PQ_PARENT_ENVELOPE_SHA256" \
+            "$response"
+
+      - name: Publish the public response for the live macOS job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pq-sequoia-peer-response-${{ inputs.session_id }}-${{ inputs.qualifier_run_id }}-${{ inputs.parent_envelope_sha256 }}
+          path: ${{ runner.temp }}/hatchery-phase-c.json
+          if-no-files-found: error
+          retention-days: 7

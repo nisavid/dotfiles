@@ -1,0 +1,98 @@
+{
+  "schema_version": "pq-sequoia-macos-candidate/v1",
+  "candidate_id": "c147-macos-v1-openssl-3.5.8",
+  "status": "implementation-candidate",
+  "runner": {
+    "label": "macos-15",
+    "runner_environment": "github-hosted",
+    "runner_os": "macOS",
+    "runner_arch": "ARM64",
+    "hardware_arch": "arm64",
+    "macos_major": "15"
+  },
+  "openssl": {
+    "formula": "openssl@3.5",
+    "version": "3.5.8",
+    "support_line": "LTS",
+    "supported_until": "2030-04-08",
+    "homebrew_core_commit": "87ec0fe343645ff3e4865da62205a7844c99f144",
+    "homebrew_core_formula_path": "Formula/o/openssl@3.5.rb",
+    "formula_url": "https://raw.githubusercontent.com/Homebrew/homebrew-core/87ec0fe343645ff3e4865da62205a7844c99f144/Formula/o/openssl@3.5.rb",
+    "formula_sha256": "3265208aa3bf71299a48b3a2c7d3b734f88b2b65831488ae9e514dbc93c6db05",
+    "source_url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz",
+    "source_sha256": "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2",
+    "source_signature_url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz.asc",
+    "source_signature_sha256": "f4bfa84a290dfd5ad102a54ebc0f93f9b35359cb36c383769b5c7bc6034f1f65",
+    "signer_primary_fingerprint": "B146647E45A7B33947AB226B2A2C87D161692D40",
+    "signer_subkey_fingerprint": "C46ED3F2CBEFDA1FDAADA44264ED7B1DCCE71CB2",
+    "signer_key_url": "https://openssl-library.org/source/pubkeys.asc",
+    "signer_key_bundle_sha256": "56e106cd1c44bdb117aec24795f6dfbecaa9bfa0a2901b85331f0059aad16d53",
+    "arm64_sequoia_bottle_url": "https://ghcr.io/v2/homebrew/core/openssl/3.5/blobs/sha256:1a4c97d1ab594a16b200f258fe208afc38d799e5584aebb143b51e54ab9e68db",
+    "arm64_sequoia_bottle_sha256": "1a4c97d1ab594a16b200f258fe208afc38d799e5584aebb143b51e54ab9e68db"
+  },
+  "applications": {
+    "sq": {
+      "formula": "sequoia-sq-pqc@1.4.0",
+      "formula_path": "packaging/homebrew/pq-sequoia-macos/v1/Formula/sequoia-sq-pqc@1.4.0.rb",
+      "formula_sha256": "fda9195357c85ec4e68ed0514115bc12b3e412c12ec51b2f51704723d5b5aebf",
+      "version": "1.4.0",
+      "tag": "v1.4.0",
+      "tag_object": "122f3b8ff3b120013d8d96a962df333e7b114fa0",
+      "commit": "558e1461d4f277924b0710f17a5bb56469f74ff2",
+      "repository": "https://gitlab.com/sequoia-pgp/sequoia-sq.git",
+      "source_url": "https://gitlab.com/sequoia-pgp/sequoia-sq/-/archive/v1.4.0/sequoia-sq-v1.4.0.tar.gz",
+      "source_sha256": "c856bfb0f0c94a1b8f4b72a04a6eff1e1d3d24c377cb0b1e495688e9aad8467a",
+      "signer_primary_fingerprint": "8F17777118A33DDA9BA48E62AACB3243630052D9",
+      "signer_subkey_fingerprint": "C03FA6411B03AE12576461187223B56678E02528",
+      "signer_key_url": "https://keys.openpgp.org/vks/v1/by-fingerprint/8F17777118A33DDA9BA48E62AACB3243630052D9",
+      "patch_path": "packaging/homebrew/pq-sequoia-macos/v1/Patches/sequoia-sq-1.4.0-sequoia-openpgp-2.4.1.patch",
+      "patch_sha256": "efddbf6ac7c76b2ec0677f881e607af03281648238ffd390266ddb50973cda64",
+      "lock_sha256": "b8d698b3a0556cb0115aec4091a46dbf6ba909b2941a74ba61c99e69e01f5efa",
+      "sequoia_openpgp_version": "2.4.1",
+      "sequoia_openpgp_checksum": "0fbc8f9818a6fad141d85993777ba298ee52c80a09bd23d45dda461a6b7c83cb",
+      "backend": "crypto-openssl"
+    },
+    "sqv": {
+      "formula": "sequoia-sqv-pqc@1.5.0",
+      "formula_path": "packaging/homebrew/pq-sequoia-macos/v1/Formula/sequoia-sqv-pqc@1.5.0.rb",
+      "formula_sha256": "fdfd5b8de17579341eafdf6511b36b5773dc841cc05a0c58fe0da97ad91c910a",
+      "version": "1.5.0",
+      "tag": "v1.5.0",
+      "tag_object": "e45dd76915c6f661c8f8f371de9218f59f788b9a",
+      "commit": "e0dbf9133a1bf605eb2ead3869d9722d8dfc8252",
+      "repository": "https://gitlab.com/sequoia-pgp/sequoia-sqv.git",
+      "source_url": "https://gitlab.com/sequoia-pgp/sequoia-sqv/-/archive/v1.5.0/sequoia-sqv-v1.5.0.tar.bz2",
+      "source_sha256": "695749c7b8dc006c0d5ade1830bf6263453eff8211d1e18402f6686327124800",
+      "signer_primary_fingerprint": "8F17777118A33DDA9BA48E62AACB3243630052D9",
+      "signer_subkey_fingerprint": "C03FA6411B03AE12576461187223B56678E02528",
+      "signer_key_url": "https://keys.openpgp.org/vks/v1/by-fingerprint/8F17777118A33DDA9BA48E62AACB3243630052D9",
+      "patch_path": "packaging/homebrew/pq-sequoia-macos/v1/Patches/sequoia-sqv-1.5.0-sequoia-openpgp-2.4.1.patch",
+      "patch_sha256": "3a85149ff2c9ab3d91b8354b50052fe60344338e397332fb218bd14eb786c96b",
+      "lock_sha256": "6509c7b5ecde46470e9c4cf7d67048ab5f06fc74ba207905361d6f760abb8b8f",
+      "sequoia_openpgp_version": "2.4.1",
+      "sequoia_openpgp_checksum": "0fbc8f9818a6fad141d85993777ba298ee52c80a09bd23d45dda461a6b7c83cb",
+      "backend": "crypto-openssl"
+    }
+  },
+  "selection": {
+    "required": "exact Homebrew keg bin paths after all manifest identities match",
+    "forbidden": [
+      "shared Homebrew command paths",
+      "Homebrew core sequoia-sq 1.4.1",
+      "sequoia-openpgp 2.4.0",
+      "OpenSSL 3.6.x",
+      "Nettle",
+      "moving HEAD sources"
+    ],
+    "initial_rollback": "disable and clean up the workflow"
+  },
+  "provenance_references": [
+    "https://openssl-library.org/source/",
+    "https://github.com/openssl/openssl/blob/master/doc/fingerprints.txt",
+    "https://formulae.brew.sh/formula/openssl%403.5",
+    "https://gitlab.com/sequoia-pgp/sequoia-sq/-/tags/v1.4.0",
+    "https://gitlab.com/sequoia-pgp/sequoia-sqv/-/tags/v1.5.0",
+    "https://github.com/nisavid/dotfiles/issues/144",
+    "https://github.com/nisavid/dotfiles/issues/146"
+  ]
+}
