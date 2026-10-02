@@ -585,6 +585,351 @@ def write_document(path: Path, document: object) -> None:
 
 
 class AdapterContractSchemaTests(unittest.TestCase):
+    def test_preparation_gate_manifest_is_separate_and_content_bound(self) -> None:
+        document = {
+            "record_type": "GateManifest",
+            "record": {
+                "schema_version": "agent-equipment-preparation-gate-manifest/v1",
+                "gate_identity": "preparation-gate:fixture/v1",
+                "runtime_identity": "cpython:3.14.0",
+                "runtime_executable_digest": "sha256:" + "0" * 64,
+                "files": [
+                    {
+                        "path": "bin/agent-equipment-prepare",
+                        "digest": "sha256:" + "1" * 64,
+                    }
+                ],
+                "schema_digests": [
+                    {
+                        "name": "adapter-contract-v1.schema.json",
+                        "digest": "sha256:" + "2" * 64,
+                    },
+                    {
+                        "name": "execution-authority-v1.schema.json",
+                        "digest": "sha256:" + "3" * 64,
+                    },
+                ],
+                "manifest_digest": "sha256:" + "4" * 64,
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gate-manifest.json"
+            write_document(path, document)
+            result = run_check_jsonschema(
+                "--schemafile",
+                str(SCHEMA),
+                str(path),
+            )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_capability_binding_set_preserves_semantic_and_artifact_digests(
+        self,
+    ) -> None:
+        document = {
+            "record_type": "CapabilityBindingSet",
+            "record": {
+                "schema_version": "agent-equipment-capability-binding-set/v1",
+                "capability_binding_set_identity": (
+                    "capability-binding-set:sha256:" + "1" * 64
+                ),
+                "bindings": [
+                    {
+                        "capability_identity": "capability:fixture/claude-plugin",
+                        "capability_digest": "sha256:" + "2" * 64,
+                        "manager_version_evidence_digest": (
+                            "sha256:" + "3" * 64
+                        ),
+                    }
+                ],
+                "capability_set_digest": "sha256:" + "4" * 64,
+                "capability_binding_set_digest": "sha256:" + "5" * 64,
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "capability-binding-set.json"
+            write_document(path, document)
+            result = run_check_jsonschema(
+                "--schemafile",
+                str(SCHEMA),
+                str(path),
+            )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_preparation_adapter_manifest_set_is_one_closed_manifest_bound_seam(
+        self,
+    ) -> None:
+        document = {
+            "record_type": "AdapterManifestSet",
+            "record": {
+                "schema_version": (
+                    "agent-equipment-preparation-adapter-manifest-set/v1"
+                ),
+                "adapter_manifest_set_identity": (
+                    "preparation-adapter-manifest-set:sha256:" + "1" * 64
+                ),
+                "manifests": [
+                    {
+                        "adapter_manifest_identity": (
+                            "preparation-adapter-manifest:sha256:" + "2" * 64
+                        ),
+                        "adapter_identity": "adapter:fixture/claude-plugin",
+                        "adapter_version": "1.0.0",
+                        "adapter_implementation_identity": (
+                            "adapter-implementation:fixture/claude-plugin-v1"
+                        ),
+                        "adapter_implementation_manifest_digest": (
+                            "sha256:" + "3" * 64
+                        ),
+                        "capability_binding": {
+                            "capability_identity": (
+                                "capability:fixture/claude-plugin"
+                            ),
+                            "capability_digest": "sha256:" + "6" * 64,
+                            "manager_version_evidence_digest": (
+                                "sha256:" + "7" * 64
+                            ),
+                        },
+                        "prepare_seam": {
+                            "entrypoint": "prepare",
+                            "effect": "read_only",
+                            "request_record": "PrepareRequest",
+                            "response_record": "PreparedStateFacts",
+                        },
+                        "adapter_manifest_digest": "sha256:" + "4" * 64,
+                    }
+                ],
+                "adapter_manifest_set_digest": "sha256:" + "5" * 64,
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "adapter-manifest-set.json"
+            write_document(path, document)
+            result = run_check_jsonschema(
+                "--schemafile",
+                str(SCHEMA),
+                str(path),
+            )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+        document["record"]["manifests"][0]["prepare_seam"]["entrypoint"] = "apply"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mutating-adapter-manifest-set.json"
+            write_document(path, document)
+            result = run_check_jsonschema(
+                "--schemafile",
+                str(SCHEMA),
+                str(path),
+            )
+
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+
+    def test_prepare_request_binds_one_exact_action_capture_and_adapter(self) -> None:
+        action_evidence = load_document("valid-plan-action-set.json")["actions"][0]
+        action = action_evidence["action_payload"]
+        capability = load_record("valid-adapter-capability-record.json")
+        observation = load_record("valid-adapter-runtime-observation.json")["result"]
+        captured_state = observation["captured_state"]
+        document = {
+            "record_type": "PrepareRequest",
+            "record": {
+                "contract_version": "adapter-contract-v1",
+                "request_identity": "prepare-request:sha256:" + "1" * 64,
+                "request_digest": "sha256:" + "2" * 64,
+                "echo_bindings": {
+                    "candidate_identity": action["candidate_identity"],
+                    "implementation_manifest_digest": action[
+                        "implementation_manifest_digest"
+                    ],
+                    "plan_digest": action["plan_digest"],
+                    "plan_action_set_digest": "sha256:" + "3" * 64,
+                    "action_identity": action["action_identity"],
+                    "action_digest": action_evidence["action_digest"],
+                    "ordinal": action["ordinal"],
+                    "route_identity": action["route_identity"],
+                    "route_digest": action["route_digest"],
+                    "provider_digest": canonical_digest(action["provider"]),
+                    "operation_digest": canonical_digest(action["operation"]),
+                    "compensation_digest": canonical_digest(action["compensation"]),
+                    "desired_state_digest": action["desired_state_digest"],
+                    "captured_state_identity": captured_state["identity"],
+                    "captured_state_digest": captured_state["digest"],
+                    "captured_projection_digest": "sha256:" + "0" * 64,
+                    "capability_identity": capability["capability_identity"],
+                    "capability_digest": capability["capability_digest"],
+                    "manager_version_evidence_digest": capability[
+                        "manager_version_evidence"
+                    ]["evidence_digest"],
+                    "capability_set_digest": "sha256:" + "4" * 64,
+                    "adapter_identity": capability["adapter_identity"],
+                    "adapter_version": capability["adapter_version"],
+                    "adapter_manifest_identity": (
+                        "preparation-adapter-manifest:sha256:" + "5" * 64
+                    ),
+                    "adapter_manifest_digest": "sha256:" + "6" * 64,
+                    "preparation_adapter_manifest_set_digest": (
+                        "sha256:" + "7" * 64
+                    ),
+                    "adapter_implementation_identity": (
+                        "adapter-implementation:fixture/claude-plugin-v1"
+                    ),
+                    "adapter_implementation_manifest_digest": (
+                        "sha256:" + "8" * 64
+                    ),
+                },
+                "captured_projection": {
+                    "captured_state_bytes_base64": "e30=",
+                    "captured_state_bytes_digest": "sha256:" + "9" * 64,
+                    "route_identity": action["route_identity"],
+                    "action_identity": action["action_identity"],
+                    "surface_ids": action["surface_scope"],
+                },
+                "operation": action["operation"],
+                "desired_state": action["desired_state"],
+                "desired_state_digest": action["desired_state_digest"],
+                "compensation_operation": "restore_captured_pre_state",
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prepare-request.json"
+            write_document(path, document)
+            result = run_check_jsonschema(
+                "--schemafile",
+                str(SCHEMA),
+                str(path),
+            )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_prepared_state_facts_echo_bindings_without_granting_scope(self) -> None:
+        action_evidence = load_document("valid-plan-action-set.json")["actions"][0]
+        action = action_evidence["action_payload"]
+        capability = load_record("valid-adapter-capability-record.json")
+        observation = load_record("valid-adapter-runtime-observation.json")["result"]
+        captured_state = observation["captured_state"]
+        expected_post_state = expected_post_normalized_state(
+            observation["normalized_state"], action["desired_state"]
+        )
+        document = {
+            "record_type": "PreparedStateFacts",
+            "record": {
+                "contract_version": "adapter-contract-v1",
+                "request_identity": "prepare-request:sha256:" + "1" * 64,
+                "request_digest": "sha256:" + "2" * 64,
+                "echo_bindings": {
+                    "candidate_identity": action["candidate_identity"],
+                    "implementation_manifest_digest": action[
+                        "implementation_manifest_digest"
+                    ],
+                    "plan_digest": action["plan_digest"],
+                    "plan_action_set_digest": "sha256:" + "3" * 64,
+                    "action_identity": action["action_identity"],
+                    "action_digest": action_evidence["action_digest"],
+                    "ordinal": action["ordinal"],
+                    "route_identity": action["route_identity"],
+                    "route_digest": action["route_digest"],
+                    "provider_digest": canonical_digest(action["provider"]),
+                    "operation_digest": canonical_digest(action["operation"]),
+                    "compensation_digest": canonical_digest(action["compensation"]),
+                    "desired_state_digest": action["desired_state_digest"],
+                    "captured_state_identity": captured_state["identity"],
+                    "captured_state_digest": captured_state["digest"],
+                    "captured_projection_digest": "sha256:" + "0" * 64,
+                    "capability_identity": capability["capability_identity"],
+                    "capability_digest": capability["capability_digest"],
+                    "manager_version_evidence_digest": capability[
+                        "manager_version_evidence"
+                    ]["evidence_digest"],
+                    "capability_set_digest": "sha256:" + "4" * 64,
+                    "adapter_identity": capability["adapter_identity"],
+                    "adapter_version": capability["adapter_version"],
+                    "adapter_manifest_identity": (
+                        "preparation-adapter-manifest:sha256:" + "5" * 64
+                    ),
+                    "adapter_manifest_digest": "sha256:" + "6" * 64,
+                    "preparation_adapter_manifest_set_digest": (
+                        "sha256:" + "7" * 64
+                    ),
+                    "adapter_implementation_identity": (
+                        "adapter-implementation:fixture/claude-plugin-v1"
+                    ),
+                    "adapter_implementation_manifest_digest": (
+                        "sha256:" + "8" * 64
+                    ),
+                },
+                "captured_pre_state": observation["normalized_state"],
+                "captured_pre_state_digest": observation["state_digest"],
+                "expected_post_state": expected_post_state,
+                "expected_post_state_digest": canonical_digest(expected_post_state),
+                "facts_digest": "sha256:" + "9" * 64,
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prepared-state-facts.json"
+            write_document(path, document)
+            result = run_check_jsonschema(
+                "--schemafile",
+                str(SCHEMA),
+                str(path),
+            )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        forbidden_fields = {
+            "surface_scope": action["surface_scope"],
+            "controlled_equipment_identities": action[
+                "controlled_equipment_identities"
+            ],
+            "authority_identity": "prepared-authority:fixture/foreign",
+            "authority_digest": "sha256:" + "a" * 64,
+            "mutation_capability": {"entrypoint": "apply"},
+        }
+        for field, value in forbidden_fields.items():
+            with self.subTest(forbidden_field=field), tempfile.TemporaryDirectory() as directory:
+                candidate = copy.deepcopy(document)
+                candidate["record"][field] = value
+                path = Path(directory) / f"prepared-state-facts-{field}.json"
+                write_document(path, candidate)
+                result = run_check_jsonschema(
+                    "--schemafile",
+                    str(SCHEMA),
+                    str(path),
+                )
+
+            self.assertNotEqual(0, result.returncode)
+
+    def test_capability_declares_the_manifest_bound_prepare_record_versions(
+        self,
+    ) -> None:
+        document = load_document("valid-adapter-capability-record.json")
+        record_versions = capability_record(document)["record_versions"]
+        record_versions.update(
+            {
+                "prepare_request": "adapter-contract-v1",
+                "prepared_state_facts": "adapter-contract-v1",
+                "adapter_manifest_set": (
+                    "agent-equipment-preparation-adapter-manifest-set/v1"
+                ),
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prepare-record-versions.json"
+            write_document(path, document)
+            result = run_check_jsonschema(
+                "--schemafile",
+                str(SCHEMA),
+                str(path),
+            )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def test_public_sequence_rejects_literal_credentials_without_echoing_them(
         self,
     ) -> None:

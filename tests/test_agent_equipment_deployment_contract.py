@@ -150,6 +150,7 @@ def valid_apply_authorization(
             "capture_observation_authority_set_digest": (
                 capture_observation_authorities["authority_set_digest"]
             ),
+            "preparation_bundle_digest": DIGEST_D,
             "expected_case_manifest_digest": expected_case_manifest_digest,
             "operator_review_package_digest": DIGEST_C,
         },
@@ -221,12 +222,17 @@ def valid_plan_action_set(action_count: int = 2) -> dict[str, object]:
             payload["surface_scope"]
         )
         dependency = payload["verification_dependencies"][0]
-        dependency["dependency_identity"] = (
-            f"dependency:fixture/canonical-skill-{suffix}"
-        )
         dependency["write_surface_identity"] = skill_surface
         dependency["equipment_identity"] = f"skill:fixture/example-{suffix}"
         dependency["target_locator"]["path"] = f"~/.agents/skills/example-{suffix}"
+        dependency["dependency_identity"] = "dependency:" + canonical_digest(
+            {
+                "relationship": dependency["relationship"],
+                "write_surface_identity": dependency["write_surface_identity"],
+                "equipment_identity": dependency["equipment_identity"],
+                "target_locator": dependency["target_locator"],
+            }
+        )
         payload["action_identity"] = EXECUTION_AUTHORITY._plan_action_identity(payload)
         evidence["action_digest"] = EXECUTION_AUTHORITY._plan_action_digest(payload)
         actions.append(evidence)
@@ -601,19 +607,53 @@ def valid_prepared_action_authority_set(
 ) -> dict[str, object]:
     plan_action_set = plan_action_set or valid_plan_action_set()
     capture = captured_state or valid_captured_state(plan_action_set)
+    capture_authorities = valid_capture_observation_authority_set(
+        plan_action_set,
+        capture,
+    )
     authorities = []
     for evidence in plan_action_set["actions"]:
         action = evidence["action_payload"]
+        route = next(
+            route
+            for route in capture["provider_routes"]
+            if route["route_id"] == action["route_identity"]
+        )
+        planned_action = next(
+            reference
+            for reference in route["planned_actions"]
+            if reference["action_identity"] == action["action_identity"]
+        )
+        projected_surface_ids = {
+            binding["surface_id"]
+            for binding in (
+                planned_action["write_bindings"]
+                + planned_action["verification_dependency_bindings"]
+            )
+        }
+        projected_surface_recovery = sorted(
+            (
+                {
+                    "surface_id": surface["surface_id"],
+                    "recovery": copy.deepcopy(surface["recovery"]),
+                }
+                for surface in capture["surfaces"]
+                if surface["surface_id"] in projected_surface_ids
+            ),
+            key=lambda item: item["surface_id"],
+        )
         pre_state = normalized_state(present=False)
         post_state = normalized_state(present=True)
         authority = {
             "action_identity": action["action_identity"],
+            "action_digest": evidence["action_digest"],
             "ordinal": action["ordinal"],
             "candidate_identity": action["candidate_identity"],
             "implementation_manifest_digest": action["implementation_manifest_digest"],
             "catalog_digest": action["catalog_digest"],
             "lock_digest": action["lock_digest"],
             "plan_digest": action["plan_digest"],
+            "plan_action_set_digest": plan_action_set["action_set_digest"],
             "capability_set_digest": capture["bindings"]["capability_set_digest"],
             "route_capability_binding": {
                 "capability_identity": action["capability_identity"],
@@ -622,9 +662,51 @@ def valid_prepared_action_authority_set(
                     "manager_version_evidence_digest"
                 ],
             },
+            "adapter_binding": {
+                "adapter_identity": action["adapter_identity"],
+                "adapter_version": action["adapter_version"],
+                "adapter_manifest_identity": (
+                    "preparation-adapter-manifest:sha256:" + "5" * 64
+                ),
+                "adapter_manifest_digest": DIGEST_B,
+                "adapter_implementation_identity": (
+                    "adapter-implementation:fixture/claude-plugin-v1"
+                ),
+                "adapter_implementation_manifest_digest": DIGEST_C,
+            },
+            "capture_observation_authority_set_identity": capture_authorities[
+                "authority_set_identity"
+            ],
+            "capture_observation_authority_set_digest": capture_authorities[
+                "authority_set_digest"
+            ],
+            "route_capture_binding": {
+                "route_identity": action["route_identity"],
+                "route_digest": action["route_digest"],
+                "restore_evidence_digest": canonical_digest(
+                    route["restore_evidence"]
+                ),
+                "recovery_material_digest": canonical_digest(
+                    {
+                        "restore_evidence": route["restore_evidence"],
+                        "surface_recovery": projected_surface_recovery,
+                    }
+                ),
+                "native_update_control": route["restore_evidence"].get(
+                    "native_update_control",
+                    "not_applicable",
+                ),
+            },
             "route_digest": action["route_digest"],
+            "provider": copy.deepcopy(action["provider"]),
+            "provider_digest": canonical_digest(action["provider"]),
+            "operation": action["operation"],
             "operation_digest": canonical_digest(action["operation"]),
+            "compensation": copy.deepcopy(action["compensation"]),
+            "compensation_digest": canonical_digest(action["compensation"]),
             "compensation_operation": "restore_captured_pre_state",
+            "desired_state": copy.deepcopy(action["desired_state"]),
+            "desired_state_digest": action["desired_state_digest"],
             "surface": copy.deepcopy(action["surface_scope"]),
             "captured_state_identity": "capture:fixture/run-v1",
             "captured_state_digest": canonical_digest(capture),
@@ -639,6 +721,24 @@ def valid_prepared_action_authority_set(
     document = {
         "schema_version": "agent-equipment-prepared-action-authority-set/v1",
         "authority_set_identity": "prepared-action-authority-set:sha256:" + "0" * 64,
+        "bindings": {
+            "candidate_identity": plan_action_set["candidate_identity"],
+            "implementation_manifest_digest": plan_action_set[
+                "implementation_manifest_digest"
+            ],
+            "plan_digest": plan_action_set["plan_digest"],
+            "plan_action_set_digest": plan_action_set["action_set_digest"],
+            "capability_set_digest": capture["bindings"]["capability_set_digest"],
+            "preparation_adapter_manifest_set_digest": DIGEST_D,
+            "captured_state_identity": "capture:fixture/run-v1",
+            "captured_state_digest": canonical_digest(capture),
+            "capture_observation_authority_set_identity": capture_authorities[
+                "authority_set_identity"
+            ],
+            "capture_observation_authority_set_digest": capture_authorities[
+                "authority_set_digest"
+            ],
+        },
         "authorities": authorities,
         "authority_set_digest": DIGEST_A,
     }
@@ -695,6 +795,7 @@ def valid_capture_observation_authority_set(
             "capability_set_digest": captured_state["bindings"][
                 "capability_set_digest"
             ],
+            "preparation_adapter_manifest_set_digest": DIGEST_D,
             "captured_state_identity": "capture:fixture/run-v1",
             "captured_state_digest": canonical_digest(captured_state),
         },
@@ -899,6 +1000,7 @@ def prepared_validation_inputs(
             "implementation_manifest_digest"
         ],
         "expected_plan_digest": plan_action_set["plan_digest"],
+        "expected_preparation_adapter_manifest_set_digest": DIGEST_D,
         "expected_prepared_action_authority_set_identity": (
             prepared_action_authority_set["authority_set_identity"]
         ),
@@ -1779,6 +1881,76 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             allowed_schema_names=frozenset({SCHEMA_PATH.name}),
         )
 
+    def test_preparation_bundle_binds_all_exact_pre_authorization_streams(
+        self,
+    ) -> None:
+        artifact = {
+            "bytes_base64": "e30=",
+            "bytes_digest": DIGEST_A,
+        }
+        document = {
+            "schema_version": "agent-equipment-preparation-bundle/v1",
+            "preparation_bundle_identity": "preparation-bundle:sha256:" + "1" * 64,
+            "bindings": {
+                "candidate_identity": "candidate:fixture/controller-v1",
+                "implementation_manifest_digest": DIGEST_A,
+                "catalog_digest": DIGEST_B,
+                "lock_digest": DIGEST_C,
+                "plan_digest": DIGEST_D,
+                "plan_action_set_digest": DIGEST_A,
+                "capability_set_digest": DIGEST_B,
+                "preparation_adapter_manifest_set_digest": DIGEST_C,
+                "captured_state_identity": "capture:fixture/run-v1",
+                "captured_state_digest": DIGEST_D,
+                "capture_observation_authority_set_identity": (
+                    "capture-observation-authority-set:sha256:" + "2" * 64
+                ),
+                "capture_observation_authority_set_digest": DIGEST_A,
+                "prepared_action_authority_set_identity": (
+                    "prepared-action-authority-set:sha256:" + "3" * 64
+                ),
+                "prepared_action_authority_set_digest": DIGEST_B,
+                "preparation_gate_identity": "preparation-gate:fixture/v1",
+                "preparation_gate_manifest_digest": DIGEST_C,
+                "store_identity": "preparation-store:fixture/authority",
+                "store_generation": 1,
+            },
+            "artifacts": {
+                "plan_action_set": copy.deepcopy(artifact),
+                "captured_state": copy.deepcopy(artifact),
+                "capability_binding_set": copy.deepcopy(artifact),
+                "adapter_manifest_set": copy.deepcopy(artifact),
+                "gate_manifest": copy.deepcopy(artifact),
+                "capture_observation_authority_set": copy.deepcopy(artifact),
+                "prepared_action_authority_set": copy.deepcopy(artifact),
+            },
+            "preparation_bundle_digest": DIGEST_D,
+        }
+
+        self.assertTrue(self.validate(document))
+
+    def test_preparation_receipt_is_closed_commit_evidence_not_apply_authority(
+        self,
+    ) -> None:
+        document = {
+            "schema_version": "agent-equipment-preparation-receipt/v1",
+            "receipt_identity": "preparation-receipt:sha256:" + "1" * 64,
+            "payload": {
+                "outcome": "committed",
+                "preparation_bundle_identity": (
+                    "preparation-bundle:sha256:" + "2" * 64
+                ),
+                "preparation_bundle_digest": DIGEST_A,
+                "preparation_bundle_bytes_digest": DIGEST_B,
+                "preparation_gate_identity": "preparation-gate:fixture/v1",
+                "preparation_gate_manifest_digest": DIGEST_C,
+                "store_identity": "preparation-store:fixture/authority",
+                "store_generation": 1,
+            },
+        }
+
+        self.assertTrue(self.validate(document))
+
     def test_apply_authorization_is_closed_over_the_complete_binding_tuple(
         self,
     ) -> None:
@@ -1820,6 +1992,45 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         candidate = copy.deepcopy(authority_set)
         candidate["bindings"]["unreviewed_digest"] = DIGEST_C
         self.assertFalse(self.validate(candidate))
+
+        for field in tuple(authority_set["bindings"]):
+            with self.subTest(binding=field):
+                candidate = copy.deepcopy(authority_set)
+                del candidate["bindings"][field]
+                self.assertFalse(self.validate(candidate))
+
+    def test_prepared_action_authority_is_closed_over_preparation_evidence(
+        self,
+    ) -> None:
+        authority_set = valid_prepared_action_authority_set()
+        self.assertTrue(self.validate(authority_set))
+
+        for field in tuple(authority_set["bindings"]):
+            with self.subTest(set_binding=field):
+                candidate = copy.deepcopy(authority_set)
+                del candidate["bindings"][field]
+                self.assertFalse(self.validate(candidate))
+
+        for field in (
+            "action_digest",
+            "plan_action_set_digest",
+            "adapter_binding",
+            "capture_observation_authority_set_identity",
+            "capture_observation_authority_set_digest",
+            "route_capture_binding",
+            "provider",
+            "provider_digest",
+            "operation",
+            "operation_digest",
+            "compensation",
+            "compensation_digest",
+            "desired_state",
+            "desired_state_digest",
+        ):
+            with self.subTest(authority_field=field):
+                candidate = copy.deepcopy(authority_set)
+                del candidate["authorities"][0][field]
+                self.assertFalse(self.validate(candidate))
 
     def test_execution_schema_rejects_incomplete_normalized_component_identity(
         self,
@@ -1957,6 +2168,87 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         }
         self.assertIn("CAPTURED_STATE_AUTHORITY_INVALID", codes)
 
+    def test_prepared_authority_rejects_coordinated_reference_substitution(
+        self,
+    ) -> None:
+        plan_action_set = valid_plan_action_set()
+        captured_state = valid_captured_state(plan_action_set)
+        authority_set = valid_prepared_action_authority_set(
+            plan_action_set,
+            captured_state,
+        )
+
+        def codes_for(candidate: dict[str, object]) -> set[str]:
+            inputs = prepared_validation_inputs(
+                plan_action_set,
+                captured_state,
+                candidate,
+            )
+            return {
+                diagnostic.code
+                for diagnostic in EXECUTION_AUTHORITY.validate_prepared_action_authority_set(
+                    candidate,
+                    **inputs,
+                )
+            }
+
+        self.assertEqual(codes_for(authority_set), set())
+
+        top_level_substitution = copy.deepcopy(authority_set)
+        top_level_substitution["bindings"]["plan_action_set_digest"] = DIGEST_A
+        seal_prepared_action_authority_set(top_level_substitution)
+        self.assertIn(
+            "PREPARED_ACTION_AUTHORITY_INVALID",
+            codes_for(top_level_substitution),
+        )
+
+        mutations: dict[str, Callable[[dict[str, object]], None]] = {
+            "action": lambda authority: authority.update({"action_digest": DIGEST_A}),
+            "provider": lambda authority: authority.update(
+                {
+                    "provider": {
+                        **authority["provider"],
+                        "plugin_id": "substituted@fixture",
+                    },
+                }
+            ),
+            "operation": lambda authority: authority.update({"operation": "configure"}),
+            "compensation": lambda authority: authority.update(
+                {"compensation_digest": DIGEST_A}
+            ),
+            "desired state": lambda authority: authority.update(
+                {"desired_state_digest": DIGEST_A}
+            ),
+            "route capture": lambda authority: authority["route_capture_binding"].update(
+                {"native_update_control": "suppressible"}
+            ),
+            "adapter": lambda authority: authority["adapter_binding"].update(
+                {"adapter_identity": "adapter:fixture/substituted"}
+            ),
+            "capture tuple": lambda authority: authority.update(
+                {
+                    "capture_observation_authority_set_digest": DIGEST_A,
+                }
+            ),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                candidate = copy.deepcopy(authority_set)
+                authority = candidate["authorities"][0]
+                assert isinstance(authority, dict)
+                mutate(authority)
+                if label == "provider":
+                    authority["provider_digest"] = canonical_digest(
+                        authority["provider"]
+                    )
+                if label == "operation":
+                    authority["operation_digest"] = canonical_digest(
+                        authority["operation"]
+                    )
+                seal_prepared_action_authority(authority)
+                seal_prepared_action_authority_set(candidate)
+                self.assertIn("PREPARED_ACTION_AUTHORITY_INVALID", codes_for(candidate))
+
     def test_capture_observation_reseal_cannot_escape_apply_authority(self) -> None:
         plan_action_set = valid_plan_action_set()
         captured_state = valid_captured_state(plan_action_set)
@@ -1982,6 +2274,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             "expected_capability_set_digest": captured_state["bindings"][
                 "capability_set_digest"
             ],
+            "expected_preparation_adapter_manifest_set_digest": DIGEST_D,
             "expected_captured_state_identity": "capture:fixture/run-v1",
             "expected_captured_state_digest": canonical_digest(captured_state),
         }
@@ -2029,6 +2322,53 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         self.assertIn("APPLY_AUTHORIZATION_DIGEST_MISMATCH", forged_apply_codes)
         self.assertIn("APPLY_AUTHORIZATION_BINDING_MISMATCH", forged_apply_codes)
 
+    def test_capture_observation_authority_rejects_resealed_preparation_manifest_substitution(
+        self,
+    ) -> None:
+        plan_action_set = valid_plan_action_set()
+        captured_state = valid_captured_state(plan_action_set)
+        authority_set = valid_capture_observation_authority_set(
+            plan_action_set,
+            captured_state,
+        )
+        inputs = {
+            "authoritative_plan_action_set": plan_action_set,
+            "expected_authority_set_identity": authority_set["authority_set_identity"],
+            "expected_authority_set_digest": authority_set["authority_set_digest"],
+            "expected_candidate_identity": plan_action_set["candidate_identity"],
+            "expected_implementation_manifest_digest": plan_action_set[
+                "implementation_manifest_digest"
+            ],
+            "expected_plan_digest": plan_action_set["plan_digest"],
+            "expected_plan_action_set_digest": plan_action_set["action_set_digest"],
+            "expected_capability_set_digest": captured_state["bindings"][
+                "capability_set_digest"
+            ],
+            "expected_preparation_adapter_manifest_set_digest": DIGEST_D,
+            "expected_captured_state_identity": "capture:fixture/run-v1",
+            "expected_captured_state_digest": canonical_digest(captured_state),
+        }
+
+        substituted = copy.deepcopy(authority_set)
+        substituted["bindings"]["preparation_adapter_manifest_set_digest"] = DIGEST_A
+        seal_capture_observation_authority_set(substituted)
+        substituted_inputs = dict(inputs)
+        substituted_inputs["expected_authority_set_identity"] = substituted[
+            "authority_set_identity"
+        ]
+        substituted_inputs["expected_authority_set_digest"] = substituted[
+            "authority_set_digest"
+        ]
+
+        codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_capture_observation_authority_set(
+                substituted,
+                **substituted_inputs,
+            )
+        }
+        self.assertIn("CAPTURE_OBSERVATION_AUTHORITY_BINDING_MISMATCH", codes)
+
     def test_capture_observation_authority_rejects_partial_raw_and_secret_inputs(
         self,
     ) -> None:
@@ -2051,6 +2391,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             "expected_capability_set_digest": captured_state["bindings"][
                 "capability_set_digest"
             ],
+            "expected_preparation_adapter_manifest_set_digest": DIGEST_D,
             "expected_captured_state_identity": "capture:fixture/run-v1",
             "expected_captured_state_digest": canonical_digest(captured_state),
         }
@@ -2114,16 +2455,16 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
     ) -> None:
         authorization = valid_apply_authorization()
         trusted_digest = seal_apply_authorization(authorization)
-        # These goldens include the expected-case manifest derived by
-        # valid_release_expected_case_manifest() from the shared acceptance
-        # fixture. Regenerate both when that fixture changes.
+        # These goldens cover the complete authorization binding tuple,
+        # including the preparation evidence and expected-case manifest.
+        # Regenerate both when either shared fixture changes.
         self.assertEqual(
             authorization["authorization_identity"],
-            "apply-authorization:sha256:4118c098b30e223802070b2bb36b0c89179220e148e6290445605961f2b0d765",
+            "apply-authorization:sha256:b71c5ba10f3bf33a4fea46d2817878aeebbb88c772cc2388b0947057f37aeea9",
         )
         self.assertEqual(
             trusted_digest,
-            "sha256:f793ed183f8d0e3a2b064c817cb74347000719088dd050da795d33f0e2f11764",
+            "sha256:7c74da28975a574915023b795ed9e60fd36ee1c070c8511fea7fcffca61f6c9d",
         )
 
         diagnostics = EXECUTION_AUTHORITY.validate_apply_authorization(
@@ -2378,7 +2719,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         self.assertFalse(self.validate(authorization))
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: checkpoint identity follows prepared authority"
     )
     def test_immutable_content_survives_capture_preparation_and_checkpoint_identity(
         self,
@@ -2400,9 +2741,6 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                 },
             }
         )
-        evidence = plan["actions"][0]
-        action = evidence["action_payload"]
-
         capture = valid_captured_state(plan)
         capture["surfaces"][0]["recovery"]["expected_pre_state_digest"] = (
             canonical_digest(immutable_state)
@@ -2453,9 +2791,6 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             ),
         )
 
-    @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
-    )
     def test_prepared_action_authority_is_complete_and_semantically_bound(self) -> None:
         plan = valid_plan_action_set()
         capture = valid_captured_state(plan)
@@ -3080,7 +3415,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: checkpoint-store admission follows preparation"
     )
     def test_checkpoint_set_manifest_is_closed_and_matches_the_trusted_store(
         self,
@@ -3544,7 +3879,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: compensation derives from trusted checkpoints"
     )
     def test_compensation_derives_checkpoint_digest_from_the_trusted_store(
         self,
@@ -3576,7 +3911,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         self.assertIn("COMPENSATION_AUTHORIZATION_BINDING_MISMATCH", codes)
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: compensation recovery claims live authority"
     )
     def test_public_compensation_recovery_uses_original_authority_and_ledger_claim(
         self,
@@ -3651,7 +3986,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: compensation recovery crosses crash boundaries"
     )
     def test_public_compensation_recovery_covers_every_crash_boundary(self) -> None:
         original_snapshots = valid_checkpoint_snapshots()
@@ -4106,7 +4441,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: compensation authorization is post-preparation"
     )
     def test_compensation_authorization_is_closed_and_independently_trusted(
         self,
@@ -4401,7 +4736,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: release binds completed execution evidence"
     )
     def test_release_archive_manifest_and_receipt_bind_exact_bytes_and_execution(
         self,
@@ -5126,10 +5461,10 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         self.assertEqual(exercised_provider_families, set(manifest_substitutions))
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: release replay is post-execution work"
     )
     def test_release_native_provider_family_route_projection_deferred(self) -> None:
-        """Native release replay resumes when #115 supplies prepared authority."""
+        """Native release replay resumes after execution owns prepared authority."""
 
     def test_release_requires_the_exact_captured_state_route_set(self) -> None:
         archive = valid_release_archive_manifest()
@@ -5158,7 +5493,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: release replay is post-execution work"
     )
     def test_release_allows_operator_owned_routes_without_automated_actions(
         self,
@@ -5201,7 +5536,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: release replay is post-execution work"
     )
     def test_release_replays_historical_apply_without_a_new_apply_time_gate(
         self,
@@ -5231,7 +5566,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: release replay is post-execution work"
     )
     def test_release_accepts_large_valid_plan_and_capture_replay_streams(self) -> None:
         plan_action_set = valid_plan_action_set(75)
@@ -5291,7 +5626,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
 
     @unittest.skip(
-        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+        "Deferred to dotfiles #116+: release digest binding is post-execution work"
     )
     def test_archive_byte_digest_is_distinct_from_authorization_canonical_digest(
         self,
