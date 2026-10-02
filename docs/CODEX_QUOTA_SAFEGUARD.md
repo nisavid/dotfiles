@@ -22,8 +22,8 @@ encrypted-source and admission procedure.
 ```toml
 [data.codexQuotaSafeguard]
 enabled = true
-releaseCommit = "FULL_REVIEWED_40_CHARACTER_AGENTS_COMMIT"
-archiveSha256 = "SHA256_OF_THAT_COMMIT_ARCHIVE"
+releaseCommit = "754aa6c0c7c5a8c7ceb529b1adbd01749f8303c0"
+archiveSha256 = "2801c997b2735d3c8b42637ea5e346f1aff5499819bf11b262599e29f13e9b3e"
 configFile = "/home/test-user/.config/codex-quota-safeguard/config.json"
 stateDir = "/home/test-user/.local/state/codex-quota-safeguard"
 sharedLock = "/home/test-user/.local/state/legacy-shared.lock"
@@ -57,7 +57,9 @@ Before opting in:
 1. Review and publish the selected agents revision through its owning workflow.
    Obtain and verify the SHA-256 of
    `https://github.com/nisavid/agents/archive/COMMIT.tar.gz`. The disabled public
-   default intentionally has no release pin until such a release is available.
+   default pins the reviewed source revision shown above. Its published archive
+   was verified against all 223 tracked files and their types in that Git tree.
+   Changing the source revision requires verifying and changing its checksum too.
 2. Confirm that the pinned release contains `controller.py`, `companion.py`,
    `status.py`, `package.json` and its lockfile. Record the existing state/lock
    identities and the current code revision. Do not initialize a fresh ledger.
