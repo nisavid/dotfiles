@@ -199,7 +199,8 @@ if (( ${#others} )); then
 fi
 
 # Buildkite pin. Buildkite has no aggregate job, and it reports a blocked build
-# to GitHub as passed unless the pipeline publishes it as pending. Invariants:
+# to GitHub as passed unless the pipeline publishes it as pending, a setting
+# scripts/buildkite-pipeline-settings checks on the live pipeline. Invariants:
 # one Linux matrix runs every group through run-group.sh, with no skip,
 # condition, soft fail, block, input or trigger step, and no container
 # override; then the timing annotation runs.
