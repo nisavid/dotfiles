@@ -25,7 +25,9 @@ if config.get("stateDir") != str(STATE):
     raise SystemExit("stateDir differs from the declared existing episode state")
 if not STATE.is_dir() or not LOCK.is_file():
     raise SystemExit("existing stateDir and sharedLock must exist; refusing to create replacement state")
-if LOCK.resolve() == (STATE / "observer.lock").resolve():
+observer_lock = STATE / "observer.lock"
+if (LOCK.resolve() == observer_lock.resolve() or
+        (observer_lock.exists() and LOCK.samefile(observer_lock))):
     raise SystemExit("sharedLock must be distinct from stateDir/observer.lock; both locks are acquired")
 entry = RELEASE / (sys.argv[1] + ".py")
 if not entry.is_file():

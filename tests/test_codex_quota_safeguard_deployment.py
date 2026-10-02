@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -129,7 +130,7 @@ class SafeguardDeploymentTests(unittest.TestCase):
                     self.assertIn('.local/bin/codex-quota-safeguard', rendered.stdout)
                     self.assertIn('.config/systemd/user/codex-usage-safeguard.service', rendered.stdout)
 
-    @unittest.skipUnless(os.uname().sysname == 'Linux', 'Linux bindings')
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux bindings')
     def test_apply_installs_pin_without_activation_and_preserves_state(self):
         self.select()
         before = self.snapshot()
@@ -156,7 +157,7 @@ class SafeguardDeploymentTests(unittest.TestCase):
                 'entry': mode + '.py', 'argv': ['--config', str(self.private), '--state-dir', str(self.state)]})
         self.assertEqual(self.snapshot(), before)
 
-    @unittest.skipUnless(os.uname().sysname == 'Linux', 'Linux bindings')
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux bindings')
     def test_dry_run_leaves_target_bindings_and_ledger_untouched(self):
         self.select()
         before = self.snapshot()
@@ -167,7 +168,7 @@ class SafeguardDeploymentTests(unittest.TestCase):
         self.assertFalse((self.home / '.config/systemd/user/codex-usage-safeguard.service').exists())
         self.assertFalse((self.home / '.local/share/codex-quota-safeguard').exists())
 
-    @unittest.skipUnless(os.uname().sysname == 'Linux', 'Linux bindings')
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux bindings')
     def test_launch_rejects_rebinding_and_missing_existing_state(self):
         self.select()
         self.assertEqual(self.chezmoi('apply', '--force').returncode, 0)
@@ -193,7 +194,7 @@ class SafeguardDeploymentTests(unittest.TestCase):
         result = subprocess.run([str(launcher), 'controller', '--state-dir', str(self.root)], env=self.env, text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
 
-    @unittest.skipUnless(os.uname().sysname == 'Linux', 'Linux bindings')
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux bindings')
     def test_shared_lock_must_differ_from_the_state_observer_lock(self):
         self.lock = self.state / 'observer.lock'
         self.lock.write_text('')
@@ -207,6 +208,22 @@ class SafeguardDeploymentTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('distinct', result.stderr)
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux bindings')
+    def test_shared_lock_hardlink_is_rejected_without_changing_state(self):
+        observer_lock = self.state / 'observer.lock'
+        os.link(self.lock, observer_lock)
+        self.select()
+        self.assertEqual(self.chezmoi('apply', '--force').returncode, 0)
+        before = self.snapshot()
+        launcher = self.home / '.local/bin/codex-quota-safeguard'
+        for mode in ('controller', 'companion', 'status'):
+            result = subprocess.run([str(launcher), mode], env=self.env, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('distinct', result.stderr)
+            self.assertEqual(result.stdout, '')
+        self.assertEqual(self.snapshot(), before)
+        self.assertTrue(self.lock.samefile(observer_lock))
+
     def test_machine_local_data_can_select_the_disabled_public_default(self):
         self.config.write_text('[data.codexQuotaSafeguard]\n' + ''.join(
             f'{key} = {json.dumps(value)}\n' for key, value in dict(
@@ -218,7 +235,7 @@ class SafeguardDeploymentTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(json.loads(result.stdout)['enabled'])
 
-    @unittest.skipUnless(os.uname().sysname == 'Linux', 'Linux bindings')
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux bindings')
     def test_upgrade_and_code_rollback_keep_the_live_ledger_and_old_release(self):
         before = self.snapshot()
         releases = self.home / '.local/share/codex-quota-safeguard/releases'
@@ -239,7 +256,7 @@ class SafeguardDeploymentTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, field)
             self.assertIn(field, result.stderr)
 
-    @unittest.skipUnless(os.uname().sysname == 'Linux', 'Linux bindings')
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux bindings')
     def test_bad_archive_digest_never_changes_existing_state(self):
         self.select(archiveSha256='0' * 64)
         before = self.snapshot()
