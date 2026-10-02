@@ -361,14 +361,35 @@ jobs:
           printf 'PQ_TAP_ROOT=%s\n' "$tap_root" >>"$GITHUB_ENV"
           brew install --build-bottle qualification/pq-sequoia/sequoia-sq-pqc@1.4.0
           brew install --build-bottle qualification/pq-sequoia/sequoia-sqv-pqc@1.5.0
-          mkdir -p "$PQ_SCRATCH/evidence/bottles"
-          (
-            cd "$PQ_SCRATCH/evidence/bottles"
-            brew bottle --json qualification/pq-sequoia/sequoia-sq-pqc@1.4.0 \
-              >sequoia-sq-pqc@1.4.0.bottle.json
-            brew bottle --json qualification/pq-sequoia/sequoia-sqv-pqc@1.5.0 \
-              >sequoia-sqv-pqc@1.5.0.bottle.json
-          )
+          bottles="$PQ_SCRATCH/evidence/bottles"
+          mkdir "$bottles"
+          acquire_bottle() {
+            local name=$1
+            local formula=$2
+            local output_dir="$bottles/$name"
+            local -a metadata_candidates
+            mkdir "$output_dir"
+            (
+              cd "$output_dir"
+              brew bottle --json "$formula" \
+                >"$PQ_SCRATCH/evidence/$name-bottle.stdout"
+            ) || return 1
+            shopt -s nullglob dotglob
+            metadata_candidates=("$output_dir"/*.bottle.json)
+            (( ${#metadata_candidates[@]} == 1 )) || return 1
+            [[ -f "${metadata_candidates[0]}" && ! -L "${metadata_candidates[0]}" ]] \
+              || return 1
+            printf '%s\n' "${metadata_candidates[0]}"
+          }
+          sq_bottle_metadata=$(acquire_bottle \
+            sq qualification/pq-sequoia/sequoia-sq-pqc@1.4.0)
+          sqv_bottle_metadata=$(acquire_bottle \
+            sqv qualification/pq-sequoia/sequoia-sqv-pqc@1.5.0)
+          {
+            printf 'PQ_BOTTLES_ROOT=%s\n' "$bottles"
+            printf 'PQ_SQ_BOTTLE_METADATA=%s\n' "$sq_bottle_metadata"
+            printf 'PQ_SQV_BOTTLE_METADATA=%s\n' "$sqv_bottle_metadata"
+          } >>"$GITHUB_ENV"
           cellar=$(brew --cellar)
           sq="$cellar/sequoia-sq-pqc@1.4.0/1.4.0/bin/sq"
           sqv="$cellar/sequoia-sqv-pqc@1.5.0/1.5.0/bin/sqv"
@@ -401,14 +422,16 @@ jobs:
             --expected-sq-sha256 "$sq_digest" \
             --expected-sqv-sha256 "$sqv_digest" \
             --output "$PQ_SCRATCH/public/selector.env"
-          bottles="$PQ_SCRATCH/evidence/bottles"
-          sq_bottle_metadata="$bottles/sequoia-sq-pqc"'@'"1.4.0.bottle.json"
-          sqv_bottle_metadata="$bottles/sequoia-sqv-pqc"'@'"1.5.0.bottle.json"
+          bottles="$PQ_BOTTLES_ROOT"
+          sq_bottle_metadata="$PQ_SQ_BOTTLE_METADATA"
+          sqv_bottle_metadata="$PQ_SQV_BOTTLE_METADATA"
           sq_bottle_name=$(jq -er \
-            '.formula.bottle.tags.arm64_sequoia.local_filename | select(type == "string" and length > 0)' \
+            --arg formula 'qualification/pq-sequoia/sequoia-sq-pqc@1.4.0' \
+            '.[$formula].bottle.tags.arm64_sequoia.local_filename | select(type == "string" and length > 0)' \
             "$sq_bottle_metadata")
           sqv_bottle_name=$(jq -er \
-            '.formula.bottle.tags.arm64_sequoia.local_filename | select(type == "string" and length > 0)' \
+            --arg formula 'qualification/pq-sequoia/sequoia-sqv-pqc@1.5.0' \
+            '.[$formula].bottle.tags.arm64_sequoia.local_filename | select(type == "string" and length > 0)' \
             "$sqv_bottle_metadata")
           scripts/pq-sequoia-macos record-runtime \
             --root . --tap-root "$PQ_TAP_ROOT" \
@@ -418,9 +441,9 @@ jobs:
             --openssl "$PQ_OPENSSL_PREFIX/bin/openssl" \
             --source-verification "$PQ_SCRATCH/evidence/source-verification.json" \
             --active-formula-verification "$PQ_SCRATCH/evidence/homebrew-formula-runtime.json" \
-            --sq-bottle "$bottles/$sq_bottle_name" \
+            --sq-bottle "$bottles/sq/$sq_bottle_name" \
             --sq-bottle-metadata "$sq_bottle_metadata" \
-            --sqv-bottle "$bottles/$sqv_bottle_name" \
+            --sqv-bottle "$bottles/sqv/$sqv_bottle_name" \
             --sqv-bottle-metadata "$sqv_bottle_metadata" \
             --candidate-identity "$PQ_CANDIDATE_IDENTITY" \
             --output "$PQ_SCRATCH/evidence/runtime-closure.json"

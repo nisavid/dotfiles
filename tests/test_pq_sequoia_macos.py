@@ -922,6 +922,131 @@ class QualificationProcedureTests(unittest.TestCase):
                         )
                         self.assertEqual(expected, result.returncode, result.stderr)
 
+    def test_workflow_acquires_one_generated_metadata_file_per_formula(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        start = workflow.index(
+            '          bottles="$PQ_SCRATCH/evidence/bottles"'
+        )
+        end = workflow.index("          cellar=$(brew --cellar)", start)
+        acquisition = "\n".join(
+            line.removeprefix("          ")
+            for line in workflow[start:end].splitlines()
+        )
+
+        def run_acquisition(mode: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+            temporary = tempfile.TemporaryDirectory(
+                prefix=f"pq-bottle-acquisition-{mode}-"
+            )
+            self.addCleanup(temporary.cleanup)
+            root = Path(temporary.name)
+            tools = root / "tools"
+            scratch = root / "scratch"
+            tools.mkdir()
+            (scratch / "evidence").mkdir(parents=True)
+            invocation_log = root / "brew-invocations"
+            github_env = root / "github-env"
+            brew = tools / "brew"
+            brew.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json\n"
+                "import os\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                "formula = sys.argv[-1]\n"
+                "name = formula.rsplit('/', 1)[-1]\n"
+                "if list(Path.cwd().iterdir()):\n"
+                "    raise SystemExit(91)\n"
+                "archive = Path(f'{name}--fixture.arm64_sequoia.bottle.tar.gz')\n"
+                "archive.write_bytes(f'inert archive for {name}\\n'.encode())\n"
+                "metadata = {formula: {'formula': {'name': name}, 'bottle': "
+                "{'tags': {'arm64_sequoia': {'local_filename': archive.name}}}}}\n"
+                "with Path(os.environ['BOTTLE_INVOCATIONS']).open('a', encoding='utf-8') as stream:\n"
+                "    stream.write(f'{Path.cwd()}|{formula}\\n')\n"
+                "mode = os.environ['BOTTLE_MODE']\n"
+                "if mode == 'zero':\n"
+                "    print(json.dumps(metadata))\n"
+                "elif mode == 'multiple':\n"
+                "    Path('first.bottle.json').write_text(json.dumps(metadata), encoding='utf-8')\n"
+                "    Path('second.bottle.json').write_text(json.dumps(metadata), encoding='utf-8')\n"
+                "    print('inert bottle stdout')\n"
+                "elif mode == 'hidden-multiple':\n"
+                "    Path('generated.bottle.json').write_text(json.dumps(metadata), encoding='utf-8')\n"
+                "    Path('.hidden.bottle.json').write_text(json.dumps(metadata), encoding='utf-8')\n"
+                "    print('inert bottle stdout')\n"
+                "elif mode == 'command-failure':\n"
+                "    Path('generated.bottle.json').write_text(json.dumps(metadata), encoding='utf-8')\n"
+                "    print('inert bottle stdout')\n"
+                "    raise SystemExit(23)\n"
+                "elif mode == 'symlink':\n"
+                "    target = Path('metadata-target')\n"
+                "    target.write_text(json.dumps(metadata), encoding='utf-8')\n"
+                "    Path('generated.bottle.json').symlink_to(target)\n"
+                "    print('inert bottle stdout')\n"
+                "elif mode == 'nonregular':\n"
+                "    Path('generated.bottle.json').mkdir()\n"
+                "    print('inert bottle stdout')\n"
+                "else:\n"
+                "    Path(f'generated-{name}.bottle.json').write_text(json.dumps(metadata), encoding='utf-8')\n"
+                "    print('inert bottle stdout')\n",
+                encoding="utf-8",
+            )
+            brew.chmod(0o755)
+            result = subprocess.run(
+                ["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", acquisition],
+                cwd=root,
+                env={
+                    **os.environ,
+                    "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+                    "BOTTLE_INVOCATIONS": str(invocation_log),
+                    "BOTTLE_MODE": mode,
+                    "GITHUB_ENV": str(github_env),
+                    "PQ_SCRATCH": str(scratch),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return result, root
+
+        accepted, root = run_acquisition("valid")
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        environment = dict(
+            line.split("=", 1)
+            for line in (root / "github-env").read_text(encoding="utf-8").splitlines()
+        )
+        sq_metadata = Path(environment["PQ_SQ_BOTTLE_METADATA"])
+        sqv_metadata = Path(environment["PQ_SQV_BOTTLE_METADATA"])
+        self.assertEqual("sq", sq_metadata.parent.name)
+        self.assertEqual("sqv", sqv_metadata.parent.name)
+        self.assertNotEqual(sq_metadata.parent, sqv_metadata.parent)
+        self.assertTrue(sq_metadata.name.startswith("generated-"))
+        self.assertTrue(sqv_metadata.name.startswith("generated-"))
+        self.assertEqual(
+            "inert bottle stdout\n",
+            (root / "scratch/evidence/sq-bottle.stdout").read_text(encoding="utf-8"),
+        )
+        self.assertEqual(
+            "inert bottle stdout\n",
+            (root / "scratch/evidence/sqv-bottle.stdout").read_text(encoding="utf-8"),
+        )
+        invocation_directories = {
+            Path(line.split("|", 1)[0])
+            for line in (root / "brew-invocations").read_text(encoding="utf-8").splitlines()
+        }
+        self.assertEqual({sq_metadata.parent, sqv_metadata.parent}, invocation_directories)
+
+        for mode in (
+            "zero",
+            "multiple",
+            "hidden-multiple",
+            "symlink",
+            "nonregular",
+            "command-failure",
+        ):
+            with self.subTest(mode=mode):
+                rejected, _ = run_acquisition(mode)
+                self.assertNotEqual(0, rejected.returncode)
+
     def test_manual_workflow_binds_revision_runner_and_live_relay(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)
@@ -2572,38 +2697,125 @@ class QualificationProcedureTests(unittest.TestCase):
             original_sq_metadata = json.loads(
                 sq_bottle_metadata.read_text(encoding="utf-8")
             )
+            sq_formula_key = (
+                "qualification/pq-sequoia/sequoia-sq-pqc@1.4.0"
+            )
             invalid_metadata = {
-                "extra": {
-                    "name": "unexpected-formula",
-                },
+                "qualification/pq-sequoia/unexpected-formula": {},
                 **original_sq_metadata,
             }
             _write_json(sq_bottle_metadata, invalid_metadata)
             rejected_result("extra", arguments)
 
-            _write_json(sq_bottle_metadata, {"formula": []})
+            _write_json(
+                sq_bottle_metadata,
+                {
+                    "qualification/pq-sequoia/unexpected-formula":
+                        original_sq_metadata[sq_formula_key]
+                },
+            )
+            rejected_result("wrong-full-name", arguments)
+
+            _write_json(sq_bottle_metadata, {sq_formula_key: {"formula": []}})
             rejected_result("malformed", arguments)
 
             ambiguous_metadata = json.loads(json.dumps(original_sq_metadata))
-            ambiguous_metadata["formula"]["bottle"]["tags"]["ventura"] = {
-                **ambiguous_metadata["formula"]["bottle"]["tags"][
+            ambiguous_metadata[sq_formula_key]["bottle"]["tags"]["ventura"] = {
+                **ambiguous_metadata[sq_formula_key]["bottle"]["tags"][
                     "arm64_sequoia"
                 ]
             }
             _write_json(sq_bottle_metadata, ambiguous_metadata)
             rejected_result("ambiguous", arguments)
 
+            wrong_tag_metadata = json.loads(json.dumps(original_sq_metadata))
+            tag = wrong_tag_metadata[sq_formula_key]["bottle"]["tags"].pop(
+                "arm64_sequoia"
+            )
+            wrong_tag_metadata[sq_formula_key]["bottle"]["tags"]["ventura"] = tag
+            _write_json(sq_bottle_metadata, wrong_tag_metadata)
+            rejected_result("wrong-tag", arguments)
+
             mismatched_metadata = json.loads(json.dumps(original_sq_metadata))
-            mismatched_metadata["formula"]["pkg_version"] = "1.4.1"
+            mismatched_metadata[sq_formula_key]["formula"]["pkg_version"] = "1.4.1"
             _write_json(sq_bottle_metadata, mismatched_metadata)
             rejected_result("metadata-mismatch", arguments)
 
+            wrong_revision_metadata = json.loads(json.dumps(original_sq_metadata))
+            wrong_revision_metadata[sq_formula_key]["formula"][
+                "tap_git_revision"
+            ] = "0" * 40
+            _write_json(sq_bottle_metadata, wrong_revision_metadata)
+            rejected_result("tap-revision-mismatch", arguments)
+
+            wrong_filename_metadata = json.loads(json.dumps(original_sq_metadata))
+            wrong_filename_metadata[sq_formula_key]["bottle"]["tags"][
+                "arm64_sequoia"
+            ]["local_filename"] = "other-bottle.tar.gz"
+            _write_json(sq_bottle_metadata, wrong_filename_metadata)
+            rejected_result("local-filename-mismatch", arguments)
+
+            wrong_checksum_metadata = json.loads(json.dumps(original_sq_metadata))
+            wrong_checksum_metadata[sq_formula_key]["bottle"]["tags"][
+                "arm64_sequoia"
+            ]["sha256"] = "0" * 64
+            _write_json(sq_bottle_metadata, wrong_checksum_metadata)
+            rejected_result("checksum-mismatch", arguments)
+
             _write_json(sq_bottle_metadata, original_sq_metadata)
+            metadata_target = root / "sq-metadata-target"
+            sq_bottle_metadata.replace(metadata_target)
+            sq_bottle_metadata.symlink_to(metadata_target)
+            rejected_result("metadata-symlink", arguments)
+            sq_bottle_metadata.unlink()
+            metadata_target.replace(sq_bottle_metadata)
+
+            sq_bottle_metadata.unlink()
+            sq_bottle_metadata.mkdir()
+            rejected_result("metadata-nonregular", arguments)
+            sq_bottle_metadata.rmdir()
+            _write_json(sq_bottle_metadata, original_sq_metadata)
+
             sq_bottle.write_bytes(b"unrecorded replacement")
             rejected_result("archive-mismatch", arguments)
             sq_bottle.write_bytes(b"sq bottle fixture")
 
             baseline_digest = _sha256(output)
+            metadata_changed = json.loads(json.dumps(original_sq_metadata))
+            metadata_changed[sq_formula_key]["formula"]["desc"] = (
+                "inert metadata-byte identity change"
+            )
+            _write_json(sq_bottle_metadata, metadata_changed)
+            metadata_changed_output = root / "runtime-metadata-changed.json"
+            metadata_changed_arguments = [
+                str(metadata_changed_output) if value == str(output) else value
+                for value in arguments
+            ]
+            metadata_changed_result = subprocess.run(
+                metadata_changed_arguments,
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(
+                0, metadata_changed_result.returncode, metadata_changed_result.stderr
+            )
+            metadata_changed_record = json.loads(
+                metadata_changed_output.read_text(encoding="utf-8")
+            )
+            self.assertNotEqual(baseline_digest, _sha256(metadata_changed_output))
+            self.assertNotEqual(
+                record["bottles"]["sq"]["metadata"]["sha256"],
+                metadata_changed_record["bottles"]["sq"]["metadata"]["sha256"],
+            )
+            self.assertEqual(
+                record["bottles"]["sq"]["archive"]["sha256"],
+                metadata_changed_record["bottles"]["sq"]["archive"]["sha256"],
+            )
+            _write_json(sq_bottle_metadata, original_sq_metadata)
+
             for label, archive, metadata, original in (
                 (
                     "sq",
@@ -2621,7 +2833,11 @@ class QualificationProcedureTests(unittest.TestCase):
                 with self.subTest(changed_bottle=label):
                     archive.write_bytes(original + b" changed")
                     bottle_record = json.loads(metadata.read_text(encoding="utf-8"))
-                    bottle_record["formula"]["bottle"]["tags"][
+                    formula_key = (
+                        "qualification/pq-sequoia/"
+                        f"{archive.name.split('--', 1)[0]}"
+                    )
+                    bottle_record[formula_key]["bottle"]["tags"][
                         "arm64_sequoia"
                     ]["sha256"] = _sha256(archive)
                     _write_json(metadata, bottle_record)
@@ -3473,18 +3689,22 @@ def _write_bottle_fixture(
     content: bytes,
 ) -> tuple[Path, Path]:
     filename = f"{formula}--{version}.arm64_sequoia.bottle.tar.gz"
+    full_formula = f"qualification/pq-sequoia/{formula}"
     archive = root / filename
     metadata = root / f"{formula}.bottle.json"
     archive.write_bytes(content)
     _write_json(
         metadata,
         {
-            "formula": {
-                "name": formula,
-                "pkg_version": version,
-                "path": f"/opt/homebrew/Cellar/{formula}/{version}",
-                "tap": "qualification/pq-sequoia",
-                "tap_git_head": tap_commit,
+            full_formula: {
+                "formula": {
+                    "name": formula,
+                    "pkg_version": version,
+                    "path": f"Library/Taps/qualification/homebrew-pq-sequoia/Formula/{formula}.rb",
+                    "tap_git_path": f"Formula/{formula}.rb",
+                    "tap_git_revision": tap_commit,
+                    "tap_git_remote": "inert local tap",
+                },
                 "bottle": {
                     "root_url": "https://example.invalid/bottles",
                     "prefix": "/opt/homebrew",

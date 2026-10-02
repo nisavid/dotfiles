@@ -53,6 +53,7 @@ RUNTIME_BOTTLE_COMPONENTS = {
     "sq": ("sequoia-sq-pqc@1.4.0", "1.4.0"),
     "sqv": ("sequoia-sqv-pqc@1.5.0", "1.5.0"),
 }
+RUNTIME_BOTTLE_TAP = "qualification/pq-sequoia"
 RUNTIME_BOTTLE_TAG = "arm64_sequoia"
 STATE_MARKER = ".pq-sequoia-disposable-state"
 STATE_MARKER_CONTENT = "pq-sequoia-disposable-state/v1\n"
@@ -2468,15 +2469,19 @@ def record_bottle(
         metadata_path, f"{name} bottle metadata"
     )
     metadata = read_json(metadata_path)
-    if not isinstance(metadata, dict) or set(metadata) != {"formula"}:
+    full_formula = f"{RUNTIME_BOTTLE_TAP}/{expected_formula}"
+    if not isinstance(metadata, dict) or set(metadata) != {full_formula}:
         raise ProcedureError(
-            f"{name} bottle metadata must contain exactly one formula record"
+            f"{name} bottle metadata must contain exactly {full_formula}"
         )
-    formula = metadata.get("formula")
-    if not isinstance(formula, dict):
-        raise ProcedureError(f"{name} bottle formula metadata is invalid")
-    bottle = formula.get("bottle")
-    tags = bottle.get("tags") if isinstance(bottle, dict) else None
+    formula_record = metadata.get(full_formula)
+    if not isinstance(formula_record, dict):
+        raise ProcedureError(f"{name} bottle metadata record is invalid")
+    formula = formula_record.get("formula")
+    bottle = formula_record.get("bottle")
+    if not isinstance(formula, dict) or not isinstance(bottle, dict):
+        raise ProcedureError(f"{name} bottle formula or bottle metadata is invalid")
+    tags = bottle.get("tags")
     if not isinstance(tags, dict) or set(tags) != {RUNTIME_BOTTLE_TAG}:
         raise ProcedureError(
             f"{name} bottle metadata must contain exactly {RUNTIME_BOTTLE_TAG}"
@@ -2487,17 +2492,14 @@ def record_bottle(
     expected = {
         "name": expected_formula,
         "pkg_version": expected_version,
-        "tap_git_head": expected_tap_commit,
+        "tap_git_revision": expected_tap_commit,
     }
     if any(formula.get(field) != value for field, value in expected.items()):
         raise ProcedureError(f"{name} bottle formula, version, or tap mismatch")
-    tap = formula.get("tap")
     filename = tag.get("filename")
     local_filename = tag.get("local_filename")
     if (
-        not isinstance(tap, str)
-        or not tap
-        or not isinstance(filename, str)
+        not isinstance(filename, str)
         or not filename
         or not isinstance(local_filename, str)
         or not local_filename
@@ -2509,7 +2511,7 @@ def record_bottle(
         "formula": expected_formula,
         "version": expected_version,
         "tag": RUNTIME_BOTTLE_TAG,
-        "tap": tap,
+        "tap": RUNTIME_BOTTLE_TAP,
         "tap_git_head": expected_tap_commit,
         "filename": filename,
         "local_filename": local_filename,
@@ -2786,10 +2788,8 @@ def record_runtime(arguments: argparse.Namespace) -> None:
             raise ProcedureError(f"{name} candidate bottle declaration mismatch")
         bottles[name] = record_bottle(
             name=name,
-            archive_path=getattr(arguments, f"{name}_bottle").resolve(strict=True),
-            metadata_path=getattr(
-                arguments, f"{name}_bottle_metadata"
-            ).resolve(strict=True),
+            archive_path=getattr(arguments, f"{name}_bottle").absolute(),
+            metadata_path=getattr(arguments, f"{name}_bottle_metadata").absolute(),
             expected_formula=formula,
             expected_version=version,
             expected_tap_commit=tap["commit"],
