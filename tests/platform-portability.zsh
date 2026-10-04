@@ -285,8 +285,8 @@ expected_runbook_triggers=$(
   fail 'runbook workflow does not run for its inputs on pull requests and on main'
 [[ $(workflow_block "$runbook_workflow" permissions) == '  contents: read' ]] ||
   fail 'runbook workflow does not restrict its token to reading contents'
-grep -Fq 'runs-on: macos-14' "$runbook_workflow" ||
-  fail 'runbook workflow does not run on macos-14'
+grep -Fq 'runs-on: macos-15' "$runbook_workflow" ||
+  fail 'runbook workflow does not run on macos-15'
 grep -Fq 'repository: nisavid/agents' "$runbook_workflow" ||
   fail 'runbook workflow does not check out the public agents repository'
 grep -Fq 'ref: ${{ steps.pin.outputs.release-commit }}' "$runbook_workflow" ||

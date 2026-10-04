@@ -87,8 +87,8 @@ env:
   CHEZMOI_VERSION: "2.71.0"
 jobs:
   verify:
-    name: macos-14 · ${{ matrix.group }}
-    runs-on: macos-14
+    name: macos-15 · ${{ matrix.group }}
+    runs-on: macos-15
     timeout-minutes: 45
     strategy:
       fail-fast: false
