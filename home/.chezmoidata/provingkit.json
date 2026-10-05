@@ -4,6 +4,164 @@
       "default": "",
       "byHostname": {}
     },
-    "profiles": {}
+    "profiles": {
+      "preview-8acd0e2af1f4-linux-amd64": {
+        "schema": "provingkit-installation-selection-v1",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "adoption": {
+          "stage": "preview",
+          "identity": "preview-8acd0e2af1f4-linux-amd64",
+          "record": "https://github.com/nisavid/provingkit/issues/70#issuecomment-5992367840"
+        },
+        "source": {
+          "repository": "https://github.com/nisavid/provingkit",
+          "commit": "8acd0e2af1f4508a0e2358d8e01f6a3db7a78ce3"
+        },
+        "artifact_slate": [
+          "rolecasting",
+          "tricritical",
+          "versionkeeping",
+          "mergecraft",
+          "artifact-customs",
+          "proseweaving"
+        ],
+        "artifacts": {
+          "agent-plugins": {
+            "archive": {
+              "url": "https://github.com/nisavid/provingkit/releases/download/preview-8acd0e2af1f4/provingkit-preview-8acd0e2af1f4-agent-plugins.tar.gz",
+              "sha256": "a010d4440394179eeedd44692d45e91bb090f2354ea8cc8d837ca31af1e99893",
+              "root": "provingkit-preview-8acd0e2af1f4-agent-plugins"
+            },
+            "artifact_sha256": "1edd475db49a10e432e9e4063222155c66b57a2f815a1e3543118eaa5eacdf1f",
+            "receipt": {
+              "url": "https://github.com/nisavid/provingkit/releases/download/preview-8acd0e2af1f4/provingkit-preview-8acd0e2af1f4-agent-plugins.RECEIPT.json",
+              "sha256": "16f6e83d7cedb43f3fb7f81241c5e35eff25e502818f3f4a91841ac1d5c17c34"
+            },
+            "modes": {
+              "url": "https://github.com/nisavid/provingkit/releases/download/preview-8acd0e2af1f4/provingkit-preview-8acd0e2af1f4-agent-plugins.modes.tsv",
+              "sha256": "9b530b9ae4223815cf688829eedf562c7aa6f0d30b73664a02a47cec411b5fd4"
+            },
+            "catalog": ".agents/plugins/marketplace.json"
+          },
+          "claude": {
+            "archive": {
+              "url": "https://github.com/nisavid/provingkit/releases/download/preview-8acd0e2af1f4/provingkit-preview-8acd0e2af1f4-claude.tar.gz",
+              "sha256": "e0f6e33d67a1b376418ed3e59f9b2bfb67621a6eeda47c7d57750d110caa2cfa",
+              "root": "provingkit-preview-8acd0e2af1f4-claude"
+            },
+            "artifact_sha256": "d59cb439171182459cc904fcace537690634f8d614776ddc15be5262c3b7ee1c",
+            "receipt": {
+              "url": "https://github.com/nisavid/provingkit/releases/download/preview-8acd0e2af1f4/provingkit-preview-8acd0e2af1f4-claude.RECEIPT.json",
+              "sha256": "3dbcbe98d3fa467c06a2b20ae708cb3c9f597a15567bc91ef9623b1aa41814ca"
+            },
+            "modes": {
+              "url": "https://github.com/nisavid/provingkit/releases/download/preview-8acd0e2af1f4/provingkit-preview-8acd0e2af1f4-claude.modes.tsv",
+              "sha256": "6106e3a9a11620acd6fc586de3a7dafa358af6d00cfada4ac7ee253c2f8a780b"
+            },
+            "catalog": ".claude-plugin/marketplace.json"
+          },
+          "cursor": {
+            "archive": {
+              "url": "https://github.com/nisavid/provingkit/releases/download/preview-8acd0e2af1f4/provingkit-preview-8acd0e2af1f4-cursor.tar.gz",
+              "sha256": "2e546ffc7cd42422031f0fde78678ddbb7604900065952365c00c7a6d3d8edc8",
+              "root": "provingkit-preview-8acd0e2af1f4-cursor"
+            },
+            "artifact_sha256": "6369d531860274882306505ec36b82007f5a2bf40dfcbffe5194662a0bfd99f5",
+            "receipt": {
+              "url": "https://github.com/nisavid/provingkit/releases/download/preview-8acd0e2af1f4/provingkit-preview-8acd0e2af1f4-cursor.RECEIPT.json",
+              "sha256": "f17917d3dbd26fb3265d6cb7d3e4d0b418affe266c1d8ed807486a3368ceba85"
+            },
+            "modes": {
+              "url": "https://github.com/nisavid/provingkit/releases/download/preview-8acd0e2af1f4/provingkit-preview-8acd0e2af1f4-cursor.modes.tsv",
+              "sha256": "2fa49bb8d87565337e9abe7ddab00e94f2a1d910ecdb571a6eef70a9fbbd22cb"
+            },
+            "catalog": ".cursor-plugin/marketplace.json"
+          }
+        },
+        "clients": {
+          "codex": {
+            "artifact": "agent-plugins",
+            "route": "native_marketplace",
+            "scope": "implicit_user",
+            "marketplace": "provingkit-local",
+            "members": {
+              "rolecasting": {
+                "enabled": true
+              },
+              "tricritical": {
+                "enabled": true
+              },
+              "versionkeeping": {
+                "enabled": true
+              },
+              "mergecraft": {
+                "enabled": true
+              },
+              "artifact-customs": {
+                "enabled": true
+              },
+              "proseweaving": {
+                "enabled": true
+              }
+            }
+          },
+          "claude": {
+            "artifact": "claude",
+            "route": "native_marketplace",
+            "scope": "user",
+            "marketplace": "provingkit",
+            "members": {
+              "rolecasting": {
+                "enabled": true
+              },
+              "tricritical": {
+                "enabled": true
+              },
+              "versionkeeping": {
+                "enabled": true
+              },
+              "mergecraft": {
+                "enabled": true
+              },
+              "artifact-customs": {
+                "enabled": true
+              },
+              "proseweaving": {
+                "enabled": true
+              }
+            }
+          },
+          "cursor": {
+            "artifact": "cursor",
+            "route": "user_local_directory",
+            "scope": "user",
+            "members": {
+              "rolecasting": {
+                "enabled": true
+              },
+              "tricritical": {
+                "enabled": true
+              },
+              "versionkeeping": {
+                "enabled": true
+              },
+              "mergecraft": {
+                "enabled": true
+              },
+              "artifact-customs": {
+                "enabled": true
+              },
+              "proseweaving": {
+                "enabled": true
+              }
+            }
+          }
+        },
+        "retirements": []
+      }
+    }
   }
 }
