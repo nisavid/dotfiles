@@ -52,3 +52,9 @@ Library
 .config/autostart
 .local/share/applications
 {{ end }}
+
+{{ if not (and (eq .chezmoi.os "linux") (get (default (dict) (get . "codexQuotaSafeguard")) "enabled")) }}
+# Opt-in binding only; ignore preserves any existing installation when inactive.
+.local/bin/codex-quota-safeguard
+.config/systemd/user/codex-usage-safeguard.service
+{{ end }}

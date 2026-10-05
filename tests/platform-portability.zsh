@@ -46,7 +46,6 @@ workflow_block() {
 }
 
 # Print one step's `run: |` script with its YAML indentation removed.
-# run_block in tests/ci-test-group.zsh parses steps the same way.
 workflow_step_run() {
   awk -v step="- name: $2" '
     function indent(s) { match(s, /^ */); return RLENGTH }
@@ -76,16 +75,51 @@ grep -Fq 'age-v${AGE_VERSION}-darwin-arm64.tar.gz' "$workflow" ||
   fail 'platform workflow does not install the pinned arm64 macOS age parser'
 grep -Fq 'age-v${AGE_VERSION}-darwin-amd64.tar.gz' "$workflow" ||
   fail 'platform workflow does not install the pinned amd64 macOS age parser'
-grep -Fq 'sudo apt-get -qq install -y acl bat curl jq ripgrep zsh' "$workflow" ||
-  fail 'platform workflow does not install Linux runtime dependencies'
-grep -Fq 'age-v${AGE_VERSION}-linux-amd64.tar.gz' "$workflow" ||
-  fail 'platform workflow does not install the pinned Linux age parser'
+# Buildkite runs the battery on Linux, so its runner holds the Linux pins.
+linux_runner=$repo_root/.buildkite/run-group.sh
+linux_install=$(
+  awk '
+    /apt-get -qq install -y/ { installing = 1 }
+    installing { more = /\\$/; sub(/\\$/, ""); print; if (!more) exit }
+  ' "$linux_runner"
+)
+linux_install_words=(${=linux_install})
+for package in acl bat curl jq ripgrep zsh; do
+  (( ${linux_install_words[(Ie)$package]} )) ||
+    fail "Buildkite does not install the Linux runtime dependency $package"
+done
+for linux_age_pin in \
+  'readonly AGE_VERSION=1.3.1' \
+  'platform=linux-amd64' \
+  'age_digest=$AGE_LINUX_SHA256' \
+  '"https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/age-v${AGE_VERSION}-${platform}.tar.gz" \'
+do
+  grep -Fq -- "$linux_age_pin" "$linux_runner" ||
+    fail "Buildkite does not install the pinned Linux age parser: $linux_age_pin"
+done
+grep -Eqx 'readonly AGE_LINUX_SHA256=[0-9a-f]{64}' "$linux_runner" ||
+  fail 'Buildkite does not pin the Linux age parser digest'
 grep -Fq '"$RUNNER_TEMP/age/age-inspect"' "$workflow" ||
   fail 'platform workflow does not install age-inspect'
 grep -Fq 'test "$(age-inspect --version)" = "v${AGE_VERSION}"' "$workflow" ||
   fail 'platform workflow does not verify the age parser version'
-grep -Fq 'python3 -m pip install uv==0.11.32' "$workflow" ||
+grep -Eqx '[[:space:]]+run: python3 -m pip install uv==0\.11\.32' "$workflow" ||
   fail 'platform workflow does not install the pinned uv runtime'
+# Buildkite pins the same chezmoi, Python and uv versions as the workflow, and
+# downloads uv at its pinned version.
+for linux_tool_pin in \
+  'readonly CHEZMOI_VERSION=2.71.0' \
+  'readonly PYTHON_VERSION=3.12' \
+  'readonly UV_VERSION=0.11.32'
+do
+  grep -Fqx -- "$linux_tool_pin" "$linux_runner" ||
+    fail "Buildkite does not pin the tool version the platform workflow pins: $linux_tool_pin"
+done
+grep -Fq 'CHEZMOI_VERSION: "2.71.0"' "$workflow" &&
+  grep -Fq 'python-version: "3.12"' "$workflow" ||
+  fail 'platform workflow does not pin the chezmoi and Python versions Buildkite pins'
+grep -Fq '"https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${uv_asset}.tar.gz" \' "$linux_runner" ||
+  fail 'Buildkite does not download uv at its pinned version'
 grep -Fq \
   "python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'" \
   "$test_groups" ||
@@ -251,8 +285,8 @@ expected_runbook_triggers=$(
   fail 'runbook workflow does not run for its inputs on pull requests and on main'
 [[ $(workflow_block "$runbook_workflow" permissions) == '  contents: read' ]] ||
   fail 'runbook workflow does not restrict its token to reading contents'
-grep -Fq 'runs-on: macos-14' "$runbook_workflow" ||
-  fail 'runbook workflow does not run on macos-14'
+grep -Fq 'runs-on: macos-15' "$runbook_workflow" ||
+  fail 'runbook workflow does not run on macos-15'
 grep -Fq 'repository: nisavid/agents' "$runbook_workflow" ||
   fail 'runbook workflow does not check out the public agents repository'
 grep -Fq 'ref: ${{ steps.pin.outputs.release-commit }}' "$runbook_workflow" ||
@@ -521,6 +555,7 @@ expected_linux_source_inventory=$(
     'dot_config/autostart/private_claude.desktop' \
     'dot_config/systemd/user/app-com.anthropic.Claude-.scope.d/50-oom-continue.conf' \
     'dot_config/systemd/user/builds.slice' \
+    'dot_config/systemd/user/codex-usage-safeguard.service.tmpl' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
     'private_dot_local/private_share/applications/claude-code-url-handler.desktop' \

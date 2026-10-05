@@ -1,0 +1,8 @@
+# Reviewed source pin. Supply existing private paths and explicit approval before enabling.
+[codexQuotaSafeguard]
+enabled = false
+releaseCommit = "86c5696ee4f06c2829c5c7ab85a99ee821a01af2"
+archiveSha256 = "5346b74f6c4d955f0f5178c5bad88fd7724a033c02f66e40e2b998c3c4bfb96a"
+configFile = ""
+stateDir = ""
+sharedLock = ""

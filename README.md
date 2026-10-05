@@ -40,3 +40,9 @@ chezmoi apply
 - [PQ Sequoia on GitHub-hosted macOS](docs/crypto/pq-sequoia-macos/PROCEDURE.md):
   validate, build, and exercise the pinned public RFC 9980 candidate and its
   live bidirectional Hatchery fixture protocol.
+
+## Optional Codex quota safeguard
+
+The [quota safeguard adapter](docs/CODEX_QUOTA_SAFEGUARD.md) installs a reviewed
+`nisavid/agents` revision on Linux when explicitly selected. It is disabled by
+default and never activates the watcher or MCP companion during chezmoi apply.

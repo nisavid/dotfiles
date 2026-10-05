@@ -1,0 +1,33 @@
+{{- $config := default (dict) (get . "codexQuotaSafeguard") -}}
+{{- $requested := default false (get $config "enabled") -}}
+{{- if not (kindIs "bool" $requested) -}}
+{{- fail "codexQuotaSafeguard.enabled must be boolean" -}}
+{{- end -}}
+{{- $enabled := and (eq .chezmoi.os "linux") $requested -}}
+{{- if $enabled -}}
+{{- range $key := list "releaseCommit" "archiveSha256" "configFile" "stateDir" "sharedLock" -}}
+{{- $value := get $config $key -}}
+{{- if or (not (kindIs "string" $value)) (not $value) -}}
+{{- fail (printf "codexQuotaSafeguard.%s is required when enabled" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9a-f]{40}$" $config.releaseCommit) -}}
+{{- fail "codexQuotaSafeguard.releaseCommit must be a full immutable Git revision" -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9a-f]{64}$" $config.archiveSha256) -}}
+{{- fail "codexQuotaSafeguard.archiveSha256 must be a SHA-256 digest" -}}
+{{- end -}}
+{{- range $key := list "configFile" "stateDir" "sharedLock" -}}
+{{- if not (hasPrefix "/" (get $config $key)) -}}
+{{- fail (printf "codexQuotaSafeguard.%s must name an existing absolute path" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{
+  "enabled": {{ $enabled | toJson }},
+  "releaseCommit": {{ default "" (get $config "releaseCommit") | toJson }},
+  "archiveSha256": {{ default "" (get $config "archiveSha256") | toJson }},
+  "configFile": {{ default "" (get $config "configFile") | toJson }},
+  "stateDir": {{ default "" (get $config "stateDir") | toJson }},
+  "sharedLock": {{ default "" (get $config "sharedLock") | toJson }}
+}
