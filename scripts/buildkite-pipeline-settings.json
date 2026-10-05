@@ -1,0 +1,27 @@
+{
+  "description": "Settings of the Buildkite pipeline nisavid/dotfiles that the buildkite/dotfiles merge gate relies on: whether a pull request commit gets a build, which steps the build runs, and which commit status it reports to GitHub. scripts/buildkite-pipeline-settings checks them against the live pipeline. See docs/research/BUILDKITE_GHA_PR_BUILDS.md.",
+  "organization": "nisavid",
+  "pipeline": "dotfiles",
+  "pipeline_settings": {
+    "configuration": "steps:\n  - label: \":pipeline: Upload\"\n    agents:\n      queue: linux-small\n    command: |\n      if [ -f .buildkite/pipeline.yml ]; then\n        buildkite-agent pipeline upload\n      else\n        echo \"No .buildkite/pipeline.yml on this commit; nothing to run.\"\n      fi\n",
+    "branch_configuration": null
+  },
+  "provider_settings": {
+    "trigger_mode": "code",
+    "build_branches": true,
+    "build_pull_requests": true,
+    "build_pull_request_forks": false,
+    "filter_enabled": false,
+    "pull_request_branch_filter_enabled": false,
+    "skip_builds_for_existing_commits": false,
+    "skip_pull_request_builds_for_existing_commits": true,
+    "publish_commit_status": true,
+    "publish_commit_status_per_step": true,
+    "publish_blocked_as_pending": true,
+    "separate_pull_request_statuses": false,
+    "prevent_custom_statuses_from_using_buildkite_prefix": true
+  },
+  "github_webhooks": {
+    "enabled": true
+  }
+}

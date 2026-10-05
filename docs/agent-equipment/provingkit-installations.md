@@ -80,7 +80,7 @@ members from different snapshots into a newly authored marketplace.
 3. Select the profile through the default or a hostname override. Review the
    projected JSON and chezmoi diff, then apply within the intended host scope.
 4. Read the command result and run `provingkit-installations status`. Verify
-   native scope, enablement, and installed bytes separately. Complete the
+   native scope, enablement, effective payload, and cache separately. Complete the
    client-specific discovery checks before calling the client adopted.
 
 ```sh
@@ -129,10 +129,23 @@ Codex's alias uses `agent-plugins-local` as its owned directory name.
 
 `~/.local/state/provingkit/installations.json` records the selected source and
 artifacts, observed directories, native additions, client results, and source
-transitions with the prior source and unselected cache identities. It is an
-observation receipt, not another desired-state declaration. `status` reads
-current bytes and native state; it never substitutes the stored receipt for a
-fresh observation.
+transitions with the prior source, the captured unselected state, and its expected
+post-state. It is an observation receipt, not another desired-state declaration.
+`status` reads current bytes and native state; it never substitutes the stored
+receipt for a fresh observation.
+
+Native observations distinguish the effective plugin payload from its cache:
+
+| Field | Meaning |
+| --- | --- |
+| `path` and `cache_content` | Native cache location and its comparison with the selected clean artifact. Recovery copies use this location. |
+| `load_path` and `content` | Effective load location and its payload comparison with the selected clean artifact. |
+| `native_files` | Previously verified cache file and mode inventory, retained in the observation receipt. |
+| `native_loaded_files` | Previously verified effective payload file and mode inventory, retained separately in the observation receipt. |
+
+Both content comparisons must be `match`, with the requested source binding,
+registration, and enablement, for native reconciliation to converge. These are
+file and configuration observations; `runtime_acceptance` remains `not_observed`.
 
 ## Native reconciliation
 
@@ -141,16 +154,27 @@ native plugin caches or application settings directly. It honors `CODEX_HOME`
 and `CLAUDE_CONFIG_DIR` when supplied. Keep native configuration changes serial
 with reconciliation and inspect an interrupted run before changing its selection.
 
-For steady-state changes, replace the owned stable marketplace copy, refresh
-Claude's directory marketplace, and compare each selected installed subtree.
-A changed, registered member is removed and reinstalled through native commands
-only when its current files and modes match the last verified installation
-inventory. Before removal, retain and verify a complete recovery copy under
+Claude's [plugin loading documentation](https://code.claude.com/docs/en/plugins/loading)
+describes relative plugin sources in a local directory marketplace as loading
+in place. When a native registration reports `readFromFolder`, the reconciler
+requires an existing, real member directory at the registered directory
+marketplace's `plugins/<member>` path. A malformed, missing, or differently bound
+load folder makes observation unavailable; a matching cache cannot substitute
+for that folder. Registrations without `readFromFolder` retain the supported
+cache-loading path.
+
+Before replacing the stable marketplace copy, check each selected cache or
+effective payload that differs from the desired artifact against its separate
+previously verified file and mode inventory. An unexplained change stops
+reconciliation before projection or native commands. After projection, refresh
+Claude's directory marketplace and reinstall a changed cache through native
+commands. Before removal, retain and verify a complete recovery copy under
 `~/.local/state/provingkit/backups/`, including native-generated files. Record
 the copy and its original path in `native_backups` in the observation receipt;
 Claude removal always uses `--scope user --keep-data`. A missing cache is
-installed again. Unchanged members receive no install action. Claude's declared
-enabled state is restored with its scoped native enable/disable commands.
+installed again; a missing declared in-place source remains unavailable.
+Unchanged caches receive no install action. Claude's declared enabled state is
+restored with its scoped native enable/disable commands.
 Codex's persistent disable control is unavailable through the measured CLI.
 
 For first adoption, declare an artifact that matches the installed content and
@@ -158,8 +182,11 @@ reconcile that baseline before selecting newer bytes. A missing inventory or
 unexplained local edit stops replacement before native changes. Keep the
 installed files intact and resolve their identity with the adoption owner;
 do not edit the observation receipt to make an unknown installation appear
-recognized. This also applies to installations recorded by older versions of
-this procedure that lack the `native_files` inventory.
+recognized. Cache replacement requires a matching `native_files` inventory.
+When a member has no `native_loaded_files` record, its legacy `native_files`
+inventory can establish the effective payload baseline. A present effective
+inventory must be a dictionary; null or a non-dictionary inventory makes the
+receipt unavailable and cannot fall back to legacy evidence.
 
 An existing Codex `provingkit-local` source can be adopted in place when its
 complete files and modes match the verified installation view and every selected
@@ -188,17 +215,29 @@ An initial source rebind differs by client:
 - Claude supports `plugin marketplace add NEW_DIRECTORY --scope user` for a
   same-name rebind. The destination clean catalog must retain every installed
   unselected member. A three-entry catalog makes the other three installations
-  report `plugin-not-found`, even though their cache bytes remain. Use the
-  complete catalog and replace only the selected installations.
+  report `plugin-not-found`, even though their cache bytes remain. For each
+  unselected member loaded in place, verify before projection that its current
+  effective payload files and modes equal the new clean artifact's member.
+  Changed unselected content blocks the operation. During this declared rebind,
+  the only permitted registration change is `readFromFolder` moving to the
+  owned destination's `plugins/<member>` path. Preserve its cache, identity,
+  scope, enablement, and every other registration field. Use the complete
+  catalog and replace only the selected installations.
 
-Before native mutations, capture unselected registrations and payload bytes/modes,
-excluding Claude's validated volatile process markers.
-Check them again after each native mutation and at the end. Existing member
-errors, ambiguous scopes, unknown cache layouts, or unrecognized files stop
-reconciliation. An explicitly enabled Claude `autoUpdate` setting also blocks
-reconciliation when unselected members are installed. Its observed setting is reported;
-`unspecified` does not mean disabled. No tested command changed unselected payload
-bytes, but a later interactive client's update behavior still needs observation.
+Before projection or native mutations, capture unselected registrations,
+effective payloads, and cache bytes/modes, excluding Claude's validated volatile
+process markers. Claude members loaded in place must match their destination
+artifact's files and modes for steady-state changes as well as rebinds. For a
+rebind, retain the raw capture in the source transition's `unselected` record and
+its expected post-state in `expected_unselected`, changing only the permitted
+load-folder path. Compare fresh observations with that complete expected state
+and the unchanged unselected member set after each native mutation and at the
+end, including when no unselected members were installed. Existing member errors,
+ambiguous scopes, unknown cache layouts, or unrecognized files stop reconciliation.
+An explicitly enabled Claude `autoUpdate` setting also blocks reconciliation when
+unselected members are installed. Its observed setting is reported;
+`unspecified` does not mean disabled. Interactive client updates and session
+loading require their separate acceptance checks.
 
 Native command success is insufficient. Claude can report a successful
 same-version install while retaining old bytes. Codex's installed list reports a
@@ -213,8 +252,10 @@ Accept only direct regular files named by a positive decimal PID, containing
 at most 4096 bytes of JSON with a matching integer `pid` and optional decimal
 string `procStart`. Duplicate keys, incomplete writes, unknown fields, nested
 entries, and links make observation unavailable; preserve them for inspection.
-Validated markers are reported separately from plugin payloads and excluded
-from retained payload identity. Keep them in complete recovery copies. Their
+Validated cache markers are reported separately from plugin payloads and
+excluded from retained payload identity. Markers in effective load folders are
+also validated and excluded from payload identity, but are not reported in
+`native_additions`. Keep cache markers in complete recovery copies. Their
 presence does not prove that a process is active or that a live update is safe.
 This format is grounded in Claude Code 2.1.284's installed marker writer and
 reader; tests construct marker fixtures and do not claim fresh session loading.
@@ -222,8 +263,11 @@ reader; tests construct marker fixtures and do not claim fresh session loading.
 Compatibility is based on required command/JSON shapes and observed state, with
 the native version included in the report. A different compatible patch version
 does not automatically disable the route. A changed control, output schema, or
-layout produces `unavailable` and requires a new mechanism probe. The native
-mechanism evidence here used Codex 0.155.0 and Claude Code 2.1.273.
+layout produces `unavailable` and requires a new mechanism probe. Native lifecycle
+checks were verified in disposable Linux homes with Codex 0.160.0 and Claude Code
+2.1.289, including effective-source observations and full-catalog rebinds. Recorded
+mechanism fixtures retain earlier client versions. Constructed CLI fault tests
+establish refusal behavior, not real-client outcomes or session loading.
 
 ## Cursor materialization and acceptance
 

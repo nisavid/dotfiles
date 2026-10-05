@@ -14,6 +14,7 @@ import stat
 import subprocess
 import tempfile
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path, PurePosixPath
 
 TARGETS = {"codex": "agent-plugins", "claude": "claude", "cursor": "cursor"}
@@ -414,12 +415,14 @@ class NativeClient:
         self.home = home
         self.marketplace = marketplace
         self.sentinels = {}
+        self.selected_members = None
         self.receipt = {}
         self.executable = shutil.which(name)
         native_require(self.executable is not None, f"{name} executable is unavailable")
         self.actions = []
         self.install_paths = {}
         self.replacement_files = {}
+        self.observed_marketplace = None
         self.config = Path(
             os.environ.get(
                 "CODEX_HOME" if name == "codex" else "CLAUDE_CONFIG_DIR",
@@ -453,10 +456,11 @@ class NativeClient:
             result.returncode == 0,
             f"native command failed ({result.returncode}): {result.stderr.strip() or result.stdout.strip()}",
         )
-        if action and self.sentinels:
+        if action and self.selected_members is not None:
             _, rows = self.observe()
             native_require(
-                self.snapshot(rows, set(self.sentinels)) == self.sentinels,
+                set(rows) - self.selected_members == set(self.sentinels)
+                and self.snapshot(rows, set(self.sentinels)) == self.sentinels,
                 "unselected native state changed; stop and inspect the retained observation",
             )
         return json.loads(result.stdout) if structured else result.stdout
@@ -510,7 +514,8 @@ class NativeClient:
                 "provingkit member has another or ambiguous scope",
             )
             rows[name] = row
-        return sources[0] if sources else None, rows
+        self.observed_marketplace = sources[0] if sources else None
+        return self.observed_marketplace, rows
 
     def source_path(self, marketplace: dict | None) -> str | None:
         if marketplace is None:
@@ -535,8 +540,11 @@ class NativeClient:
         native_require(members <= set(rows), "unselected registration disappeared")
         return {
             member: {
-                "registration": rows[member],
+                "registration": deepcopy(rows[member]),
                 "files": installed_inventory(
+                    self.name, self.loaded_path(member, rows[member], self.receipt)
+                )[0],
+                "cache_files": installed_inventory(
                     self.name, self.installed_path(member, rows[member], self.receipt)
                 )[0],
             }
@@ -597,6 +605,28 @@ class NativeClient:
             "unexpected native installation path",
         )
         return path
+
+    def loaded_path(self, member: str, row: dict | None, receipt: dict) -> Path:
+        cache = self.installed_path(member, row, receipt)
+        if self.name != "claude" or row is None or "readFromFolder" not in row:
+            return cache
+        folder = row["readFromFolder"]
+        native_require(
+            isinstance(folder, str) and bool(folder),
+            "unrecognized Claude effective load folder",
+        )
+        source = self.source_path(self.observed_marketplace)
+        native_require(
+            source is not None
+            and Path(folder).is_absolute()
+            and Path(folder) == Path(source) / "plugins" / member,
+            "Claude effective load folder differs from its registered marketplace",
+        )
+        native_require(
+            Path(folder).is_dir() and not Path(folder).is_symlink(),
+            "Claude effective load folder is missing or unsupported",
+        )
+        return Path(folder)
 
     def install(self, member: str) -> None:
         result = self.call(
@@ -692,9 +722,10 @@ def native_status(
     for member in choice["members"]:
         row = rows.get(member)
         installed = native.installed_path(member, row, receipt)
-        content, additions = "absent", {}
+        loaded = native.loaded_path(member, row, receipt)
+        cache_content, additions = "absent", {}
+        expected = files(root / "plugins" / member)
         if installed.exists() or installed.is_symlink():
-            expected = files(root / "plugins" / member)
             native_require(
                 native.name != "claude"
                 or not any(
@@ -724,16 +755,24 @@ def native_status(
                     previous is None or previous == additions,
                     f"native adapter drift for {member}",
                 )
-            content = (
+            cache_content = (
                 "match"
                 if all(actual.get(name) == value for name, value in expected.items())
                 else "different"
             )
+        content = cache_content
+        if loaded != installed:
+            content = "absent"
+            if loaded.exists() or loaded.is_symlink():
+                payload, _ = installed_inventory(native.name, loaded)
+                content = "match" if payload == expected else "different"
         members[member] = {
             "content": content,
+            "cache_content": cache_content,
             "enabled": row["enabled"] if row else "unknown",
             "scope": choice["scope"] if row else "unknown",
             "path": str(installed),
+            "load_path": str(loaded),
             "registered": row is not None,
             "native_additions": additions,
         }
@@ -753,6 +792,7 @@ def native_status(
     )
     converged = source_matches and all(
         item["content"] == "match"
+        and item["cache_content"] == "match"
         and item["registered"]
         and item["enabled"] == choice["members"][name]["enabled"]
         for name, item in members.items()
@@ -820,19 +860,50 @@ def native_reconcile(
         not unselected or native.automatic_updates() != "enabled",
         "source_transition_unavailable: automatic updates are enabled for unselected members",
     )
+    if native.name == "claude":
+        for member in sorted(unselected):
+            row = rows[member]
+            if "readFromFolder" not in row:
+                continue
+            loaded = native.loaded_path(member, row, receipt)
+            native_require(
+                installed_inventory(native.name, loaded)[0]
+                == files(root / "plugins" / member),
+                f"source_transition_unavailable: local source would change unselected effective content for {member}",
+            )
     native.receipt = receipt
-    native.sentinels = native.snapshot(rows, unselected)
+    native.selected_members = set(choice["members"])
+    unselected_before = native.snapshot(rows, unselected)
+    native.sentinels = deepcopy(unselected_before)
+    if rebind and native.name == "claude":
+        for member, observation in native.sentinels.items():
+            if "readFromFolder" in observation["registration"]:
+                observation["registration"]["readFromFolder"] = str(
+                    stable / "plugins" / member
+                )
     current = native_status(native, choice, root, marketplace, rows, receipt)
     for member, observed in current["members"].items():
-        if observed["content"] != "absent":
+        if observed["cache_content"] != "absent":
             native.replacement_files[member] = installed_inventory(
                 native.name, Path(observed["path"])
             )[0]
-        if observed["content"] == "different":
+        if observed["cache_content"] == "different":
             previous = receipt.get("native_files", {}).get(native.name, {}).get(member)
             native_require(
                 previous == installed_inventory(native.name, Path(observed["path"]))[0],
                 f"unrecognized selected cache for {member}; reconcile its contents with the owner before replacement",
+            )
+        if observed["content"] == "different":
+            loaded_records = receipt.get("native_loaded_files", {}).get(native.name, {})
+            previous = (
+                loaded_records[member]
+                if member in loaded_records
+                else receipt.get("native_files", {}).get(native.name, {}).get(member)
+            )
+            native_require(
+                previous
+                == installed_inventory(native.name, Path(observed["load_path"]))[0],
+                f"unrecognized selected effective source for {member}; reconcile its contents with the owner before replacement",
             )
     if retained_source_matches:
         source_files = files(Path(source))
@@ -852,7 +923,8 @@ def native_reconcile(
                 "client": native.name,
                 "previous_source": marketplace,
                 "next_source": str(stable),
-                "unselected": native.sentinels,
+                "unselected": unselected_before,
+                "expected_unselected": deepcopy(native.sentinels),
             }
         )
         if native.name == "codex":
@@ -888,11 +960,15 @@ def native_reconcile(
         )
     for member, observed in current["members"].items():
         removed = rebind and native.name == "codex"
-        if removed or observed["content"] != "match" or not observed["registered"]:
+        if (
+            removed
+            or observed["cache_content"] != "match"
+            or not observed["registered"]
+        ):
             if (
                 not removed
                 and observed["registered"]
-                and observed["content"] == "different"
+                and observed["cache_content"] == "different"
             ):
                 native.uninstall(member)
             native.install(member)
@@ -904,7 +980,8 @@ def native_reconcile(
             native.enable(member, enabled)
     marketplace, final_rows = native.observe()
     native_require(
-        native.snapshot(final_rows, set(native.sentinels)) == native.sentinels,
+        set(final_rows) - native.selected_members == set(native.sentinels)
+        and native.snapshot(final_rows, set(native.sentinels)) == native.sentinels,
         "unselected native state changed; inspect the retained observation",
     )
     if native.name == "codex" and not retained_source_matches:
@@ -937,9 +1014,18 @@ def load_receipt(home: Path) -> dict:
     native_require(
         isinstance(receipt.get("native_paths", {}), dict)
         and isinstance(receipt.get("native_files", {}), dict)
+        and isinstance(receipt.get("native_loaded_files", {}), dict)
         and isinstance(receipt.get("native_backups", []), list)
         and isinstance(receipt.get("source_transitions", []), list),
         "unrecognized observation history",
+    )
+    native_require(
+        all(
+            isinstance(members, dict)
+            and all(isinstance(inventory, dict) for inventory in members.values())
+            for members in receipt.get("native_loaded_files", {}).values()
+        ),
+        "unrecognized effective-source inventory",
     )
     previous_marketplace = (
         receipt.get("clients", {}).get("codex", {}).get("marketplace")
@@ -1196,10 +1282,17 @@ def main() -> int:
                         for member, observed in observation["members"].items():
                             if (
                                 observed["content"] == "match"
+                                and observed["cache_content"] == "match"
                                 and observed["registered"]
                             ):
                                 inventories[member] = installed_inventory(
                                     client, Path(observed["path"])
+                                )[0]
+                                loaded_inventories = receipt.setdefault(
+                                    "native_loaded_files", {}
+                                ).setdefault(client, {})
+                                loaded_inventories[member] = installed_inventory(
+                                    client, Path(observed["load_path"])
                                 )[0]
                     if client == "codex" and args.command == "reconcile":
                         for member, observed in observation["members"].items():
