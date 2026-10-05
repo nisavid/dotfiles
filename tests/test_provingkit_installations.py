@@ -305,6 +305,150 @@ class InstallationCommandTests(unittest.TestCase):
             (code, rediscovered["outcome"]), (0, "converged"), rediscovered
         )
 
+    def test_claude_status_verifies_the_folder_loaded_in_place(self) -> None:
+        self.use_native_clients()
+        self.selection.write_text(
+            json.dumps(fixture_selection(self.home, clients=("claude",)))
+        )
+        code, installed = self.run_command("reconcile")
+        self.assertEqual(code, 0, installed)
+        row = next(
+            item
+            for item in json.loads(
+                self.native_run("claude", "plugin", "list", "--json").stdout
+            )
+            if item["id"] == "proseweaving@provingkit"
+        )
+        if not row.get("readFromFolder"):
+            self.skipTest("this client copies local marketplace plugins into its cache")
+        loaded = Path(row["readFromFolder"])
+        cache = Path(row["installPath"])
+        self.assertNotEqual(loaded, cache)
+        self.assertTrue(loaded.resolve().is_relative_to(self.home.resolve()))
+        skill = loaded / "skills/fixture/SKILL.md"
+        cached_skill = cache / "skills/fixture/SKILL.md"
+        cached_before = cached_skill.read_bytes()
+        skill.write_text("A changed effective source must be observed.\n")
+
+        code, observed = self.run_command("status")
+
+        self.assertEqual(code, 2, observed)
+        member = observed["clients"]["claude"]["members"]["proseweaving"]
+        self.assertEqual(member["content"], "different")
+        self.assertEqual(member["load_path"], str(loaded))
+        self.assertEqual(member["path"], str(cache))
+        self.assertEqual(member["cache_content"], "match")
+        self.assertEqual(cached_skill.read_bytes(), cached_before)
+
+        code, refused = self.run_command("reconcile")
+
+        self.assertEqual(code, 2, refused)
+        self.assertIn(
+            "unrecognized selected effective source",
+            refused["clients"]["claude"]["message"],
+        )
+        self.assertEqual(refused["clients"]["claude"]["actions"], [])
+        self.assertEqual(
+            skill.read_text(), "A changed effective source must be observed.\n"
+        )
+        self.assertEqual(cached_skill.read_bytes(), cached_before)
+
+    def test_claude_refuses_changed_unselected_effective_source_before_projection(
+        self,
+    ) -> None:
+        self.use_native_clients()
+        self.selection.write_text(
+            json.dumps(fixture_selection(self.home, clients=("claude",)))
+        )
+        code, baseline = self.run_command("reconcile")
+        self.assertEqual(code, 0, baseline)
+        row = next(
+            item
+            for item in json.loads(
+                self.native_run("claude", "plugin", "list", "--json").stdout
+            )
+            if item["id"] == "proseweaving@provingkit"
+        )
+        if not row.get("readFromFolder"):
+            self.skipTest("this client copies local marketplace plugins into its cache")
+        skill = Path(row["readFromFolder"]) / "skills/fixture/SKILL.md"
+        before = skill.read_bytes()
+        desired = fixture_selection(self.home, "b", ("claude",))
+        desired["profile"]["clients"]["claude"]["members"] = {
+            member: {"enabled": True} for member in ("versionkeeping", "mergecraft")
+        }
+        self.selection.write_text(json.dumps(desired))
+
+        code, refused = self.run_command("reconcile")
+
+        self.assertEqual(code, 2, refused)
+        observation = refused["clients"]["claude"]
+        self.assertIn("source_transition_unavailable", observation["message"])
+        self.assertEqual(observation["actions"], [])
+        self.assertEqual(skill.read_bytes(), before)
+
+        desired = fixture_selection(self.home, clients=("claude",))
+        desired["profile"]["clients"]["claude"]["members"] = {
+            member: {"enabled": True} for member in ("versionkeeping", "mergecraft")
+        }
+        self.selection.write_text(json.dumps(desired))
+        skill.chmod(0o600)
+
+        code, refused = self.run_command("reconcile")
+
+        self.assertEqual(code, 2, refused)
+        self.assertIn(
+            "source_transition_unavailable", refused["clients"]["claude"]["message"]
+        )
+        self.assertEqual(refused["clients"]["claude"]["actions"], [])
+        self.assertEqual(skill.read_bytes(), before)
+        self.assertEqual(skill.stat().st_mode & 0o777, 0o600)
+
+    def test_invalid_effective_inventory_cannot_use_legacy_cache_evidence(self) -> None:
+        self.use_native_clients()
+        self.selection.write_text(
+            json.dumps(fixture_selection(self.home, clients=("claude",)))
+        )
+        code, baseline = self.run_command("reconcile")
+        self.assertEqual(code, 0, baseline)
+        receipt_path = self.home / ".local/state/provingkit/installations.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["native_loaded_files"]["claude"]["proseweaving"] = None
+        receipt_path.write_text(json.dumps(receipt))
+        self.selection.write_text(
+            json.dumps(fixture_selection(self.home, "b", ("claude",)))
+        )
+
+        code, refused = self.run_command("reconcile")
+
+        self.assertEqual(code, 2, refused)
+        self.assertEqual(refused["outcome"], "receipt_unavailable")
+        self.assertEqual(refused["clients"], {})
+
+    def test_missing_claude_effective_source_is_not_repaired_as_a_cache(self) -> None:
+        self.use_native_clients()
+        self.selection.write_text(
+            json.dumps(fixture_selection(self.home, clients=("claude",)))
+        )
+        code, baseline = self.run_command("reconcile")
+        self.assertEqual(code, 0, baseline)
+        member = baseline["clients"]["claude"]["members"]["proseweaving"]
+        loaded, cache = Path(member["load_path"]), Path(member["path"])
+        if loaded == cache:
+            self.skipTest("this client copies local marketplace plugins into its cache")
+        self.assertTrue(loaded.resolve().is_relative_to(self.home.resolve()))
+        cached_skill = cache / "skills/fixture/SKILL.md"
+        before = cached_skill.read_bytes()
+        shutil.rmtree(loaded)
+
+        code, refused = self.run_command("reconcile")
+
+        self.assertEqual(code, 2, refused)
+        self.assertEqual(refused["clients"]["claude"]["outcome"], "unavailable")
+        self.assertEqual(refused["clients"]["claude"]["actions"], [])
+        self.assertFalse(loaded.exists())
+        self.assertEqual(cached_skill.read_bytes(), before)
+
     def test_codex_adopts_equivalent_shared_alias_without_native_mutations(
         self,
     ) -> None:
@@ -827,11 +971,19 @@ class InstallationCommandTests(unittest.TestCase):
         }
         unselected = ("rolecasting", "tricritical", "artifact-customs")
         identities = {}
+        loaded_identities = {}
         for member in unselected:
-            path = Path(before[member + "@provingkit"]["installPath"])
+            row = before[member + "@provingkit"]
+            path = Path(row["installPath"])
             identities[member] = {
                 str(p.relative_to(path)): (p.read_bytes(), p.stat().st_mode & 0o777)
                 for p in path.rglob("*")
+                if p.is_file()
+            }
+            loaded = Path(row.get("readFromFolder", row["installPath"]))
+            loaded_identities[member] = {
+                str(p.relative_to(loaded)): (p.read_bytes(), p.stat().st_mode & 0o777)
+                for p in loaded.rglob("*")
                 if p.is_file()
             }
         desired = fixture_selection(self.home, "preview", ("claude",))
@@ -866,15 +1018,32 @@ class InstallationCommandTests(unittest.TestCase):
             )
         }
         for member in unselected:
-            self.assertEqual(
-                before[member + "@provingkit"], after[member + "@provingkit"]
-            )
+            expected_row = dict(before[member + "@provingkit"])
+            if "readFromFolder" in expected_row:
+                expected_row["readFromFolder"] = str(
+                    self.home
+                    / ".local/share/provingkit/marketplaces/claude/plugins"
+                    / member
+                )
+            self.assertEqual(expected_row, after[member + "@provingkit"])
             path = Path(after[member + "@provingkit"]["installPath"])
             self.assertEqual(
                 identities[member],
                 {
                     str(p.relative_to(path)): (p.read_bytes(), p.stat().st_mode & 0o777)
                     for p in path.rglob("*")
+                    if p.is_file()
+                },
+            )
+            loaded = Path(expected_row.get("readFromFolder", str(path)))
+            self.assertEqual(
+                loaded_identities[member],
+                {
+                    str(p.relative_to(loaded)): (
+                        p.read_bytes(),
+                        p.stat().st_mode & 0o777,
+                    )
+                    for p in loaded.rglob("*")
                     if p.is_file()
                 },
             )
@@ -890,6 +1059,21 @@ class InstallationCommandTests(unittest.TestCase):
         self.assertEqual(
             set(receipt["source_transitions"][0]["unselected"]), set(unselected)
         )
+        transition = receipt["source_transitions"][0]
+        for member in unselected:
+            self.assertEqual(
+                transition["unselected"][member]["registration"],
+                before[member + "@provingkit"],
+            )
+            self.assertEqual(
+                transition["expected_unselected"][member]["registration"],
+                after[member + "@provingkit"],
+            )
+            for inventory in ("files", "cache_files"):
+                self.assertEqual(
+                    transition["unselected"][member][inventory],
+                    transition["expected_unselected"][member][inventory],
+                )
         self.assertEqual(
             json.loads(settings.read_text())["unrelatedFixtureSetting"], "keep"
         )
@@ -971,6 +1155,247 @@ class InstallationCommandTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(unknown["clients"]["codex"]["outcome"], "unavailable")
 
+    def constructed_claude_rebind(self, fault: str, unselected: bool = True) -> dict:
+        # Constructed CLI responses and faults, not real-client lifecycle evidence.
+        original = fixture_selection(self.home, clients=("claude",))
+        source = artifact_root(self.home, original, "claude")
+        selected = fixture_selection(self.home, "b", ("claude",))
+        selected["profile"]["clients"]["claude"]["members"] = {
+            "proseweaving": {"enabled": True}
+        }
+        self.selection = self.home / "selection.json"
+        self.selection.write_text(json.dumps(selected))
+        config = self.home / ".claude"
+        config.mkdir()
+        (config / "settings.json").write_text(
+            json.dumps(
+                {
+                    "extraKnownMarketplaces": {
+                        "provingkit": {
+                            "source": {"source": "directory", "path": str(source)}
+                        }
+                    }
+                }
+            )
+        )
+        rows = []
+        for member in (
+            ("proseweaving", "versionkeeping") if unselected else ("proseweaving",)
+        ):
+            cache = config / "plugins/cache/provingkit" / member / "1.0.0"
+            shutil.copytree(source / "plugins" / member, cache)
+            rows.append(
+                {
+                    "id": member + "@provingkit",
+                    "version": "1.0.0",
+                    "scope": "user",
+                    "enabled": member == "proseweaving",
+                    "installPath": str(cache),
+                    "readFromFolder": str(source / "plugins" / member),
+                    "installedAt": "2026-10-04T00:00:00.000Z",
+                    "lastUpdated": "2026-10-04T00:00:00.000Z",
+                }
+            )
+        equivalent = self.home / "equivalent/plugins/versionkeeping"
+        shutil.copytree(source / "plugins/versionkeeping", equivalent)
+        state = {"source": str(source), "rows": rows, "fault": fault, "actions": []}
+        state_path = self.home / "constructed-claude.json"
+        state_path.write_text(json.dumps(state))
+        binary_dir = self.home / "constructed-bin"
+        binary_dir.mkdir()
+        binary = binary_dir / "claude"
+        binary.write_text(f"#!{sys.executable}\n" + """import json, shutil, sys
+from pathlib import Path
+state_path = Path.home() / "constructed-claude.json"
+state = json.loads(state_path.read_text())
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("2.1.289 (Claude Code)")
+elif args == ["plugin", "list", "--json"]:
+    print(json.dumps(state["rows"]))
+elif args == ["plugin", "marketplace", "list", "--json"]:
+    print(json.dumps([{"name": "provingkit", "source": "directory",
+                       "path": state["source"], "installLocation": state["source"]}]))
+else:
+    state["actions"].append(args)
+    if args[:3] == ["plugin", "marketplace", "add"]:
+        state["source"] = args[3]
+        for row in state["rows"]:
+            member = row["id"].split("@")[0]
+            row["readFromFolder"] = str(Path(args[3]) / "plugins" / member)
+        others = [row for row in state["rows"] if row["id"] != "proseweaving@provingkit"]
+        if state["fault"] == "registration":
+            others[0]["lastUpdated"] = "2026-10-05T00:00:00.000Z"
+        elif state["fault"] == "load_folder":
+            others[0]["readFromFolder"] = str(Path.home() / "equivalent/plugins/versionkeeping")
+        elif state["fault"] == "cache_mode":
+            (Path(others[0]["installPath"]) / "skills/fixture/check.sh").chmod(0o700)
+        elif state["fault"] == "membership":
+            cache = Path.home() / ".claude/plugins/cache/provingkit/mergecraft/1.0.0"
+            shutil.copytree(Path(args[3]) / "plugins/mergecraft", cache)
+            added = dict(state["rows"][0])
+            added.update(id="mergecraft@provingkit", installPath=str(cache),
+                         readFromFolder=str(Path(args[3]) / "plugins/mergecraft"))
+            state["rows"].append(added)
+        print("Constructed marketplace rebind")
+    elif args[:2] == ["plugin", "install"]:
+        row = next(row for row in state["rows"] if row["id"] == args[2])
+        member = args[2].split("@")[0]
+        shutil.copytree(Path(state["source"]) / "plugins" / member,
+                        row["installPath"], dirs_exist_ok=True)
+        print(json.dumps({"pluginId": args[2]}))
+    elif args[:2] == ["plugin", "uninstall"]:
+        print("{}")
+    else:
+        state_path.write_text(json.dumps(state))
+        raise SystemExit("Unexpected constructed command")
+    state_path.write_text(json.dumps(state))
+""")
+        binary.chmod(0o755)
+        self.environment = {
+            "HOME": str(self.home),
+            "PATH": str(binary_dir),
+            "CLAUDE_CONFIG_DIR": str(config),
+            "PROVINGKIT_TEST_LOCAL_ARTIFACTS": "1",
+        }
+        self.write_constructed_claude_baseline(rows[0])
+        return state
+
+    def write_constructed_claude_baseline(self, row: dict) -> None:
+        def inventory(path: str) -> dict:
+            root = Path(path)
+            return {
+                p.relative_to(root).as_posix(): [
+                    hashlib.sha256(p.read_bytes()).hexdigest(),
+                    p.stat().st_mode & 0o777,
+                ]
+                for p in root.rglob("*")
+                if p.is_file()
+            }
+
+        receipt = self.home / ".local/state/provingkit/installations.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(
+            json.dumps(
+                {
+                    "schema": "provingkit-installation-observation-v1",
+                    "directories": {},
+                    "native_additions": {},
+                    "native_files": {
+                        "claude": {"proseweaving": inventory(row["installPath"])}
+                    },
+                    "native_loaded_files": {
+                        "claude": {"proseweaving": inventory(row["readFromFolder"])}
+                    },
+                }
+            )
+        )
+
+    def test_constructed_claude_rebind_refuses_unselected_state_changes(self) -> None:
+        container = self.home
+        try:
+            for fault, unselected in (
+                ("registration", True),
+                ("load_folder", True),
+                ("cache_mode", True),
+                ("membership", True),
+                ("membership", False),
+            ):
+                with self.subTest(fault=fault, unselected=unselected):
+                    self.home = container / f"{fault}-{unselected}"
+                    self.home.mkdir()
+                    before = self.constructed_claude_rebind(fault, unselected)
+                    expected_capture = {}
+                    if unselected:
+                        row = before["rows"][1]
+                        expected_capture["registration"] = row
+                        for field, locator in (
+                            ("files", "readFromFolder"),
+                            ("cache_files", "installPath"),
+                        ):
+                            folder = Path(row[locator])
+                            expected_capture[field] = {
+                                p.relative_to(folder).as_posix(): [
+                                    hashlib.sha256(p.read_bytes()).hexdigest(),
+                                    p.stat().st_mode & 0o777,
+                                ]
+                                for p in folder.rglob("*")
+                                if p.is_file()
+                            }
+
+                    code, report = self.run_command("reconcile")
+
+                    self.assertEqual(code, 2, report)
+                    self.assertEqual(
+                        report["clients"]["claude"]["outcome"], "unavailable"
+                    )
+                    after = json.loads(
+                        (self.home / "constructed-claude.json").read_text()
+                    )
+                    self.assertEqual(
+                        after["actions"],
+                        [
+                            [
+                                "plugin",
+                                "marketplace",
+                                "add",
+                                str(
+                                    self.home
+                                    / ".local/share/provingkit/marketplaces/claude"
+                                ),
+                                "--scope",
+                                "user",
+                            ]
+                        ],
+                    )
+                    receipt = json.loads(
+                        (
+                            self.home / ".local/state/provingkit/installations.json"
+                        ).read_text()
+                    )
+                    captured = receipt["source_transitions"][0]["unselected"]
+                    self.assertEqual(
+                        set(captured), {"versionkeeping"} if unselected else set()
+                    )
+                    if unselected:
+                        self.assertEqual(captured["versionkeeping"], expected_capture)
+        finally:
+            self.home = container
+
+    def test_constructed_claude_invalid_load_folder_stops_before_projection(
+        self,
+    ) -> None:
+        container = self.home
+        try:
+            for index, locator in enumerate(
+                (None, "", "relative/plugins/proseweaving", "different", "missing")
+            ):
+                with self.subTest(locator=locator):
+                    self.home = container / f"locator-{index}"
+                    self.home.mkdir()
+                    state = self.constructed_claude_rebind("", False)
+                    if locator == "different":
+                        locator = str(self.home / "equivalent/plugins/versionkeeping")
+                    elif locator == "missing":
+                        shutil.rmtree(Path(state["rows"][0]["readFromFolder"]))
+                        locator = state["rows"][0]["readFromFolder"]
+                    state["rows"][0]["readFromFolder"] = locator
+                    state_path = self.home / "constructed-claude.json"
+                    state_path.write_text(json.dumps(state))
+
+                    code, report = self.run_command("reconcile")
+
+                    self.assertEqual(code, 2, report)
+                    self.assertEqual(
+                        report["clients"]["claude"]["outcome"], "unavailable"
+                    )
+                    self.assertEqual(json.loads(state_path.read_text())["actions"], [])
+                    self.assertFalse(
+                        (self.home / ".local/share/provingkit/marketplaces").exists()
+                    )
+        finally:
+            self.home = container
+
     def test_native_cache_loss_is_repaired_from_observed_absence(self) -> None:
         self.use_native_clients()
         self.selection.write_text(
@@ -985,7 +1410,7 @@ class InstallationCommandTests(unittest.TestCase):
         _, missing = self.run_command("status")
         self.assertTrue(
             all(
-                value["members"]["proseweaving"]["content"] == "absent"
+                value["members"]["proseweaving"]["cache_content"] == "absent"
                 for value in missing["clients"].values()
             )
         )
@@ -996,6 +1421,7 @@ class InstallationCommandTests(unittest.TestCase):
         self.assertTrue(
             all(
                 value["members"]["proseweaving"]["content"] == "match"
+                and value["members"]["proseweaving"]["cache_content"] == "match"
                 for value in repaired["clients"].values()
             )
         )
