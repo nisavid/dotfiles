@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Observe or reconcile a selected clean Provingkit installation."""
+"""Verify offline recovery artifacts or manage a selected Provingkit installation."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import platform
@@ -12,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tarfile
 import tempfile
 from contextlib import contextmanager
 from copy import deepcopy
@@ -62,11 +64,75 @@ def relative(value: object) -> bool:
     )
 
 
+def validate_recoveries(selection: dict) -> None:
+    recoveries = selection.get("recovery_packets", {})
+    require(isinstance(recoveries, dict), "recovery_packets must be an object")
+    for name, record in recoveries.items():
+        require(isinstance(name, str) and bool(name), "recovery name is missing")
+        require(
+            isinstance(record, dict)
+            and set(record)
+            == {
+                "schema",
+                "version",
+                "source",
+                "platform",
+                "packet",
+                "manifest_sha256",
+                "intended_remote_path",
+                "retention",
+            },
+            "recovery record field set differs",
+        )
+        require(
+            record["schema"] == "provingkit-recovery-selection-v1",
+            "unsupported recovery schema",
+        )
+        require(record["version"] == "0.1.0-alpha.4", "unsupported recovery version")
+        require(
+            isinstance(record["source"], dict)
+            and set(record["source"]) == {"repository", "commit"}
+            and record["source"]["repository"] == REPOSITORY
+            and is_digest(record["source"]["commit"], 40),
+            "invalid recovery source",
+        )
+        require(
+            isinstance(record["platform"], dict)
+            and set(record["platform"]) == {"os", "arch"}
+            and all(
+                isinstance(value, str) and value
+                for value in record["platform"].values()
+            ),
+            "invalid recovery platform",
+        )
+        require(
+            isinstance(record["packet"], dict)
+            and set(record["packet"]) == {"bytes", "sha256"}
+            and type(record["packet"]["bytes"]) is int
+            and record["packet"]["bytes"] > 0
+            and is_digest(record["packet"]["sha256"])
+            and is_digest(record["manifest_sha256"]),
+            "invalid recovery packet pins",
+        )
+        remote = record["intended_remote_path"]
+        require(
+            isinstance(remote, str)
+            and remote.startswith("/my-files/")
+            and relative(remote[1:]),
+            "invalid recovery intended remote path",
+        )
+        require(
+            record["retention"] == "keep-until-approved-retirement",
+            "unsupported recovery retention",
+        )
+
+
 def validate(selection: dict) -> dict | None:
     require(
         selection["schema"] == "provingkit-installations-v1",
         "unsupported projection schema",
     )
+    validate_recoveries(selection)
     profile = selection["profile"]
     if profile is None:
         require(selection["profile_name"] is None, "inactive profile must have no name")
@@ -313,6 +379,450 @@ def verify_artifact(home: Path, profile: dict, target: str) -> Path:
         "catalog differs from the artifact slate",
     )
     return root
+
+
+def recovery_tar(raw: bytes) -> dict[str, tuple[bytes | None, int]]:
+    """Read a tar's effective paths without granting it filesystem authority."""
+    entries = {}
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as archive:
+        require(set(archive.pax_headers) <= {"path"}, "unsupported archive PAX headers")
+        for item in archive:
+            require(
+                set(item.pax_headers) <= {"path"}, "unsupported archive PAX headers"
+            )
+            require(
+                not item.issparse() and (item.isdir() or item.isreg()),
+                "archive must contain only regular files and directories",
+            )
+            name = (
+                item.name[:-1]
+                if item.isdir() and item.name.endswith("/")
+                else item.name
+            )
+            require(relative(name) and "\\" not in name, "unsafe archive path")
+            require(name not in entries, "duplicate archive path")
+            require(0 <= item.mode <= 0o777, "unsupported archive mode")
+            if item.isdir():
+                data = None
+            else:
+                stream = archive.extractfile(item)
+                require(stream is not None, "archive file is unreadable")
+                data = stream.read()
+                require(len(data) == item.size, "archive file is truncated")
+            entries[name] = (data, item.mode)
+    for name in entries:
+        for parent in PurePosixPath(name).parents:
+            if parent.as_posix() in entries:
+                require(
+                    entries[parent.as_posix()][0] is None,
+                    "conflicting archive ancestry",
+                )
+    return entries
+
+
+def recovery_json_object(pairs: list) -> dict:
+    result = {}
+    for key, value in pairs:
+        require(key not in result, "duplicate recovery JSON field")
+        result[key] = value
+    return result
+
+
+def recovery_manifest(packet: Path, record: dict) -> tuple[dict, dict]:
+    require(
+        packet.stat().st_size == record["packet"]["bytes"],
+        "recovery packet size differs",
+    )
+    raw = packet.read_bytes()
+    require(digest(raw) == record["packet"]["sha256"], "recovery packet digest differs")
+    entries = recovery_tar(raw)
+    require("MANIFEST.json" in entries, "recovery manifest is missing")
+    manifest_raw = entries["MANIFEST.json"][0]
+    require(
+        isinstance(manifest_raw, bytes)
+        and digest(manifest_raw) == record["manifest_sha256"],
+        "recovery manifest digest differs",
+    )
+    manifest = json.loads(manifest_raw, object_pairs_hook=recovery_json_object)
+    require(
+        set(manifest)
+        == {"schema", "version", "source", "artifact_slate", "files", "targets"}
+        and manifest["schema"] == "provingkit-artifact-recovery-packet-v1",
+        "recovery manifest schema or fields differ",
+    )
+    require(
+        manifest["version"] == record["version"]
+        and manifest["source"] == record["source"],
+        "recovery manifest source or version differs",
+    )
+    require(
+        isinstance(manifest["artifact_slate"], list)
+        and len(manifest["artifact_slate"]) == len(MEMBERS)
+        and set(manifest["artifact_slate"]) == MEMBERS,
+        "recovery artifact slate differs",
+    )
+    require(
+        set(manifest["targets"]) == {"agent-plugins", "agent-plugins-local", "claude"},
+        "recovery targets differ",
+    )
+    inventory = {}
+    for item in manifest["files"]:
+        require(
+            set(item) == {"path", "bytes", "sha256"}
+            and relative(item["path"])
+            and item["path"] not in inventory
+            and type(item["bytes"]) is int
+            and item["bytes"] >= 0
+            and is_digest(item["sha256"]),
+            "invalid recovery file inventory",
+        )
+        inventory[item["path"]] = item
+    expected = {"RECOVER.md"}
+    for target, specification in manifest["targets"].items():
+        require(
+            set(specification)
+            == {
+                "kind",
+                "archive",
+                "artifact_sha256",
+                "catalog",
+                "directories",
+                "receipt",
+                "receipt_mode",
+                "modes",
+            },
+            "recovery target fields differ",
+        )
+        canonical_target = (
+            "agent-plugins" if target == "agent-plugins-local" else target
+        )
+        require(
+            specification["kind"]
+            == ("codex_local_alias" if target == "agent-plugins-local" else "ordinary")
+            and specification["catalog"] == CATALOGS[canonical_target]
+            and is_digest(specification["artifact_sha256"]),
+            "invalid recovery target identity",
+        )
+        for kind, path in (
+            ("archive", f"artifacts/{target}.tar.gz"),
+            ("receipt", f"receipts/{target}.json"),
+            ("modes", f"modes/{target}.tsv"),
+        ):
+            reference = specification[kind]
+            require(
+                set(reference)
+                == (
+                    {"path", "sha256", "root"}
+                    if kind == "archive"
+                    else {"path", "sha256"}
+                )
+                and reference["path"] == path
+                and is_digest(reference["sha256"]),
+                "invalid recovery constituent reference",
+            )
+            require(
+                path in inventory and inventory[path]["sha256"] == reference["sha256"],
+                "recovery constituent pin differs",
+            )
+            expected.add(path)
+        require(
+            relative(specification["archive"]["root"])
+            and "/" not in specification["archive"]["root"],
+            "invalid recovery archive root",
+        )
+        require(
+            isinstance(specification["directories"], dict)
+            and "." in specification["directories"],
+            "missing recovery directory inventory",
+        )
+        for name, mode in specification["directories"].items():
+            require(
+                (name == "." or relative(name))
+                and isinstance(mode, str)
+                and re.fullmatch(r"0[0-7]{3}", mode),
+                "invalid recovery directory mode",
+            )
+        require(
+            specification["receipt_mode"] == "0600", "invalid recovery receipt mode"
+        )
+    require(
+        set(inventory) == expected and set(entries) == expected | {"MANIFEST.json"},
+        "recovery packet inventory differs",
+    )
+    contents = {}
+    for name, item in inventory.items():
+        data, mode = entries[name]
+        require(
+            isinstance(data, bytes)
+            and len(data) == item["bytes"]
+            and digest(data) == item["sha256"],
+            "recovery constituent bytes differ",
+        )
+        require(mode == 0o600, "recovery constituent mode differs")
+        contents[name] = data
+    return manifest, contents
+
+
+def recovery_directory_modes(root: Path) -> dict[str, str]:
+    require(stat.S_ISDIR(root.lstat().st_mode), "recovery artifact is not a directory")
+    result = {".": format(stat.S_IMODE(root.lstat().st_mode), "04o")}
+    for path in root.rglob("*"):
+        mode = path.lstat().st_mode
+        require(
+            stat.S_ISDIR(mode) or stat.S_ISREG(mode),
+            "non-regular recovery artifact entry",
+        )
+        if stat.S_ISDIR(mode):
+            result[path.relative_to(root).as_posix()] = format(
+                stat.S_IMODE(mode), "04o"
+            )
+    return result
+
+
+def verify_recovery_target(home: Path, manifest: dict, target: str) -> None:
+    specification = manifest["targets"][target]
+    root = artifact_root(home, target, specification)
+    evidence = (
+        home
+        / ".local/share/provingkit/evidence"
+        / target
+        / specification["artifact_sha256"]
+    )
+    require(
+        recovery_directory_modes(root) == specification["directories"],
+        "recovery directory modes or inventory differ",
+    )
+    require(
+        recovery_directory_modes(evidence) == {".": "0700"}
+        and set(files(evidence)) == {"RECEIPT.json", "modes.tsv"},
+        "recovery evidence inventory or directory modes differ",
+    )
+    require(
+        all(mode == 0o600 for _sha, mode in files(evidence).values()),
+        "recovery evidence file modes differ",
+    )
+    receipt = (root / "RECEIPT.json").read_bytes()
+    require(
+        stat.S_IMODE((root / "RECEIPT.json").lstat().st_mode)
+        == int(specification["receipt_mode"], 8),
+        "recovery receipt mode differs",
+    )
+    require(
+        receipt == (evidence / "RECEIPT.json").read_bytes()
+        and digest(receipt) == specification["receipt"]["sha256"],
+        "recovery receipt bytes differ",
+    )
+    require(
+        digest((evidence / "modes.tsv").read_bytes())
+        == specification["modes"]["sha256"],
+        "recovery modes bytes differ",
+    )
+    if target != "agent-plugins-local":
+        verify_artifact(
+            home,
+            {
+                "source": manifest["source"],
+                "artifact_slate": manifest["artifact_slate"],
+                "artifacts": manifest["targets"],
+            },
+            target,
+        )
+        return
+    canonical = artifact_root(
+        home, "agent-plugins", manifest["targets"]["agent-plugins"]
+    )
+    require(
+        recovery_directory_modes(root) == recovery_directory_modes(canonical),
+        "recovery alias directory inventory or modes differ from parent",
+    )
+    actual, parent_files = files(root), files(canonical)
+    require(set(actual) == set(parent_files), "recovery alias file inventory differs")
+    catalog_path = CATALOGS["agent-plugins"]
+    catalog = (canonical / catalog_path).read_bytes()
+    needle = b'"name":"provingkit"'
+    require(catalog.count(needle) == 1, "unsupported canonical catalog encoding")
+    framed = hashlib.sha256(b"provingkit-tree-v1\0")
+    for name in sorted(set(actual) - {"RECEIPT.json"}):
+        data = (root / name).read_bytes()
+        expected = (
+            catalog.replace(needle, b'"name":"provingkit-local"', 1)
+            if name == catalog_path
+            else (canonical / name).read_bytes()
+        )
+        require(
+            data == expected and actual[name][1] == parent_files[name][1],
+            "recovery alias content or mode differs",
+        )
+        encoded = name.encode()
+        framed.update(
+            len(encoded).to_bytes(8, "big")
+            + encoded
+            + len(data).to_bytes(8, "big")
+            + data
+        )
+    require(
+        framed.hexdigest() == specification["artifact_sha256"],
+        "recovery alias tree digest differs",
+    )
+    parent_receipt = (canonical / "RECEIPT.json").read_bytes()
+    require(
+        json.loads(receipt, object_pairs_hook=recovery_json_object)
+        == {
+            "schema": "provingkit-local-marketplace-projection-v1",
+            "source_commit": manifest["source"]["commit"],
+            "parent_receipt_sha256": digest(parent_receipt),
+            "change": {
+                "path": catalog_path,
+                "field": "name",
+                "from": "provingkit",
+                "to": "provingkit-local",
+            },
+            "plugin_slate": manifest["artifact_slate"],
+        },
+        "recovery alias receipt is not parent-bound",
+    )
+    canonical_evidence = (
+        home
+        / ".local/share/provingkit/evidence/agent-plugins"
+        / manifest["targets"]["agent-plugins"]["artifact_sha256"]
+    )
+    require(
+        (evidence / "modes.tsv").read_bytes()
+        == (canonical_evidence / "modes.tsv").read_bytes(),
+        "recovery alias modes differ from parent",
+    )
+
+
+class RecoveryRefused(ValueError):
+    """Existing recovery destinations cannot be preserved by this import."""
+
+
+def recovery_destination(home: Path, destination: Path) -> None:
+    for path in (destination, *destination.parents):
+        if (path.exists() or path.is_symlink()) and not stat.S_ISDIR(
+            path.lstat().st_mode
+        ):
+            raise RecoveryRefused(
+                f"recovery destination or ancestor is not a real directory: {path}"
+            )
+        if path == home:
+            break
+
+
+def import_recovery(home: Path, record: dict, packet: Path) -> dict:
+    manifest, contents = recovery_manifest(packet, record)
+    with tempfile.TemporaryDirectory(prefix="provingkit-recovery-") as temporary:
+        staging = Path(temporary)
+        for target, specification in manifest["targets"].items():
+            entries = recovery_tar(contents[specification["archive"]["path"]])
+            archive_root = specification["archive"]["root"]
+            require(
+                archive_root in entries
+                and entries[archive_root][0] is None
+                and all(
+                    name == archive_root or name.startswith(archive_root + "/")
+                    for name in entries
+                ),
+                "recovery archive root differs",
+            )
+            root = artifact_root(staging, target, specification)
+            root.mkdir(parents=True, mode=entries[archive_root][1])
+            for name, (data, mode) in entries.items():
+                if name == archive_root:
+                    continue
+                path = root / name[len(archive_root) + 1 :]
+                if data is None:
+                    path.mkdir(parents=True, exist_ok=True)
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(data)
+                path.chmod(mode)
+            evidence = (
+                staging
+                / ".local/share/provingkit/evidence"
+                / target
+                / specification["artifact_sha256"]
+            )
+            evidence.mkdir(parents=True, mode=0o700)
+            for name, data in (
+                ("RECEIPT.json", contents[specification["receipt"]["path"]]),
+                ("modes.tsv", contents[specification["modes"]["path"]]),
+            ):
+                path = evidence / name
+                path.write_bytes(data)
+                path.chmod(0o600)
+        for target in ("agent-plugins", "claude", "agent-plugins-local"):
+            verify_recovery_target(staging, manifest, target)
+        destinations = []
+        for target, specification in manifest["targets"].items():
+            for kind in ("artifacts", "evidence"):
+                source = (
+                    staging
+                    / ".local/share/provingkit"
+                    / kind
+                    / target
+                    / specification["artifact_sha256"]
+                )
+                destination = (
+                    home
+                    / ".local/share/provingkit"
+                    / kind
+                    / target
+                    / specification["artifact_sha256"]
+                )
+                recovery_destination(home, destination)
+                if destination.exists():
+                    try:
+                        require(
+                            recovery_directory_modes(destination)
+                            == recovery_directory_modes(source)
+                            and files(destination) == files(source),
+                            "existing recovery destination differs",
+                        )
+                    except (OSError, ValueError) as error:
+                        raise RecoveryRefused(
+                            f"existing recovery destination differs: {destination}: {error}"
+                        ) from error
+                destinations.append((target, source, destination, destination.exists()))
+        reports = {}
+        imported = False
+        for target, source, destination, existing in destinations:
+            row = reports.setdefault(
+                target,
+                {
+                    "outcome": "verified",
+                    "artifact_sha256": manifest["targets"][target]["artifact_sha256"],
+                },
+            )
+            if existing:
+                recovery_destination(home, destination)
+                try:
+                    require(
+                        recovery_directory_modes(destination)
+                        == recovery_directory_modes(source)
+                        and files(destination) == files(source),
+                        "existing recovery destination changed",
+                    )
+                except (OSError, ValueError) as error:
+                    raise RecoveryRefused(
+                        f"existing recovery destination changed: {destination}: {error}"
+                    ) from error
+                continue
+            recovery_destination(home, destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copytree(source, destination)
+            except FileExistsError as error:
+                raise RecoveryRefused(
+                    f"recovery destination appeared during publication: {destination}"
+                ) from error
+            imported = True
+            row["outcome"] = "imported"
+        return {
+            "outcome": "artifacts_imported" if imported else "artifacts_verified",
+            "clients": {},
+            "targets": reports,
+        }
 
 
 class Unavailable(Exception):
@@ -1138,9 +1648,17 @@ def cursor_status(home: Path, choice: dict, root: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
-        epilog="Procedure: docs/agent-equipment/provingkit-installations.md in nisavid/dotfiles.",
+        epilog="Procedures in nisavid/dotfiles: docs/agent-equipment/provingkit-installations.md; import-artifacts: docs/agent-equipment/provingkit-recovery.md.",
     )
-    parser.add_argument("command", choices=("validate", "status", "reconcile"))
+    parser.add_argument(
+        "command", choices=("validate", "status", "reconcile", "import-artifacts")
+    )
+    parser.add_argument(
+        "--recovery", help="Name of an independently pinned recovery packet."
+    )
+    parser.add_argument(
+        "--packet", type=Path, help="Explicit local recovery packet path."
+    )
     parser.add_argument(
         "--selection",
         type=Path,
@@ -1152,7 +1670,32 @@ def main() -> int:
     args = parser.parse_args()
     try:
         selection = json.loads(args.selection.read_text())
-        profile = validate(selection)
+        if args.command == "import-artifacts":
+            require(
+                selection["schema"] == "provingkit-installations-v1",
+                "unsupported projection schema",
+            )
+            validate_recoveries(selection)
+            require(
+                isinstance(selection["host_platform"], dict)
+                and set(selection["host_platform"]) == {"os", "arch"}
+                and all(
+                    isinstance(value, str) and value
+                    for value in selection["host_platform"].values()
+                ),
+                "invalid recovery host platform",
+            )
+            require(
+                args.recovery and args.packet,
+                "import-artifacts requires --recovery and --packet",
+            )
+            require(
+                args.recovery in selection.get("recovery_packets", {}),
+                "unknown recovery: " + args.recovery,
+            )
+            profile = None
+        else:
+            profile = validate(selection)
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         print(
             json.dumps(
@@ -1160,6 +1703,60 @@ def main() -> int:
             )
         )
         return 64
+    if args.command == "import-artifacts":
+        record = selection["recovery_packets"][args.recovery]
+        if (
+            record["platform"] != {"os": "linux", "arch": "amd64"}
+            or selection["host_platform"] != record["platform"]
+            or platform.system() != "Linux"
+            or platform.machine() != "x86_64"
+        ):
+            print(
+                json.dumps(
+                    {
+                        "outcome": "unsupported_platform",
+                        "clients": {},
+                        "recovery": args.recovery,
+                    }
+                )
+            )
+            return 2
+        try:
+            report = import_recovery(Path.home(), record, args.packet)
+        except RecoveryRefused as error:
+            print(
+                json.dumps(
+                    {
+                        "outcome": "recovery_refused",
+                        "message": str(error),
+                        "clients": {},
+                        "recovery": args.recovery,
+                    }
+                )
+            )
+            return 1
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            AttributeError,
+            tarfile.TarError,
+        ) as error:
+            print(
+                json.dumps(
+                    {
+                        "outcome": "recovery_invalid",
+                        "message": str(error),
+                        "clients": {},
+                        "recovery": args.recovery,
+                    }
+                )
+            )
+            return 1
+        report["recovery"] = args.recovery
+        print(json.dumps(report, sort_keys=True))
+        return 0
     report = {"outcome": "inactive", "clients": {}}
     code = 0
     if profile is not None:

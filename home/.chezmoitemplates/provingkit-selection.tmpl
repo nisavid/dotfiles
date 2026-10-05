@@ -9,5 +9,6 @@
   "schema": "provingkit-installations-v1",
   "profile_name": {{ if $name }}{{ $name | toJson }}{{ else }}null{{ end }},
   "host_platform": {"os": {{ .chezmoi.os | toJson }}, "arch": {{ .chezmoi.arch | toJson }}},
-  "profile": {{ if $name }}{{ index .provingkit.profiles $name | toPrettyJson }}{{ else }}null{{ end }}
+  "profile": {{ if $name }}{{ index .provingkit.profiles $name | toPrettyJson }}{{ else }}null{{ end }},
+  "recovery_packets": {{ if hasKey .provingkit "recovery_packets" }}{{ .provingkit.recovery_packets | toPrettyJson }}{{ else }}{}{{ end }}
 }
