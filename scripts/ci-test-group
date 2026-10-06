@@ -102,6 +102,7 @@ group_python_checks() {
   python3 -m unittest tests/test_chezmoi_source_ownership.py
   python3 -m unittest tests.test_provingkit_installations tests.test_provingkit_deployment
   python3 -m unittest tests.test_codex_quota_safeguard_deployment
+  python3 -m unittest tests.test_proton_drive_desktop tests.test_proton_drive_desktop_deployment
   python3 -m unittest tests/test_agent_equipment_acceptance.py
   python3 -m unittest tests/test_agent_equipment_acceptance_evidence.py
   python3 -m unittest tests/test_agent_equipment_adapter_contract.py

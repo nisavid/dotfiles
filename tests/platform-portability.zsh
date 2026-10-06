@@ -504,6 +504,7 @@ typeset -a darwin_only_patterns=(
   '.local/bin/cmake'
   '.local/bin/makepkg'
   '.local/bin/ninja'
+  '.local/bin/proton-drive-desktop'
   '.local/lib/builds-slice'
 )
 
@@ -557,8 +558,10 @@ expected_linux_source_inventory=$(
     'dot_config/systemd/user/builds.slice' \
     'dot_config/systemd/user/codex-usage-safeguard.service.tmpl' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
+    'dot_config/systemd/user/proton-drive-desktop.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
     'private_dot_local/private_share/applications/claude-code-url-handler.desktop' \
+    'private_dot_local/private_share/applications/proton-drive.desktop' \
     'private_dot_local/private_share/applications/proton-pass-url-handler.desktop'
 )
 [[ $linux_source_inventory == $expected_linux_source_inventory ]] ||

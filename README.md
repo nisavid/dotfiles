@@ -32,6 +32,8 @@ chezmoi apply
 
 ## Services
 
+- [Proton Drive](docs/PROTON_DRIVE.md): read-only Dolphin access during a
+  Plasma session, with explicit activation and start, status, and stop controls.
 - [Hindsight](docs/HINDSIGHT.md): retain reusable templates and a reviewed
   release pin, with no active consumer binding.
 

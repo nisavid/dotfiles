@@ -1,0 +1,24 @@
+[Unit]
+Description=Read-only Proton Drive mount for Plasma
+Requisite=plasma-workspace.target graphical-session.target
+After=plasma-workspace.target graphical-session.target
+After=plasma-kwallet-pam.service
+PartOf=plasma-workspace.target graphical-session.target
+
+[Service]
+Type=notify
+ExecStartPre=%h/.local/bin/proton-drive-desktop _prepare
+ExecStart=%h/.local/bin/proton-drive-desktop _mount
+ExecStartPost=%h/.local/bin/proton-drive-desktop _verify-mount
+ExecStopPost=%h/.local/bin/proton-drive-desktop _post-stop
+StandardOutput=null
+StandardError=null
+UMask=0077
+LimitCORE=0
+Restart=no
+SuccessExitStatus=143
+TimeoutStartSec=45s
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=plasma-workspace.target

@@ -42,6 +42,7 @@ Library
 .local/bin/cmake
 .local/bin/makepkg
 .local/bin/ninja
+.local/bin/proton-drive-desktop
 .local/lib/builds-slice
 
 # Only Linux desktops read freedesktop desktop entries. These trees hold the
