@@ -3,6 +3,7 @@
 
 import contextlib
 import csv
+import errno
 import fcntl
 import hashlib
 import io
@@ -10,6 +11,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import stat
 import subprocess
 import sys
@@ -24,6 +26,15 @@ class OperationError(Exception):
 
 
 STATUS_OBSERVATION_LIMIT = 2
+DIRECTORY_IDENTITY_XATTR = "user.proton-drive-desktop.identity"
+NONCE_PATTERN = re.compile(r"[0-9a-f]{64}")
+INTERRUPTED_CREATION = "interrupted mountpoint creation requires stopped recovery"
+INTERRUPTED_PUBLICATION = (
+    "interrupted mountpoint identity publication requires stopped recovery"
+)
+INTERRUPTED_CLEANUP = (
+    "interrupted preexisting mountpoint cleanup requires stopped recovery"
+)
 
 
 def xdg_path(name, default):
@@ -267,6 +278,76 @@ def marker_path(resolved):
     return resolved["runtime"] / "mountpoint.json"
 
 
+def phase_path(resolved):
+    return resolved["runtime"] / "mountpoint-phase.json"
+
+
+def read_phase(resolved):
+    try:
+        with open(phase_path(resolved), encoding="utf-8") as phase_file:
+            phase = json.load(phase_file)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, TypeError):
+        raise OperationError("mountpoint identity operation is invalid") from None
+    if not isinstance(phase, dict):
+        raise OperationError("mountpoint identity operation is invalid")
+    name = phase.get("phase")
+    common_valid = (
+        isinstance(phase.get("mount"), str)
+        and isinstance(phase.get("created"), bool)
+        and isinstance(phase.get("nonce"), str)
+        and NONCE_PATTERN.fullmatch(phase["nonce"]) is not None
+    )
+    if name == "prepare-create":
+        valid = common_valid and phase["created"] is True and set(phase) == {
+            "phase", "mount", "created", "nonce",
+        }
+    elif name in {"prepare-publish", "cleanup-preexisting"}:
+        valid = (
+            common_valid
+            and type(phase.get("device")) is int
+            and type(phase.get("inode")) is int
+            and set(phase) == {
+                "phase", "mount", "device", "inode", "created", "nonce",
+            }
+            and (name != "cleanup-preexisting" or phase["created"] is False)
+        )
+    else:
+        valid = False
+    if not valid:
+        raise OperationError("mountpoint identity operation is invalid")
+    return phase
+
+
+def write_phase(resolved, phase):
+    temporary = phase_path(resolved).with_suffix(".tmp")
+    try:
+        with open(temporary, "w", encoding="utf-8") as phase_file:
+            json.dump(phase, phase_file, separators=(",", ":"))
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, phase_path(resolved))
+    except OSError:
+        raise OperationError("mountpoint identity operation is unavailable") from None
+
+
+def remove_phase(resolved):
+    try:
+        phase_path(resolved).unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise OperationError("mountpoint identity operation is unavailable") from None
+
+
+def phase_error(phase):
+    if phase["phase"] == "prepare-create":
+        return INTERRUPTED_CREATION
+    if phase["phase"] == "prepare-publish":
+        return INTERRUPTED_PUBLICATION
+    return INTERRUPTED_CLEANUP
+
+
 def read_marker(resolved, missing_ok=False, error_message="mountpoint ownership record is invalid"):
     try:
         with open(marker_path(resolved), encoding="utf-8") as marker_file:
@@ -283,6 +364,13 @@ def read_marker(resolved, missing_ok=False, error_message="mountpoint ownership 
         or type(ownership.get("device")) is not int
         or type(ownership.get("inode")) is not int
         or not isinstance(ownership.get("created"), bool)
+        or (
+            "nonce" in ownership
+            and (
+                not isinstance(ownership["nonce"], str)
+                or NONCE_PATTERN.fullmatch(ownership["nonce"]) is None
+            )
+        )
         or (
             "mount_id" in ownership
             and (
@@ -308,19 +396,78 @@ def require_unmounted_target(resolved):
         raise OperationError("mountpoint is already mounted; preserving it")
 
 
+def read_directory_nonce(mountpoint):
+    try:
+        value = os.getxattr(
+            mountpoint, DIRECTORY_IDENTITY_XATTR, follow_symlinks=False
+        )
+    except OSError as error:
+        missing_errors = {
+            value for value in (
+                getattr(errno, "ENODATA", None),
+                getattr(errno, "ENOATTR", None),
+            )
+            if value is not None
+        }
+        if error.errno in missing_errors:
+            return None
+        raise OperationError("mountpoint identity is unavailable") from None
+    try:
+        nonce = value.decode("ascii")
+    except UnicodeDecodeError:
+        return ""
+    if NONCE_PATTERN.fullmatch(nonce) is None:
+        return ""
+    return nonce
+
+
+def set_directory_nonce(mountpoint, nonce):
+    if read_directory_nonce(mountpoint) is not None:
+        raise OperationError("mountpoint identity already exists; preserving it")
+    try:
+        os.setxattr(
+            mountpoint,
+            DIRECTORY_IDENTITY_XATTR,
+            nonce.encode("ascii"),
+            follow_symlinks=False,
+        )
+    except OSError:
+        raise OperationError("mountpoint identity is unavailable") from None
+
+
+def remove_directory_nonce(mountpoint):
+    try:
+        os.removexattr(
+            mountpoint, DIRECTORY_IDENTITY_XATTR, follow_symlinks=False
+        )
+    except OSError:
+        raise OperationError("mountpoint identity is unavailable") from None
+
+
+def require_recorded_directory(mountpoint, ownership, information):
+    nonce = ownership.get("nonce")
+    if nonce is None:
+        raise OperationError("mountpoint ownership record is invalid")
+    if (
+        information.st_dev != ownership["device"]
+        or information.st_ino != ownership["inode"]
+        or read_directory_nonce(mountpoint) != nonce
+    ):
+        raise OperationError("mountpoint was replaced; preserving it")
+
+
 def require_prepared_mountpoint(resolved):
     require_unmounted_target(resolved)
+    phase = read_phase(resolved)
+    if phase is not None:
+        raise OperationError(phase_error(phase))
     mountpoint = resolved["mount"]
     ownership = read_marker(resolved)
     if ownership["mount"] != str(mountpoint):
         raise OperationError("mountpoint ownership record is invalid")
     require_directory(mountpoint, "mountpoint", owner=True)
     information = mountpoint.lstat()
-    if (
-        information.st_dev != ownership["device"]
-        or information.st_ino != ownership["inode"]
-    ):
-        raise OperationError("mountpoint was replaced; preserving it")
+    require_recorded_directory(mountpoint, ownership, information)
     with os.scandir(mountpoint) as entries:
         if next(entries, None) is not None:
             raise OperationError("mountpoint contains unexpected local contents")
@@ -330,7 +477,44 @@ def prepare_mountpoint(resolved):
     require_unmounted_target(resolved)
     validate_config(resolved)
     mountpoint = resolved["mount"]
+    phase = read_phase(resolved)
+    if phase is not None:
+        if phase["mount"] != str(mountpoint):
+            raise OperationError("mountpoint identity operation is invalid")
+        if phase["phase"] == "prepare-create":
+            try:
+                mountpoint.lstat()
+            except FileNotFoundError:
+                remove_phase(resolved)
+            else:
+                raise OperationError(INTERRUPTED_CREATION)
+        elif phase["phase"] == "prepare-publish":
+            require_directory(mountpoint, "mountpoint", owner=True)
+            information = mountpoint.lstat()
+            with os.scandir(mountpoint) as entries:
+                if next(entries, None) is not None:
+                    raise OperationError(
+                        "mountpoint contains unexpected local contents"
+                    )
+            if (
+                information.st_dev != phase["device"]
+                or information.st_ino != phase["inode"]
+                or read_directory_nonce(mountpoint) != phase["nonce"]
+            ):
+                raise OperationError(INTERRUPTED_PUBLICATION)
+            write_marker(resolved, {
+                "mount": phase["mount"],
+                "device": phase["device"],
+                "inode": phase["inode"],
+                "created": phase["created"],
+                "nonce": phase["nonce"],
+            })
+            remove_phase(resolved)
+        else:
+            raise OperationError(INTERRUPTED_CLEANUP)
     prior = read_marker(resolved, missing_ok=True)
+    if prior is not None and prior["mount"] != str(mountpoint):
+        raise OperationError("mountpoint ownership record is invalid")
     data_home = mountpoint.parent.parent
     require_directory(data_home, "XDG data directory", owner=True)
     managed_parent = mountpoint.parent
@@ -341,34 +525,73 @@ def prepare_mountpoint(resolved):
     require_directory(managed_parent, "managed mountpoint directory", owner=True)
 
     created = False
+    planned_nonce = None
     try:
-        os.mkdir(mountpoint, 0o700)
-        created = True
-    except FileExistsError:
-        pass
+        mountpoint.lstat()
+    except FileNotFoundError:
+        planned_nonce = secrets.token_hex(32)
+        write_phase(resolved, {
+            "phase": "prepare-create",
+            "mount": str(mountpoint),
+            "created": True,
+            "nonce": planned_nonce,
+        })
+        try:
+            os.mkdir(mountpoint, 0o700)
+            created = True
+        except FileExistsError:
+            remove_phase(resolved)
     require_directory(mountpoint, "mountpoint", owner=True)
     with os.scandir(mountpoint) as entries:
         if next(entries, None) is not None:
             raise OperationError("mountpoint contains unexpected local contents")
     information = mountpoint.lstat()
     prior_created = False
+    nonce = None
+    nonce_assigned = False
     if prior is not None:
-        if prior["mount"] != str(mountpoint):
-            raise OperationError("mountpoint ownership record is invalid")
-        same_directory = (
-            information.st_dev == prior["device"]
-            and information.st_ino == prior["inode"]
-        )
-        if not created and not same_directory:
-            raise OperationError("mountpoint was replaced; preserving it")
-        prior_created = prior["created"] and same_directory
+        if not created:
+            require_recorded_directory(mountpoint, prior, information)
+            nonce = prior["nonce"]
+            prior_created = prior["created"]
+    if nonce is None:
+        nonce = planned_nonce or secrets.token_hex(32)
+        publication = {
+            "phase": "prepare-publish",
+            "mount": str(mountpoint),
+            "device": information.st_dev,
+            "inode": information.st_ino,
+            "created": created or prior_created,
+            "nonce": nonce,
+        }
+        write_phase(resolved, publication)
+        try:
+            set_directory_nonce(mountpoint, nonce)
+            nonce_assigned = True
+        except OperationError:
+            if created:
+                os.rmdir(mountpoint)
+            remove_phase(resolved)
+            raise
     marker = {
         "mount": str(mountpoint),
         "device": information.st_dev,
         "inode": information.st_ino,
         "created": created or prior_created,
+        "nonce": nonce,
     }
-    write_marker(resolved, marker)
+    try:
+        write_marker(resolved, marker)
+    except OSError:
+        if nonce_assigned:
+            remove_directory_nonce(mountpoint)
+        if created:
+            os.rmdir(mountpoint)
+        if nonce_assigned:
+            remove_phase(resolved)
+        raise OperationError("mountpoint ownership record is unavailable") from None
+    if nonce_assigned:
+        remove_phase(resolved)
 
 
 def record_mount_instance(resolved):
@@ -376,7 +599,10 @@ def record_mount_instance(resolved):
     if state != "ready":
         raise OperationError("expected read-only Proton Drive mount not found")
     ownership = read_marker(resolved)
-    if ownership["mount"] != str(resolved["mount"]):
+    if (
+        ownership["mount"] != str(resolved["mount"])
+        or ownership.get("nonce") is None
+    ):
         raise OperationError("mountpoint ownership record is invalid")
     previous = ownership.get("mount_id")
     if previous is not None and previous != mount_id:
@@ -389,6 +615,9 @@ def diagnose_start_failure(resolved):
     mountpoint = resolved["mount"]
     if mount_state(mountpoint) != "absent":
         return
+    phase = read_phase(resolved)
+    if phase is not None:
+        raise OperationError(phase_error(phase))
     try:
         information = mountpoint.lstat()
     except FileNotFoundError:
@@ -553,6 +782,47 @@ def credential(resolved):
 
 
 def cleanup_mountpoint(resolved):
+    phase = read_phase(resolved)
+    if phase is not None:
+        if phase["phase"] != "cleanup-preexisting":
+            raise OperationError(phase_error(phase))
+        ownership = read_marker(resolved, missing_ok=True)
+        if ownership is None:
+            remove_phase(resolved)
+            return
+        mountpoint = resolved["mount"]
+        if (
+            phase["mount"] != str(mountpoint)
+            or ownership.get("mount") != phase["mount"]
+            or ownership.get("device") != phase["device"]
+            or ownership.get("inode") != phase["inode"]
+            or ownership.get("created") is not False
+            or ownership.get("nonce") != phase["nonce"]
+        ):
+            raise OperationError("mountpoint identity operation is invalid")
+        try:
+            information = mountpoint.lstat()
+        except FileNotFoundError:
+            raise OperationError(INTERRUPTED_CLEANUP) from None
+        if (
+            not stat.S_ISDIR(information.st_mode)
+            or stat.S_ISLNK(information.st_mode)
+            or information.st_uid != os.getuid()
+            or information.st_mode & 0o022
+            or information.st_dev != phase["device"]
+            or information.st_ino != phase["inode"]
+            or read_directory_nonce(mountpoint) != phase["nonce"]
+        ):
+            raise OperationError(INTERRUPTED_CLEANUP)
+        with os.scandir(mountpoint) as entries:
+            if next(entries, None) is not None:
+                raise OperationError("mountpoint is not empty; preserving it")
+        if mount_state(mountpoint) != "absent":
+            raise OperationError("residual mount remains")
+        remove_directory_nonce(mountpoint)
+        marker_path(resolved).unlink()
+        remove_phase(resolved)
+        return
     ownership = read_marker(resolved, missing_ok=True)
     if mount_state(resolved["mount"]) != "absent":
         raise OperationError("residual mount remains")
@@ -569,23 +839,40 @@ def cleanup_mountpoint(resolved):
         return
     if (
         not stat.S_ISDIR(information.st_mode)
-        or information.st_dev != ownership.get("device")
-        or information.st_ino != ownership.get("inode")
+        or stat.S_ISLNK(information.st_mode)
+        or information.st_uid != os.getuid()
+        or information.st_mode & 0o022
     ):
         raise OperationError("mountpoint was replaced; preserving it")
+    require_recorded_directory(mountpoint, ownership, information)
     with os.scandir(mountpoint) as entries:
         if next(entries, None) is not None:
             raise OperationError("mountpoint is not empty; preserving it")
     if ownership.get("created") is True:
         os.rmdir(mountpoint)
+    else:
+        write_phase(resolved, {
+            "phase": "cleanup-preexisting",
+            "mount": ownership["mount"],
+            "device": ownership["device"],
+            "inode": ownership["inode"],
+            "created": False,
+            "nonce": ownership["nonce"],
+        })
+        remove_directory_nonce(mountpoint)
     marker.unlink()
+    if ownership.get("created") is False:
+        remove_phase(resolved)
 
 
 def require_owned_mount(resolved, mount_id):
     ownership = read_marker(
         resolved, error_message="mount is not owned by this session"
     )
-    if ownership["mount"] != str(resolved["mount"]):
+    if (
+        ownership["mount"] != str(resolved["mount"])
+        or ownership.get("nonce") is None
+    ):
         raise OperationError("mount is not owned by this session")
     if ownership.get("mount_id") != mount_id:
         raise OperationError("mounted instance changed; preserving it")

@@ -1,4 +1,5 @@
 import contextlib
+import errno
 import hashlib
 import io
 import json
@@ -17,6 +18,7 @@ from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROGRAM = ROOT / "home/private_dot_local/bin/executable_proton-drive-desktop"
+XATTR_MISSING_ERRNO = getattr(errno, "ENODATA", getattr(errno, "ENOATTR", 93))
 
 
 def invoke(arguments, environment, run=None, popen=None, execve=None, opened=None, program=PROGRAM):
@@ -48,15 +50,52 @@ def publish_mount_record(mount, runtime, mount_id, created):
     mount.mkdir(parents=True, mode=0o700, exist_ok=True)
     runtime.mkdir(parents=True, mode=0o700, exist_ok=True)
     information = mount.stat()
+    nonce = hashlib.sha256(f"{mount}:{mount_id}".encode()).hexdigest()
+    os.setxattr(
+        mount, "user.proton-drive-desktop.identity", nonce.encode("ascii")
+    )
     marker = runtime / "mountpoint.json"
     marker.write_text(json.dumps({
         "mount": str(mount),
         "device": information.st_dev,
         "inode": information.st_ino,
         "created": created,
+        "nonce": nonce,
         "mount_id": mount_id,
     }, separators=(",", ":")))
     marker.chmod(0o600)
+
+
+class SyntheticDirectoryXattrs:
+    """Model the Linux-only product's external xattr boundary on macOS."""
+
+    def __init__(self):
+        self.values = {}
+
+    @staticmethod
+    def key(path, name):
+        information = os.lstat(path)
+        return (
+            information.st_dev,
+            information.st_ino,
+            information.st_ctime_ns,
+            name,
+        )
+
+    def get(self, path, name, *args, **kwargs):
+        try:
+            return self.values[self.key(path, name)]
+        except KeyError:
+            raise OSError(XATTR_MISSING_ERRNO, "synthetic xattr is absent") from None
+
+    def set(self, path, name, value, *args, **kwargs):
+        self.values[self.key(path, name)] = value
+
+    def remove(self, path, name, *args, **kwargs):
+        try:
+            del self.values[self.key(path, name)]
+        except KeyError:
+            raise OSError(XATTR_MISSING_ERRNO, "synthetic xattr is absent") from None
 
 
 class ServiceContractTests(unittest.TestCase):
@@ -151,11 +190,54 @@ class ServiceContractTests(unittest.TestCase):
         self.assertIn("removes only the two exact links", normalized_guide)
         self.assertIn("explicit `start` retries", normalized_guide)
         self.assertIn("explicit `stop` clears", normalized_guide)
+        self.assertIn(
+            "persistent, reliable `user.*` extended attributes for directories",
+            normalized_guide,
+        )
+        self.assertIn(
+            "device and inode numbers alone are never accepted",
+            normalized_guide,
+        )
+        self.assertIn(
+            "runtime marker from an older release has no nonce",
+            normalized_guide,
+        )
+        self.assertIn(
+            "Only in that stopped-session state, remove the legacy private runtime marker",
+            normalized_guide,
+        )
+        self.assertIn(
+            "interrupted mountpoint creation requires stopped recovery",
+            normalized_guide,
+        )
+        self.assertIn(
+            "interrupted mountpoint identity publication requires stopped recovery",
+            normalized_guide,
+        )
+        self.assertIn(
+            "interrupted preexisting mountpoint cleanup requires stopped recovery",
+            normalized_guide,
+        )
+        self.assertIn("mountpoint-phase.json", normalized_guide)
+        self.assertIn("Do not copy or guess the recorded nonce", normalized_guide)
+        self.assertIn('rmdir -- "$mountpoint"', normalized_guide)
+        self.assertIn('rm -- "$marker" "$phase"', normalized_guide)
+        self.assertIn(
+            "source cannot infer that the unmarked directory was helper-created",
+            normalized_guide,
+        )
         self.assertIn("`/usr/bin/secret-tool`", normalized_guide)
         self.assertIn("test -x /usr/bin/secret-tool", normalized_guide)
 
 
 class PublicCommandTests(unittest.TestCase):
+    def setUp(self):
+        if sys.platform == "darwin":
+            xattrs = SyntheticDirectoryXattrs()
+            self.enterContext(mock.patch("os.getxattr", side_effect=xattrs.get))
+            self.enterContext(mock.patch("os.setxattr", side_effect=xattrs.set))
+            self.enterContext(mock.patch("os.removexattr", side_effect=xattrs.remove))
+
     def test_status_rejects_relative_xdg_paths_without_external_calls(self):
         with tempfile.TemporaryDirectory() as temporary:
             external = mock.Mock(side_effect=AssertionError("external command called"))
@@ -233,6 +315,7 @@ class PublicCommandTests(unittest.TestCase):
             (runtime / "mountpoint.json").write_text(json.dumps({
                 "mount": str(mount), "device": information.st_dev,
                 "inode": information.st_ino, "created": False,
+                "nonce": "41" * 32,
                 "mount_id": "41",
             }))
             encoded_mount = str(mount).replace(" ", "\\040")
@@ -310,6 +393,7 @@ class PublicCommandTests(unittest.TestCase):
             (runtime / "mountpoint.json").write_text(json.dumps({
                 "mount": str(mount), "device": information.st_dev,
                 "inode": information.st_ino, "created": False,
+                "nonce": "45" * 32,
                 "mount_id": "45",
             }))
             encoded_mount = str(mount).replace(" ", "\\040")
@@ -356,6 +440,96 @@ class PublicCommandTests(unittest.TestCase):
                 invoke(["start"], environment, run=external, opened=opened),
             )
             self.assertFalse(any(command[2] == "start" for command in calls))
+
+    def test_nonce_less_record_cannot_authorize_an_active_mount(self):
+        cases = (
+            ("status", (1, "inconsistent/foreign state\n", "")),
+            ("start", (1, "", "inconsistent/foreign state\n")),
+            ("open", (1, "", "inconsistent/foreign state\n")),
+            ("stop", (1, "", "mount is not owned by this session\n")),
+            ("_verify-mount", (1, "", "mountpoint ownership record is invalid\n")),
+        )
+        for command, expected in cases:
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                mount = root / "data/proton-drive-desktop/files"
+                runtime = root / "run/proton-drive-desktop"
+                mount.mkdir(parents=True, mode=0o700)
+                runtime.mkdir(parents=True, mode=0o700)
+                information = mount.stat()
+                ownership = {
+                    "mount": str(mount),
+                    "device": information.st_dev,
+                    "inode": information.st_ino,
+                    "created": False,
+                }
+                if command != "_verify-mount":
+                    ownership["mount_id"] = "44"
+                marker = runtime / "mountpoint.json"
+                marker.write_text(json.dumps(ownership, separators=(",", ":")))
+                marker_before = marker.read_bytes()
+                encoded_mount = str(mount).replace(" ", "\\040")
+                mountinfo = (
+                    f"44 30 0:44 / {encoded_mount} ro,nosuid,nodev - "
+                    "fuse.rclone proton-dolphin: ro\n"
+                )
+                actions = []
+
+                def external(arguments, **kwargs):
+                    actions.append(arguments)
+                    if arguments[0] == "/usr/bin/systemctl" and arguments[2] == "show":
+                        return subprocess.CompletedProcess(
+                            arguments,
+                            0,
+                            stdout=(
+                                "ActiveState=active\nSubState=running\n"
+                                "Result=success\n"
+                            ),
+                        )
+                    return subprocess.CompletedProcess(arguments, 0)
+
+                def opened(name, *args, **kwargs):
+                    if name == "/proc/self/mountinfo":
+                        return io.StringIO(mountinfo)
+                    return io.open(name, *args, **kwargs)
+
+                def launch(arguments, **kwargs):
+                    actions.append(arguments)
+                    return mock.Mock()
+
+                environment = {
+                    "HOME": temporary,
+                    "XDG_CONFIG_HOME": str(root / "config"),
+                    "XDG_DATA_HOME": str(root / "data"),
+                    "XDG_RUNTIME_DIR": str(root / "run"),
+                }
+                with mock.patch(
+                    "os.getxattr",
+                    side_effect=AssertionError("read xattr through active mount"),
+                ):
+                    result = invoke(
+                        [command],
+                        environment,
+                        run=external,
+                        popen=launch,
+                        opened=opened,
+                    )
+
+                self.assertEqual(expected, result)
+                self.assertTrue(mount.is_dir())
+                self.assertEqual(marker_before, marker.read_bytes())
+                self.assertFalse(
+                    any(action[0] == "/usr/bin/fusermount3" for action in actions)
+                )
+                self.assertFalse(
+                    any(
+                        action[0] == "/usr/bin/systemctl" and action[2] == "stop"
+                        for action in actions
+                    )
+                )
+                self.assertFalse(
+                    any(action[0] == "/usr/bin/dolphin" for action in actions)
+                )
 
     def test_status_rechecks_active_absent_before_reporting_stopped(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -607,6 +781,7 @@ class PublicCommandTests(unittest.TestCase):
             marker.write_text(json.dumps({
                 "mount": str(mount), "device": information.st_dev,
                 "inode": information.st_ino, "created": False,
+                "nonce": "47" * 32,
                 "mount_id": "47",
             }))
             encoded_mount = str(mount).replace(" ", "\\040")
@@ -884,6 +1059,7 @@ class PublicCommandTests(unittest.TestCase):
             (runtime / "mountpoint.json").write_text(json.dumps({
                 "mount": str(mount), "device": information.st_dev,
                 "inode": information.st_ino, "created": False,
+                "nonce": "51" * 32,
                 "mount_id": "51",
             }))
             encoded_mount = str(mount).replace(" ", "\\040")
@@ -937,6 +1113,7 @@ class PublicCommandTests(unittest.TestCase):
             (runtime / "mountpoint.json").write_text(json.dumps({
                 "mount": str(mount), "device": information.st_dev,
                 "inode": information.st_ino, "created": False,
+                "nonce": "53" * 32,
                 "mount_id": "53",
             }))
             encoded_mount = str(mount).replace(" ", "\\040")
@@ -1751,7 +1928,8 @@ class PublicCommandTests(unittest.TestCase):
             (runtime / "mountpoint.json").write_text(
                 '{"mount":' + repr(str(mount)).replace("'", '"')
                 + f',"device":{information.st_dev},"inode":{information.st_ino},'
-                '"created":true,"mount_id":"71"}'
+                '"created":true,"nonce":"' + "71" * 32
+                + '","mount_id":"71"}'
             )
             encoded_mount = str(mount).replace(" ", "\\040")
             mountinfo = (
@@ -3088,7 +3266,6 @@ class PublicCommandTests(unittest.TestCase):
             bound = resolved_for(root / "bound config", root / "bound data")
             mount = bound["mount"]
             mount.mkdir(parents=True, mode=0o700)
-            information = mount.stat()
             initial_read = threading.Event()
             outcome = []
             original_authoritative = module["authoritative_paths"]
@@ -3123,11 +3300,8 @@ class PublicCommandTests(unittest.TestCase):
                 "builtins.open", side_effect=opened
             ), contextlib.redirect_stdout(io.StringIO()):
                 with module["control_lock"](bound):
+                    publish_mount_record(mount, bound["runtime"], "1", True)
                     marker = module["marker_path"](bound)
-                    marker.write_text(json.dumps({
-                        "mount": str(mount), "device": information.st_dev,
-                        "inode": information.st_ino, "created": True,
-                    }))
                     thread = threading.Thread(target=worker, name="serialized-stop")
                     thread.start()
                     self.assertTrue(initial_read.wait(1))
@@ -3181,6 +3355,409 @@ class PublicCommandTests(unittest.TestCase):
             self.assertTrue(mount.is_symlink())
             self.assertEqual("keep", protected.read_text())
 
+    def test_interrupted_created_leaf_is_not_silently_reclassified(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_parent = root / "config/rclone"
+            data_home = root / "data"
+            runtime = root / "run"
+            config_parent.mkdir(parents=True, mode=0o700)
+            data_home.mkdir(mode=0o700)
+            runtime.mkdir(mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+            mount = data_home / "proton-drive-desktop/files"
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(data_home),
+                "XDG_RUNTIME_DIR": str(runtime),
+            }
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            real_mkdir = os.mkdir
+
+            def terminate_after_leaf_creation(path, mode=0o777, *args, **kwargs):
+                real_mkdir(path, mode, *args, **kwargs)
+                if pathlib.Path(path) == mount:
+                    raise SystemExit(91)
+
+            with mock.patch("os.mkdir", side_effect=terminate_after_leaf_creation):
+                interrupted = invoke(["_prepare"], environment, opened=opened)
+
+            self.assertEqual(91, interrupted[0])
+            self.assertTrue(mount.is_dir())
+            diagnostic = (
+                "interrupted mountpoint creation requires stopped recovery\n"
+            )
+            self.assertEqual(
+                (1, "", diagnostic),
+                invoke(["_prepare"], environment, opened=opened),
+            )
+            launch = mock.Mock()
+            self.assertEqual(
+                (1, "", diagnostic),
+                invoke(
+                    ["_mount"], environment, execve=launch, opened=opened
+                ),
+            )
+            launch.assert_not_called()
+
+            def external(command, **kwargs):
+                returncode = 1 if command[2] == "start" else 0
+                return subprocess.CompletedProcess(
+                    command, returncode,
+                    stdout=(
+                        "ActiveState=inactive\nSubState=dead\n"
+                        "Result=success\n"
+                    ),
+                )
+
+            for command in ("start", "stop"):
+                with self.subTest(command=command):
+                    self.assertEqual(
+                        (1, "", diagnostic),
+                        invoke(
+                            [command], environment,
+                            run=external, opened=opened,
+                        ),
+                    )
+            self.assertEqual(
+                (1, "", diagnostic),
+                invoke(["_post-stop"], environment, opened=opened),
+            )
+
+            mount.rmdir()
+            self.assertEqual(
+                (0, "", ""), invoke(["_prepare"], environment, opened=opened)
+            )
+            marker = runtime / "proton-drive-desktop/mountpoint.json"
+            self.assertTrue(json.loads(marker.read_text())["created"])
+            self.assertEqual(
+                (0, "", ""),
+                invoke(["_post-stop"], environment, opened=opened),
+            )
+            self.assertFalse(mount.exists())
+
+    def test_interrupted_identity_publication_reconciles_before_mounting(self):
+        for preexisting in (False, True):
+            for boundary in ("nonce", "before-marker", "after-marker"):
+                with self.subTest(
+                    preexisting=preexisting, boundary=boundary
+                ), tempfile.TemporaryDirectory() as temporary:
+                    root = pathlib.Path(temporary)
+                    config_parent = root / "config/rclone"
+                    data_home = root / "data"
+                    runtime = root / "run"
+                    config_parent.mkdir(parents=True, mode=0o700)
+                    data_home.mkdir(mode=0o700)
+                    runtime.mkdir(mode=0o700)
+                    config = config_parent / "proton-drive.conf"
+                    config.write_text("encrypted-placeholder")
+                    config.chmod(0o600)
+                    mount = data_home / "proton-drive-desktop/files"
+                    if preexisting:
+                        mount.mkdir(parents=True, mode=0o700)
+                    private_runtime = runtime / "proton-drive-desktop"
+                    marker = private_runtime / "mountpoint.json"
+                    environment = {
+                        "HOME": temporary,
+                        "XDG_CONFIG_HOME": str(root / "config"),
+                        "XDG_DATA_HOME": str(data_home),
+                        "XDG_RUNTIME_DIR": str(runtime),
+                    }
+
+                    def opened(name, *args, **kwargs):
+                        if name == "/proc/self/mountinfo":
+                            return io.StringIO("")
+                        return io.open(name, *args, **kwargs)
+
+                    if boundary == "nonce":
+                        real_setxattr = os.setxattr
+
+                        def terminate(*args, **kwargs):
+                            real_setxattr(*args, **kwargs)
+                            raise SystemExit(92)
+
+                        interruption = mock.patch(
+                            "os.setxattr", side_effect=terminate
+                        )
+                    else:
+                        real_replace = os.replace
+
+                        def terminate(source, destination, *args, **kwargs):
+                            if pathlib.Path(destination) == marker:
+                                if boundary == "after-marker":
+                                    real_replace(
+                                        source, destination, *args, **kwargs
+                                    )
+                                raise SystemExit(92)
+                            return real_replace(
+                                source, destination, *args, **kwargs
+                            )
+
+                        interruption = mock.patch(
+                            "os.replace", side_effect=terminate
+                        )
+
+                    with interruption:
+                        interrupted = invoke(
+                            ["_prepare"], environment, opened=opened
+                        )
+
+                    self.assertEqual(92, interrupted[0])
+                    diagnostic = (
+                        "interrupted mountpoint identity publication requires "
+                        "stopped recovery\n"
+                    )
+                    launch = mock.Mock()
+                    self.assertEqual(
+                        (1, "", diagnostic),
+                        invoke(
+                            ["_mount"], environment,
+                            execve=launch, opened=opened,
+                        ),
+                    )
+                    launch.assert_not_called()
+
+                    def external(command, **kwargs):
+                        if command[2] == "start":
+                            return subprocess.CompletedProcess(command, 1)
+                        return subprocess.CompletedProcess(
+                            command, 0,
+                            stdout=(
+                                "ActiveState=inactive\nSubState=dead\n"
+                                "Result=success\n"
+                            ),
+                        )
+
+                    self.assertEqual(
+                        (1, "", diagnostic),
+                        invoke(
+                            ["start"], environment,
+                            run=external, opened=opened,
+                        ),
+                    )
+                    self.assertEqual(
+                        (1, "", diagnostic),
+                        invoke(
+                            ["stop"], environment,
+                            run=external, opened=opened,
+                        ),
+                    )
+                    self.assertEqual(
+                        (1, "", diagnostic),
+                        invoke(["_post-stop"], environment, opened=opened),
+                    )
+
+                    self.assertEqual(
+                        (0, "", ""),
+                        invoke(["_prepare"], environment, opened=opened),
+                    )
+                    ownership = json.loads(marker.read_text())
+                    self.assertEqual(not preexisting, ownership["created"])
+                    self.assertEqual(
+                        ownership["nonce"].encode("ascii"),
+                        os.getxattr(
+                            mount, "user.proton-drive-desktop.identity"
+                        ),
+                    )
+
+                    launched = mock.Mock(side_effect=SystemExit(0))
+                    self.assertEqual(
+                        (0, "", ""),
+                        invoke(
+                            ["_mount"], environment,
+                            execve=launched, opened=opened,
+                        ),
+                    )
+                    launched.assert_called_once()
+                    self.assertEqual(
+                        (0, "", ""),
+                        invoke(["_post-stop"], environment, opened=opened),
+                    )
+                    self.assertEqual(preexisting, mount.exists())
+
+    def test_interrupted_preexisting_cleanup_requires_bounded_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_parent = root / "config/rclone"
+            mount = root / "data/proton-drive-desktop/files"
+            runtime = root / "run"
+            config_parent.mkdir(parents=True, mode=0o700)
+            mount.mkdir(parents=True, mode=0o700)
+            runtime.mkdir(mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+            unknown_name = "user.proton-drive-desktop.keep"
+            unknown_value = b"preserve-unknown-identity"
+            os.setxattr(mount, unknown_name, unknown_value)
+            private_runtime = runtime / "proton-drive-desktop"
+            marker = private_runtime / "mountpoint.json"
+            phase = private_runtime / "mountpoint-phase.json"
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(root / "data"),
+                "XDG_RUNTIME_DIR": str(runtime),
+            }
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            self.assertEqual(
+                (0, "", ""), invoke(["_prepare"], environment, opened=opened)
+            )
+            real_removexattr = os.removexattr
+
+            def terminate_after_nonce_removal(path, name, *args, **kwargs):
+                real_removexattr(path, name, *args, **kwargs)
+                if name == "user.proton-drive-desktop.identity":
+                    raise SystemExit(93)
+
+            with mock.patch(
+                "os.removexattr", side_effect=terminate_after_nonce_removal
+            ):
+                interrupted = invoke(
+                    ["_post-stop"], environment, opened=opened
+                )
+
+            self.assertEqual(93, interrupted[0])
+            diagnostic = (
+                "interrupted preexisting mountpoint cleanup requires stopped "
+                "recovery\n"
+            )
+            launch = mock.Mock()
+            for command in ("_prepare", "_mount", "_post-stop"):
+                with self.subTest(command=command):
+                    self.assertEqual(
+                        (1, "", diagnostic),
+                        invoke(
+                            [command], environment,
+                            execve=launch, opened=opened,
+                        ),
+                    )
+            launch.assert_not_called()
+
+            def external(command, **kwargs):
+                returncode = 1 if command[2] == "start" else 0
+                return subprocess.CompletedProcess(
+                    command, returncode,
+                    stdout=(
+                        "ActiveState=inactive\nSubState=dead\n"
+                        "Result=success\n"
+                    ),
+                )
+
+            for command in ("start", "stop"):
+                with self.subTest(command=command):
+                    self.assertEqual(
+                        (1, "", diagnostic),
+                        invoke(
+                            [command], environment,
+                            run=external, opened=opened,
+                        ),
+                    )
+
+            self.assertTrue(mount.is_dir())
+            self.assertTrue(marker.is_file())
+            self.assertTrue(phase.is_file())
+            with self.assertRaises(OSError) as missing:
+                os.getxattr(mount, "user.proton-drive-desktop.identity")
+            self.assertEqual(XATTR_MISSING_ERRNO, missing.exception.errno)
+            self.assertEqual(unknown_value, os.getxattr(mount, unknown_name))
+
+            marker.unlink()
+            phase.unlink()
+            self.assertEqual(
+                (0, "", ""), invoke(["_prepare"], environment, opened=opened)
+            )
+            self.assertFalse(json.loads(marker.read_text())["created"])
+            self.assertEqual(unknown_value, os.getxattr(mount, unknown_name))
+            self.assertEqual(
+                (0, "", ""),
+                invoke(["_post-stop"], environment, opened=opened),
+            )
+            self.assertTrue(mount.is_dir())
+            self.assertEqual(unknown_value, os.getxattr(mount, unknown_name))
+
+    def test_interrupted_publication_preserves_an_unknown_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_parent = root / "config/rclone"
+            mount = root / "data/proton-drive-desktop/files"
+            runtime = root / "run"
+            config_parent.mkdir(parents=True, mode=0o700)
+            mount.mkdir(parents=True, mode=0o700)
+            runtime.mkdir(mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(root / "data"),
+                "XDG_RUNTIME_DIR": str(runtime),
+            }
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            real_setxattr = os.setxattr
+
+            def terminate_after_nonce_creation(*args, **kwargs):
+                real_setxattr(*args, **kwargs)
+                raise SystemExit(94)
+
+            with mock.patch(
+                "os.setxattr", side_effect=terminate_after_nonce_creation
+            ):
+                self.assertEqual(
+                    94, invoke(["_prepare"], environment, opened=opened)[0]
+                )
+
+            unknown_identity = b"ab" * 32
+            os.setxattr(
+                mount,
+                "user.proton-drive-desktop.identity",
+                unknown_identity,
+            )
+            phase = runtime / "proton-drive-desktop/mountpoint-phase.json"
+            phase_before = phase.read_bytes()
+            diagnostic = (
+                "interrupted mountpoint identity publication requires "
+                "stopped recovery\n"
+            )
+            launch = mock.Mock()
+
+            for command in ("_prepare", "_mount", "_post-stop"):
+                with self.subTest(command=command):
+                    self.assertEqual(
+                        (1, "", diagnostic),
+                        invoke(
+                            [command], environment,
+                            execve=launch, opened=opened,
+                        ),
+                    )
+
+            launch.assert_not_called()
+            self.assertTrue(mount.is_dir())
+            self.assertEqual(phase_before, phase.read_bytes())
+            self.assertEqual(
+                unknown_identity,
+                os.getxattr(mount, "user.proton-drive-desktop.identity"),
+            )
+
     def test_prepare_preserves_an_empty_replacement_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -3221,6 +3798,168 @@ class PublicCommandTests(unittest.TestCase):
                 original_marker,
                 (runtime / "proton-drive-desktop/mountpoint.json").read_bytes(),
             )
+
+    def test_prepare_rejects_a_replacement_with_colliding_device_and_inode(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_parent = root / "config/rclone"
+            data_home = root / "data"
+            runtime = root / "run"
+            config_parent.mkdir(parents=True, mode=0o700)
+            data_home.mkdir(mode=0o700)
+            runtime.mkdir(mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+            mount = data_home / "proton-drive-desktop/files"
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(data_home),
+                "XDG_RUNTIME_DIR": str(runtime),
+            }
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            self.assertEqual(0, invoke(["_prepare"], environment, opened=opened)[0])
+            marker = runtime / "proton-drive-desktop/mountpoint.json"
+            ownership = json.loads(marker.read_text())
+            ownership["nonce"] = "11" * 32
+            mount.rmdir()
+            mount.mkdir(mode=0o700)
+            replacement_nonce = b"22" * 32
+            os.setxattr(mount, "user.proton-drive-desktop.identity", replacement_nonce)
+            replacement = mount.stat()
+            ownership["device"] = replacement.st_dev
+            ownership["inode"] = replacement.st_ino
+            marker.write_text(json.dumps(ownership, separators=(",", ":")))
+            marker_before = marker.read_bytes()
+
+            result = invoke(["_prepare"], environment, opened=opened)
+
+            self.assertEqual(
+                (1, "", "mountpoint was replaced; preserving it\n"), result
+            )
+            self.assertEqual(marker_before, marker.read_bytes())
+            self.assertEqual(
+                replacement_nonce,
+                os.getxattr(mount, "user.proton-drive-desktop.identity"),
+            )
+
+    def test_mount_and_cleanup_reject_replacements_with_colliding_stat_identity(self):
+        for command in ("_mount", "_post-stop"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                config_parent = root / "config/rclone"
+                data_home = root / "data"
+                runtime = root / "run"
+                config_parent.mkdir(parents=True, mode=0o700)
+                data_home.mkdir(mode=0o700)
+                runtime.mkdir(mode=0o700)
+                config = config_parent / "proton-drive.conf"
+                config.write_text("encrypted-placeholder")
+                config.chmod(0o600)
+                mount = data_home / "proton-drive-desktop/files"
+                environment = {
+                    "HOME": temporary,
+                    "XDG_CONFIG_HOME": str(root / "config"),
+                    "XDG_DATA_HOME": str(data_home),
+                    "XDG_RUNTIME_DIR": str(runtime),
+                }
+
+                def opened(name, *args, **kwargs):
+                    if name == "/proc/self/mountinfo":
+                        return io.StringIO("")
+                    return io.open(name, *args, **kwargs)
+
+                self.assertEqual(
+                    0, invoke(["_prepare"], environment, opened=opened)[0]
+                )
+                marker = runtime / "proton-drive-desktop/mountpoint.json"
+                ownership = json.loads(marker.read_text())
+                mount.rmdir()
+                mount.mkdir(mode=0o700)
+                replacement_nonce = b"33" * 32
+                os.setxattr(
+                    mount,
+                    "user.proton-drive-desktop.identity",
+                    replacement_nonce,
+                )
+                replacement = mount.stat()
+                ownership["device"] = replacement.st_dev
+                ownership["inode"] = replacement.st_ino
+                marker.write_text(json.dumps(ownership, separators=(",", ":")))
+                marker_before = marker.read_bytes()
+                launch = mock.Mock()
+
+                result = invoke(
+                    [command], environment, execve=launch, opened=opened
+                )
+
+                self.assertEqual(
+                    (1, "", "mountpoint was replaced; preserving it\n"), result
+                )
+                launch.assert_not_called()
+                self.assertTrue(mount.is_dir())
+                self.assertEqual(marker_before, marker.read_bytes())
+                self.assertEqual(
+                    replacement_nonce,
+                    os.getxattr(mount, "user.proton-drive-desktop.identity"),
+                )
+
+    def test_cleanup_removes_created_leaf_or_only_preexisting_leaf_identity(self):
+        for preexisting in (False, True):
+            with self.subTest(preexisting=preexisting), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                config_parent = root / "config/rclone"
+                data_home = root / "data"
+                runtime = root / "run"
+                config_parent.mkdir(parents=True, mode=0o700)
+                data_home.mkdir(mode=0o700)
+                runtime.mkdir(mode=0o700)
+                config = config_parent / "proton-drive.conf"
+                config.write_text("encrypted-placeholder")
+                config.chmod(0o600)
+                mount = data_home / "proton-drive-desktop/files"
+                if preexisting:
+                    mount.mkdir(parents=True, mode=0o700)
+                environment = {
+                    "HOME": temporary,
+                    "XDG_CONFIG_HOME": str(root / "config"),
+                    "XDG_DATA_HOME": str(data_home),
+                    "XDG_RUNTIME_DIR": str(runtime),
+                }
+
+                def opened(name, *args, **kwargs):
+                    if name == "/proc/self/mountinfo":
+                        return io.StringIO("")
+                    return io.open(name, *args, **kwargs)
+
+                self.assertEqual(
+                    (0, "", ""), invoke(["_prepare"], environment, opened=opened)
+                )
+                marker = runtime / "proton-drive-desktop/mountpoint.json"
+                ownership = json.loads(marker.read_text())
+                self.assertEqual(not preexisting, ownership["created"])
+                self.assertRegex(ownership["nonce"], r"\A[0-9a-f]{64}\Z")
+                self.assertEqual(
+                    ownership["nonce"].encode("ascii"),
+                    os.getxattr(mount, "user.proton-drive-desktop.identity"),
+                )
+
+                self.assertEqual(
+                    (0, "", ""),
+                    invoke(["_post-stop"], environment, opened=opened),
+                )
+                self.assertFalse(marker.exists())
+                self.assertEqual(preexisting, mount.exists())
+                if preexisting:
+                    with self.assertRaises(OSError) as missing:
+                        os.getxattr(mount, "user.proton-drive-desktop.identity")
+                    self.assertEqual(XATTR_MISSING_ERRNO, missing.exception.errno)
 
     def test_prepare_preserves_replacement_of_a_recorded_preexisting_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3298,8 +4037,234 @@ class PublicCommandTests(unittest.TestCase):
             self.assertTrue(mount.is_dir())
             self.assertTrue(recovered["created"])
             self.assertNotEqual(
-                (previous["device"], previous["inode"]),
-                (recovered["device"], recovered["inode"]),
+                previous["nonce"], recovered["nonce"]
+            )
+            self.assertEqual(
+                recovered["nonce"].encode("ascii"),
+                os.getxattr(mount, "user.proton-drive-desktop.identity"),
+            )
+
+    def test_legacy_record_requires_a_stopped_session_transition_for_existing_leaf(self):
+        for command in ("_prepare", "_mount", "_post-stop"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                config_parent = root / "config/rclone"
+                mount = root / "data/proton-drive-desktop/files"
+                runtime = root / "run/proton-drive-desktop"
+                config_parent.mkdir(parents=True, mode=0o700)
+                mount.mkdir(parents=True, mode=0o700)
+                runtime.mkdir(parents=True, mode=0o700)
+                config = config_parent / "proton-drive.conf"
+                config.write_text("encrypted-placeholder")
+                config.chmod(0o600)
+                information = mount.stat()
+                marker = runtime / "mountpoint.json"
+                marker.write_text(json.dumps({
+                    "mount": str(mount),
+                    "device": information.st_dev,
+                    "inode": information.st_ino,
+                    "created": True,
+                }, separators=(",", ":")))
+                marker_before = marker.read_bytes()
+                environment = {
+                    "HOME": temporary,
+                    "XDG_CONFIG_HOME": str(root / "config"),
+                    "XDG_DATA_HOME": str(root / "data"),
+                    "XDG_RUNTIME_DIR": str(root / "run"),
+                }
+
+                def opened(name, *args, **kwargs):
+                    if name == "/proc/self/mountinfo":
+                        return io.StringIO("")
+                    return io.open(name, *args, **kwargs)
+
+                launch = mock.Mock()
+                result = invoke(
+                    [command], environment, execve=launch, opened=opened
+                )
+
+                self.assertEqual(
+                    (1, "", "mountpoint ownership record is invalid\n"), result
+                )
+                launch.assert_not_called()
+                self.assertTrue(mount.is_dir())
+                self.assertEqual(marker_before, marker.read_bytes())
+
+    def test_prepare_recovers_a_legacy_record_only_when_the_leaf_is_missing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_parent = root / "config/rclone"
+            data_home = root / "data"
+            managed_parent = data_home / "proton-drive-desktop"
+            runtime = root / "run/proton-drive-desktop"
+            config_parent.mkdir(parents=True, mode=0o700)
+            managed_parent.mkdir(parents=True, mode=0o700)
+            runtime.mkdir(parents=True, mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+            mount = managed_parent / "files"
+            marker = runtime / "mountpoint.json"
+            legacy = json.dumps({
+                "mount": str(mount),
+                "device": 1,
+                "inode": 2,
+                "created": False,
+            }, separators=(",", ":"))
+            marker.write_text(legacy)
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(data_home),
+                "XDG_RUNTIME_DIR": str(root / "run"),
+            }
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            self.assertEqual(
+                (0, "", ""), invoke(["_prepare"], environment, opened=opened)
+            )
+            recovered = json.loads(marker.read_text())
+            self.assertTrue(recovered["created"])
+            self.assertRegex(recovered["nonce"], r"\A[0-9a-f]{64}\Z")
+            self.assertEqual(
+                recovered["nonce"].encode("ascii"),
+                os.getxattr(mount, "user.proton-drive-desktop.identity"),
+            )
+
+    def test_prepare_fails_closed_when_directory_xattrs_cannot_be_created(self):
+        for preexisting in (False, True):
+            with self.subTest(preexisting=preexisting), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                config_parent = root / "config/rclone"
+                data_home = root / "data"
+                runtime = root / "run"
+                config_parent.mkdir(parents=True, mode=0o700)
+                data_home.mkdir(mode=0o700)
+                runtime.mkdir(mode=0o700)
+                config = config_parent / "proton-drive.conf"
+                config.write_text("encrypted-placeholder")
+                config.chmod(0o600)
+                mount = data_home / "proton-drive-desktop/files"
+                if preexisting:
+                    mount.mkdir(parents=True, mode=0o700)
+                environment = {
+                    "HOME": temporary,
+                    "XDG_CONFIG_HOME": str(root / "config"),
+                    "XDG_DATA_HOME": str(data_home),
+                    "XDG_RUNTIME_DIR": str(runtime),
+                }
+
+                def opened(name, *args, **kwargs):
+                    if name == "/proc/self/mountinfo":
+                        return io.StringIO("")
+                    return io.open(name, *args, **kwargs)
+
+                unavailable = OSError(errno.EOPNOTSUPP, "synthetic unsupported xattr")
+                with mock.patch("os.setxattr", side_effect=unavailable):
+                    result = invoke(["_prepare"], environment, opened=opened)
+
+                self.assertEqual(
+                    (1, "", "mountpoint identity is unavailable\n"), result
+                )
+                self.assertEqual(preexisting, mount.exists())
+                self.assertFalse(
+                    (runtime / "proton-drive-desktop/mountpoint.json").exists()
+                )
+
+    def test_xattr_read_failures_preserve_state_and_never_reach_exec(self):
+        for command in ("_prepare", "_mount", "_post-stop"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                config_parent = root / "config/rclone"
+                data_home = root / "data"
+                runtime = root / "run"
+                config_parent.mkdir(parents=True, mode=0o700)
+                data_home.mkdir(mode=0o700)
+                runtime.mkdir(mode=0o700)
+                config = config_parent / "proton-drive.conf"
+                config.write_text("encrypted-placeholder")
+                config.chmod(0o600)
+                mount = data_home / "proton-drive-desktop/files"
+                environment = {
+                    "HOME": temporary,
+                    "XDG_CONFIG_HOME": str(root / "config"),
+                    "XDG_DATA_HOME": str(data_home),
+                    "XDG_RUNTIME_DIR": str(runtime),
+                }
+
+                def opened(name, *args, **kwargs):
+                    if name == "/proc/self/mountinfo":
+                        return io.StringIO("")
+                    return io.open(name, *args, **kwargs)
+
+                self.assertEqual(
+                    0, invoke(["_prepare"], environment, opened=opened)[0]
+                )
+                marker = runtime / "proton-drive-desktop/mountpoint.json"
+                marker_before = marker.read_bytes()
+                launch = mock.Mock()
+                unavailable = OSError(errno.EOPNOTSUPP, "synthetic unsupported xattr")
+                with mock.patch("os.getxattr", side_effect=unavailable):
+                    result = invoke(
+                        [command], environment, execve=launch, opened=opened
+                    )
+
+                self.assertEqual(
+                    (1, "", "mountpoint identity is unavailable\n"), result
+                )
+                launch.assert_not_called()
+                self.assertTrue(mount.is_dir())
+                self.assertEqual(marker_before, marker.read_bytes())
+
+    def test_preexisting_leaf_cleanup_preserves_state_when_xattr_removal_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_parent = root / "config/rclone"
+            mount = root / "data/proton-drive-desktop/files"
+            runtime = root / "run"
+            config_parent.mkdir(parents=True, mode=0o700)
+            mount.mkdir(parents=True, mode=0o700)
+            runtime.mkdir(mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(root / "data"),
+                "XDG_RUNTIME_DIR": str(runtime),
+            }
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            self.assertEqual(
+                (0, "", ""), invoke(["_prepare"], environment, opened=opened)
+            )
+            marker = runtime / "proton-drive-desktop/mountpoint.json"
+            marker_before = marker.read_bytes()
+            nonce_before = os.getxattr(
+                mount, "user.proton-drive-desktop.identity"
+            )
+            unavailable = OSError(errno.EOPNOTSUPP, "synthetic unsupported xattr")
+
+            with mock.patch("os.removexattr", side_effect=unavailable):
+                result = invoke(["_post-stop"], environment, opened=opened)
+
+            self.assertEqual(
+                (1, "", "mountpoint identity is unavailable\n"), result
+            )
+            self.assertTrue(mount.is_dir())
+            self.assertEqual(marker_before, marker.read_bytes())
+            self.assertEqual(
+                nonce_before,
+                os.getxattr(mount, "user.proton-drive-desktop.identity"),
             )
 
     def test_wrong_shaped_ownership_records_use_fixed_errors_and_preserve_mountpoint(self):
@@ -3374,6 +4339,7 @@ class PublicCommandTests(unittest.TestCase):
             }
             encoded_mount = str(mount).replace(" ", "\\040")
             mount_id = "131"
+            mounted = False
 
             def opened(name, *args, **kwargs):
                 if name == "/proc/self/mountinfo":
@@ -3381,10 +4347,11 @@ class PublicCommandTests(unittest.TestCase):
                         f"{mount_id} 30 0:131 / {encoded_mount} ro,nosuid,nodev - "
                         "fuse.rclone proton-dolphin: ro\n"
                     )
-                    return io.StringIO(entry)
+                    return io.StringIO(entry if mounted else "")
                 return io.open(name, *args, **kwargs)
 
-            self.assertEqual(0, invoke(["_prepare"], environment)[0])
+            self.assertEqual(0, invoke(["_prepare"], environment, opened=opened)[0])
+            mounted = True
             self.assertEqual(0, invoke(["_verify-mount"], environment, opened=opened)[0])
             marker = runtime / "mountpoint.json"
             ownership = json.loads(marker.read_text())
@@ -3427,12 +4394,7 @@ class PublicCommandTests(unittest.TestCase):
                     runtime = root / "run/proton-drive-desktop"
                     mount.mkdir(parents=True, mode=0o700)
                     runtime.mkdir(parents=True, mode=0o700)
-                    information = mount.stat()
-                    (runtime / "mountpoint.json").write_text(json.dumps({
-                        "mount": str(mount), "device": information.st_dev,
-                        "inode": information.st_ino, "created": True,
-                        "mount_id": "141",
-                    }))
+                    publish_mount_record(mount, runtime, "141", True)
                     encoded_mount = str(mount).replace(" ", "\\040")
                     service = True
                     detached = False

@@ -316,6 +316,119 @@ mount, an explicit `start` retries it after the normal safety checks. An
 explicit `stop` clears an already failed, unmounted unit and its owned empty
 mountpoint. Neither command proceeds when a residual or foreign mount remains.
 
+The mountpoint must be on a Linux filesystem that provides persistent,
+reliable `user.*` extended attributes for directories. Preparation, launch,
+and cleanup fail closed when those xattrs cannot be read, written, or removed;
+device and inode numbers alone are never accepted as the directory identity.
+The nonce protects against ordinary inode reuse, not a same-user process that
+can change both the private runtime record and directory xattr, or a filesystem
+clone or rollback that reproduces both.
+
+### Recover an interrupted mountpoint identity operation
+
+Preparation records its intent before creating or identifying the mountpoint,
+and preexisting-directory cleanup records its intent before removing the
+identity xattr. A matching retained phase lets preparation finish publishing
+the identity automatically. These fixed diagnostics mean the remaining state
+cannot be reconciled from the evidence source still has:
+
+- `interrupted mountpoint creation requires stopped recovery`
+- `interrupted mountpoint identity publication requires stopped recovery`
+- `interrupted preexisting mountpoint cleanup requires stopped recovery`
+
+Do not copy or guess the recorded nonce. Do not start rclone, edit either JSON
+record, remove an unfamiliar xattr, or use forced, lazy, or recursive cleanup.
+First stop the unit and require it to have no running process and no mount at
+the exact target. A failed unit is acceptable only when it has no process:
+
+```sh
+systemctl --user stop proton-drive-desktop.service || :
+systemctl --user show proton-drive-desktop.service \
+  --property=ActiveState --property=MainPID
+
+runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/proton-drive-desktop"
+binding="$runtime/binding.json"
+marker="$runtime/mountpoint.json"
+phase="$runtime/mountpoint-phase.json"
+mountpoint=$(python3 - "$binding" \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/proton-drive-desktop/files" <<'PY'
+import json
+import pathlib
+import sys
+
+binding = pathlib.Path(sys.argv[1])
+fallback = sys.argv[2]
+print(json.loads(binding.read_text())["mount"] if binding.exists() else fallback)
+PY
+)
+findmnt --mountpoint "$mountpoint"
+```
+
+Continue only when `ActiveState` is `inactive` or `failed`, `MainPID` is `0`,
+and `findmnt` reports no mount at that exact path. Require the mountpoint to be
+a user-owned, non-symlink directory with mode `0700`, and require it to be
+empty. This inspection prints the operation name, its `created` decision, and
+xattr names, but not xattr values:
+
+```sh
+test -d "$mountpoint" && test ! -L "$mountpoint"
+test "$(stat -c %u "$mountpoint")" -eq "$(id -u)"
+test "$(stat -c %a "$mountpoint")" = 700
+test -z "$(find "$mountpoint" -mindepth 1 -maxdepth 1 -print -quit)"
+python3 - "$phase" "$mountpoint" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+phase_path = pathlib.Path(sys.argv[1])
+mountpoint = sys.argv[2]
+operation = json.loads(phase_path.read_text())
+if operation.get("mount") != mountpoint:
+    raise SystemExit("phase names a different mountpoint; preserve everything")
+print("phase:", operation.get("phase"))
+print("created:", operation.get("created"))
+print("xattrs:", *sorted(os.listxattr(mountpoint, follow_symlinks=False)))
+PY
+```
+
+Apply only the matching recovery below:
+
+- For `prepare-create`, require the application identity xattr and all other
+  `user.*` xattrs to be absent. Remove only the empty leaf with
+  `rmdir -- "$mountpoint"`, then retry `proton-drive-desktop start`. The
+  retained phase preserves the helper-created decision and preparation creates
+  a newly identified leaf.
+- For `prepare-publish`, retry `proton-drive-desktop start` once. Preparation
+  completes automatically when the directory still has the recorded nonce. If
+  the same diagnostic returns and the application identity xattr is absent,
+  use the phase's displayed `created` value: for `true`, require no other
+  `user.*` xattrs and run `rmdir -- "$mountpoint"`; for `false`, leave the
+  empty directory and every other xattr in place. Remove an existing marker
+  with `test ! -e "$marker" || rm -- "$marker"`, remove the phase with
+  `rm -- "$phase"`, then retry start. If the application identity xattr is
+  present but cannot be reconciled automatically, preserve the directory,
+  records, and xattrs for investigation.
+- For `cleanup-preexisting`, require `created` to be `false` and the
+  application identity xattr to be absent. Leave the empty directory and every
+  other xattr in place, run `rm -- "$marker" "$phase"`, then retry start. The
+  directory is admitted again as preexisting and remains after later cleanup.
+
+If the private runtime directory is gone, its phase and ownership records are
+gone too. An identity xattr without those records remains unknown and is
+preserved. A user-owned, empty, non-symlink directory without that xattr is
+admitted as preexisting; source cannot infer that the unmarked directory was
+helper-created, so later cleanup preserves it.
+
+A runtime marker from an older release has no nonce and cannot authenticate an
+existing mountpoint. If the leaf is absent, the next `start` gives the new leaf
+a fresh identity automatically. If the leaf remains, first confirm the service
+is stopped and the path is unmounted, then inspect the expected user-owned,
+empty, non-symlink directory. Only in that stopped-session state, remove the
+legacy private runtime marker and retry `start`; the service will adopt the
+inspected directory with a new nonce. Do not use matching device and inode
+numbers as evidence that the leaf is unchanged.
+
 If authentication expires, stop and use a separately reviewed enrollment or
 repair procedure. Stock rclone can attempt password login when session reuse
 fails. This integration neither guarantees session-reuse-only behavior nor
