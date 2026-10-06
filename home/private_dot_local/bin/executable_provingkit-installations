@@ -727,6 +727,7 @@ def import_recovery(home: Path, record: dict, packet: Path) -> dict:
             )
             root = artifact_root(staging, target, specification)
             root.mkdir(parents=True, mode=entries[archive_root][1])
+            root.chmod(entries[archive_root][1])
             for name, (data, mode) in entries.items():
                 if name == archive_root:
                     continue

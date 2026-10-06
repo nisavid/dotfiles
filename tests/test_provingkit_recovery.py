@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import platform
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,10 @@ from tests.provingkit_fixtures import fixture_recovery_packet
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMAND = ROOT / "home/private_dot_local/bin/executable_provingkit-installations"
+linux_amd64 = unittest.skipUnless(
+    platform.system() == "Linux" and platform.machine() == "x86_64",
+    "recovery import targets Linux AMD64",
+)
 
 
 class RecoveryCommandTests(unittest.TestCase):
@@ -41,7 +46,7 @@ class RecoveryCommandTests(unittest.TestCase):
             "LANG": "C.UTF-8",
         }
 
-    def run_command(self, *arguments):
+    def run_command(self, *arguments, umask=-1):
         self.selection_path.write_text(json.dumps(self.selection))
         result = subprocess.run(
             [
@@ -59,6 +64,7 @@ class RecoveryCommandTests(unittest.TestCase):
             text=True,
             capture_output=True,
             check=False,
+            umask=umask,
         )
         self.assertTrue(result.stdout, result.stderr)
         return result.returncode, json.loads(result.stdout)
@@ -86,6 +92,7 @@ class RecoveryCommandTests(unittest.TestCase):
         self.assertIn("recovery", report["message"])
         self.assertEqual(list(self.home.iterdir()), [])
 
+    @linux_amd64
     def test_verified_packet_imports_canonical_artifacts_and_parent_bound_alias(self):
         self.selection, packet, manifest = fixture_recovery_packet(self.base)
 
@@ -127,6 +134,7 @@ class RecoveryCommandTests(unittest.TestCase):
         self.assertFalse((self.home / ".local/state").exists())
         self.assertFalse((self.home / ".cache").exists())
 
+    @linux_amd64
     def test_conflicting_destination_preserves_it_and_publishes_nothing(self):
         self.selection, packet, manifest = fixture_recovery_packet(self.base)
         destination = (
@@ -149,6 +157,7 @@ class RecoveryCommandTests(unittest.TestCase):
         self.assertEqual(sentinel.read_text(), "existing operator content\n")
         self.assertFalse((self.home / ".local/share/provingkit/evidence").exists())
 
+    @linux_amd64
     def test_repeat_import_verifies_existing_artifacts_without_changing_them(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         arguments = (
@@ -187,6 +196,125 @@ class RecoveryCommandTests(unittest.TestCase):
             },
         )
 
+    @linux_amd64
+    def test_recorded_root_modes_survive_restrictive_umasks_and_repeat_imports(self):
+        for umask in (0o027, 0o077):
+            with self.subTest(umask=format(umask, "03o")):
+                base = self.base / format(umask, "03o")
+                base.mkdir()
+                self.home = base / "home"
+                self.home.mkdir()
+                self.environment["HOME"] = str(self.home)
+                self.selection_path = base / "selection.json"
+                self.selection, packet, manifest = fixture_recovery_packet(
+                    base, root_mode=0o755
+                )
+                arguments = (
+                    "import-artifacts",
+                    "--recovery",
+                    "fixture",
+                    "--packet",
+                    str(packet),
+                )
+
+                code, report = self.run_command(*arguments, umask=umask)
+
+                self.assertEqual(
+                    (code, report["outcome"]), (0, "artifacts_imported"), report
+                )
+                contents = self.packet_contents(packet)
+                for target, specification in manifest["targets"].items():
+                    data_root = self.home / ".local/share/provingkit"
+                    artifact = (
+                        data_root / "artifacts" / target
+                        / specification["artifact_sha256"]
+                    )
+                    evidence = (
+                        data_root / "evidence" / target
+                        / specification["artifact_sha256"]
+                    )
+                    self.assertEqual(artifact.stat().st_mode & 0o777, 0o755)
+                    self.assertEqual(
+                        {
+                            ".": format(artifact.stat().st_mode & 0o777, "04o"),
+                            **{
+                                path.relative_to(artifact).as_posix(): format(
+                                    path.stat().st_mode & 0o777, "04o"
+                                )
+                                for path in artifact.rglob("*")
+                                if path.is_dir()
+                            },
+                        },
+                        specification["directories"],
+                    )
+                    with tarfile.open(
+                        fileobj=io.BytesIO(
+                            contents[specification["archive"]["path"]]
+                        )
+                    ) as archive:
+                        expected_files = {
+                            item.name.split("/", 1)[1]: (
+                                archive.extractfile(item).read(),
+                                item.mode,
+                            )
+                            for item in archive
+                            if item.isreg()
+                        }
+                    self.assertEqual(
+                        {
+                            path.relative_to(artifact).as_posix(): (
+                                path.read_bytes(),
+                                path.stat().st_mode & 0o777,
+                            )
+                            for path in artifact.rglob("*")
+                            if path.is_file()
+                        },
+                        expected_files,
+                    )
+                    self.assertEqual(evidence.stat().st_mode & 0o777, 0o700)
+                    self.assertEqual(
+                        {path.name for path in evidence.iterdir()},
+                        {"RECEIPT.json", "modes.tsv"},
+                    )
+                    for name, kind in (
+                        ("RECEIPT.json", "receipt"), ("modes.tsv", "modes")
+                    ):
+                        path = evidence / name
+                        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                        self.assertEqual(
+                            path.read_bytes(), contents[specification[kind]["path"]]
+                        )
+
+                def inventory():
+                    return {
+                        path.relative_to(self.home).as_posix(): (
+                            path.lstat().st_mode,
+                            path.lstat().st_mtime_ns,
+                            path.read_bytes() if path.is_file() else None,
+                        )
+                        for path in self.home.rglob("*")
+                    }
+
+                before = inventory()
+                code, report = self.run_command(*arguments, umask=umask)
+                self.assertEqual(
+                    (code, report["outcome"]), (0, "artifacts_verified"), report
+                )
+                self.assertEqual(inventory(), before)
+
+                claude = manifest["targets"]["claude"]
+                conflicting_root = (
+                    self.home / ".local/share/provingkit/artifacts/claude"
+                    / claude["artifact_sha256"]
+                )
+                conflicting_root.chmod(0o750)
+                before = inventory()
+                code, report = self.run_command(*arguments, umask=umask)
+                self.assertEqual(
+                    (code, report["outcome"]), (1, "recovery_refused"), report
+                )
+                self.assertEqual(inventory(), before)
+
     def packet_contents(self, packet):
         with tarfile.open(packet) as archive:
             return {item.name: archive.extractfile(item).read() for item in archive}
@@ -206,6 +334,7 @@ class RecoveryCommandTests(unittest.TestCase):
             contents["MANIFEST.json"]
         ).hexdigest()
 
+    @linux_amd64
     def test_duplicate_manifest_fields_are_refused_as_invalid_recovery(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         contents = self.packet_contents(packet)
@@ -253,6 +382,7 @@ class RecoveryCommandTests(unittest.TestCase):
             "import-artifacts", "--recovery", "fixture", "--packet", str(packet)
         )
 
+    @linux_amd64
     def test_missing_or_changed_packet_does_not_materialize_artifacts(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         expected = packet.read_bytes()
@@ -270,6 +400,7 @@ class RecoveryCommandTests(unittest.TestCase):
                 )
                 self.assertEqual(list(self.home.iterdir()), [])
 
+    @linux_amd64
     def test_manifest_is_authenticated_before_its_json_is_used(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         contents = self.packet_contents(packet)
@@ -298,6 +429,7 @@ class RecoveryCommandTests(unittest.TestCase):
         self.assertEqual((code, report["outcome"]), (2, "unsupported_platform"), report)
         self.assertEqual(list(self.home.iterdir()), [])
 
+    @linux_amd64
     def test_symlink_destination_ancestor_is_preserved_and_refused(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         outside = self.base / "outside"
@@ -313,6 +445,7 @@ class RecoveryCommandTests(unittest.TestCase):
         self.assertEqual(list(outside.iterdir()), [sentinel])
         self.assertEqual(sentinel.read_text(), "outside content\n")
 
+    @linux_amd64
     def test_repeat_import_refuses_changed_receipt_mode_or_extra_evidence(self):
         self.selection, packet, manifest = fixture_recovery_packet(self.base)
         code, report = self.import_fixture(packet)
@@ -334,6 +467,7 @@ class RecoveryCommandTests(unittest.TestCase):
         self.assertEqual((code, report["outcome"]), (1, "recovery_refused"), report)
         self.assertEqual(extra.read_text(), "keep extra evidence\n")
 
+    @linux_amd64
     def test_missing_evidence_can_be_recovered_without_replacing_matching_artifacts(
         self,
     ):
@@ -354,6 +488,7 @@ class RecoveryCommandTests(unittest.TestCase):
         self.assertEqual((artifact / "RECEIPT.json").stat().st_mtime_ns, before)
         self.assertTrue((evidence / "modes.tsv").is_file())
 
+    @linux_amd64
     def test_import_does_not_inspect_profile_or_invoke_native_clients(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         self.selection["profile_name"] = "unrelated-profile"
@@ -394,6 +529,7 @@ class RecoveryCommandTests(unittest.TestCase):
                 archive.addfile(item, io.BytesIO(data) if data is not None else None)
         return stream.getvalue()
 
+    @linux_amd64
     def test_unsafe_archive_entries_are_refused_before_any_materialization(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         path = "artifacts/agent-plugins.tar.gz"
@@ -448,6 +584,7 @@ class RecoveryCommandTests(unittest.TestCase):
                 )
                 self.assertEqual(list(self.home.iterdir()), [])
 
+    @linux_amd64
     def test_path_pax_header_and_conventional_directory_slash_are_supported(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         path = "artifacts/agent-plugins.tar.gz"
@@ -468,6 +605,7 @@ class RecoveryCommandTests(unittest.TestCase):
 
         self.assertEqual((code, report["outcome"]), (0, "artifacts_imported"), report)
 
+    @linux_amd64
     def test_artifact_directory_receipt_and_alias_file_modes_are_verified(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         originals = self.packet_contents(packet)
@@ -501,6 +639,7 @@ class RecoveryCommandTests(unittest.TestCase):
                 self.assertEqual(list(self.home.iterdir()), [])
                 self.replace_constituent(packet, path, originals[path])
 
+    @linux_amd64
     def test_alias_receipt_must_bind_the_canonical_parent_receipt(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         contents = self.packet_contents(packet)
@@ -526,6 +665,7 @@ class RecoveryCommandTests(unittest.TestCase):
         self.assertIn("not parent-bound", report["message"])
         self.assertEqual(list(self.home.iterdir()), [])
 
+    @linux_amd64
     def test_alias_directory_inventory_must_match_the_canonical_parent(self):
         self.selection, packet, _manifest = fixture_recovery_packet(self.base)
         contents = self.packet_contents(packet)

@@ -110,7 +110,9 @@ def artifact_root(home: Path, selection: dict, target: str) -> Path:
     )
 
 
-def fixture_recovery_packet(base: Path) -> tuple[dict, Path, dict]:
+def fixture_recovery_packet(
+    base: Path, *, root_mode: int = 0o700
+) -> tuple[dict, Path, dict]:
     """Package captured ordinary artifacts and the documented Codex alias."""
     publisher = base / "publisher"
     ordinary = fixture_selection(publisher, "six_a", ("codex", "claude"))
@@ -152,10 +154,10 @@ def fixture_recovery_packet(base: Path) -> tuple[dict, Path, dict]:
             if target == "agent-plugins-local"
             else artifact_root(publisher, ordinary, target)
         )
-        directories = {".": "0700"}
+        directories = {".": format(root_mode, "04o")}
         for path in [root, *root.rglob("*")]:
             if path.is_dir():
-                path.chmod(0o700)
+                path.chmod(root_mode if path == root else 0o700)
                 if path != root:
                     directories[path.relative_to(root).as_posix()] = "0700"
         (root / "RECEIPT.json").chmod(0o600)

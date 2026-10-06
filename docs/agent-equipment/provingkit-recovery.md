@@ -92,6 +92,14 @@ requesting upload approval. The approval names those bytes and the destination;
 plan confirmation alone does not authorize Drive writes. Use the existing
 remote parent and retain the resulting path and transfer report.
 
+Verify the local packet's byte count and SHA-256, then the contained
+`MANIFEST.json` SHA-256, against the independently obtained reviewed
+declaration. Only then use the manifest's `files` array as the closed
+constituent inventory: each record gives a relative `path`, `bytes`, and
+`sha256`. `MANIFEST.json` is outside its own `files` array and is accounted for
+separately by its declared digest. Retain the verified manifest or its exact
+inventory with the owning comparison record before transfer.
+
 The CLI exposes these transfer shapes:
 
 ```sh
@@ -100,16 +108,23 @@ proton-drive filesystem download --json "$remote_packet" "$empty_download_direct
 ```
 
 After upload, independently download the actual packet into a new empty local
-directory. Compare every relative path, file size, and SHA-256 with the
-independently retained packet inventory, including the declared packet digest.
-Require the complete inventory with no missing, extra, renamed, or mismatched
-files. The CLI can report success while skipping files, so its exit status is
-not custody acceptance. Use ordinary files; the download command's handling of
-Proton Docs and Sheets is outside this packet format.
+directory. Verify the downloaded outer packet's byte count and SHA-256 against
+the reviewed declaration, and verify its contained `MANIFEST.json` against the
+separate manifest digest. Compare every constituent's relative path, byte
+count, and SHA-256 with the retained verified inventory. Require the complete
+contained regular-file set to equal that inventory plus `MANIFEST.json`, with
+no missing, extra, renamed, or mismatched members. The CLI can report success
+while skipping files, so its exit status is not custody acceptance. Use ordinary
+files; the download command's handling of Proton Docs and Sheets is outside this
+packet format.
 
 For later recovery, obtain the reviewed declaration independently, establish
 interactive access on the recovery machine, and repeat the empty-directory
-download and complete comparison. Stop before import if verification differs.
+download and complete comparison. If a previously retained inventory is
+unavailable, the downloaded manifest supplies the digest-bound list only after
+both the outer-packet and manifest checks against the independent declaration
+pass. Retain that verified manifest and the complete comparison in the recovery
+record. Stop before import if verification differs.
 
 ## Import without activating installations
 
@@ -166,6 +181,28 @@ procedure revision:
   mismatched packet inputs are rejected before materialization, and mismatched
   existing directories remain unchanged.
 - The exercise invokes no native clients and leaves the profile inactive.
+
+For the fresh-home check, set `disposable_home` to the absolute path of a new
+empty disposable directory. Set `reviewed_selection` to the absolute path of
+the independently reviewed inactive selection projection and `verified_packet`
+to the verified local packet. Bind the import explicitly:
+
+```sh
+HOME="$disposable_home" provingkit-installations import-artifacts \
+  --selection "$reviewed_selection" \
+  --recovery "$recovery_name" \
+  --packet "$verified_packet"
+```
+
+Compare the reconstructed artifact and evidence directories beneath that home,
+then repeat with the same home, selection, and packet:
+
+```sh
+HOME="$disposable_home" provingkit-installations import-artifacts \
+  --selection "$reviewed_selection" \
+  --recovery "$recovery_name" \
+  --packet "$verified_packet"
+```
 
 Record the declaration and procedure revision, packet identity and remote
 location, download comparison, reconstruction results, and any unverified
