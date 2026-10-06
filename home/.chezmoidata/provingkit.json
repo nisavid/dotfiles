@@ -162,6 +162,27 @@
         },
         "retirements": []
       }
+    },
+    "recovery_packets": {
+      "alpha4-8f57be695ae0-linux-amd64": {
+        "schema": "provingkit-recovery-selection-v1",
+        "version": "0.1.0-alpha.4",
+        "source": {
+          "repository": "https://github.com/nisavid/provingkit",
+          "commit": "8f57be695ae083ff6a96b424b2e2e5edb9532208"
+        },
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "packet": {
+          "bytes": 1355092,
+          "sha256": "6864241cb0eb55a52a9c3274756be34766cbf33e9194e3d233a666f9310685d6"
+        },
+        "manifest_sha256": "153ccbe7f677467e1bda02a1379c24852e47acea9ed9ae3fb5aeaa06e85c53b6",
+        "intended_remote_path": "/my-files/Project Recovery/Provingkit/0.1.0-alpha.4/source-8f57be695ae083ff6a96b424b2e2e5edb9532208/packet-sha256-6864241cb0eb55a52a9c3274756be34766cbf33e9194e3d233a666f9310685d6/provingkit-alpha4-8f57be695ae0-linux-amd64-recovery.tar.gz",
+        "retention": "keep-until-approved-retirement"
+      }
     }
   }
 }

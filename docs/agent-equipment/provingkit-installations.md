@@ -10,6 +10,9 @@ configuration. Interactive discovery, skill behavior, preview qualification,
 publication, live activation, and source retirement have separate acceptance
 steps. The generic protected `agent-equipment apply` route remains unavailable.
 
+For alpha.4 packet custody, manual retrieval, or fresh-home artifact import,
+use [the focused recovery procedure](provingkit-recovery.md) before installation.
+
 ## Source and selection
 
 | Source | Responsibility |
