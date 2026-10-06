@@ -71,6 +71,7 @@ class SyntheticDirectoryXattrs:
 
     def __init__(self):
         self.values = {}
+        self.descriptors = {}
 
     @staticmethod
     def key(path, name):
@@ -78,7 +79,6 @@ class SyntheticDirectoryXattrs:
         return (
             information.st_dev,
             information.st_ino,
-            information.st_ctime_ns,
             name,
         )
 
@@ -89,13 +89,31 @@ class SyntheticDirectoryXattrs:
             raise OSError(XATTR_MISSING_ERRNO, "synthetic xattr is absent") from None
 
     def set(self, path, name, value, *args, **kwargs):
-        self.values[self.key(path, name)] = value
+        key = self.key(path, name)
+        identity = key[:2]
+        if identity not in self.descriptors:
+            flags = os.O_RDONLY
+            flags |= getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_DIRECTORY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            information = os.fstat(descriptor)
+            if (information.st_dev, information.st_ino) != identity:
+                os.close(descriptor)
+                raise OSError(errno.ESTALE, "synthetic xattr target changed")
+            self.descriptors[identity] = descriptor
+        self.values[key] = value
 
     def remove(self, path, name, *args, **kwargs):
         try:
             del self.values[self.key(path, name)]
         except KeyError:
             raise OSError(XATTR_MISSING_ERRNO, "synthetic xattr is absent") from None
+
+    def close(self):
+        for descriptor in self.descriptors.values():
+            os.close(descriptor)
+        self.descriptors.clear()
 
 
 class ServiceContractTests(unittest.TestCase):
@@ -234,9 +252,16 @@ class PublicCommandTests(unittest.TestCase):
     def setUp(self):
         if sys.platform == "darwin":
             xattrs = SyntheticDirectoryXattrs()
-            self.enterContext(mock.patch("os.getxattr", side_effect=xattrs.get))
-            self.enterContext(mock.patch("os.setxattr", side_effect=xattrs.set))
-            self.enterContext(mock.patch("os.removexattr", side_effect=xattrs.remove))
+            self.addCleanup(xattrs.close)
+            self.enterContext(mock.patch(
+                "os.getxattr", side_effect=xattrs.get, create=True
+            ))
+            self.enterContext(mock.patch(
+                "os.setxattr", side_effect=xattrs.set, create=True
+            ))
+            self.enterContext(mock.patch(
+                "os.removexattr", side_effect=xattrs.remove, create=True
+            ))
 
     def test_status_rejects_relative_xdg_paths_without_external_calls(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -2021,6 +2046,161 @@ class PublicCommandTests(unittest.TestCase):
             cleaned = invoke(["_post-stop"], environment, run=no_process, opened=opened)
             self.assertEqual((0, "", ""), cleaned)
             self.assertFalse(mount.exists())
+
+    def test_post_stop_rejects_mounts_before_traversing_retained_cleanup_target(self):
+        for mounted_case in ("matching", "foreign", "duplicate"):
+            for marker_present in (True, False):
+                with self.subTest(
+                    mounted_case=mounted_case, marker_present=marker_present
+                ), tempfile.TemporaryDirectory() as temporary:
+                    root = pathlib.Path(temporary)
+                    config_parent = root / "config/rclone"
+                    mount = root / "data/proton-drive-desktop/files"
+                    runtime = root / "run"
+                    config_parent.mkdir(parents=True, mode=0o700)
+                    mount.mkdir(parents=True, mode=0o700)
+                    runtime.mkdir(mode=0o700)
+                    config = config_parent / "proton-drive.conf"
+                    config.write_text("encrypted-placeholder")
+                    config.chmod(0o600)
+                    unknown_name = "user.proton-drive-desktop.keep"
+                    unknown_value = b"preserve-foreign-xattr"
+                    os.setxattr(mount, unknown_name, unknown_value)
+                    environment = {
+                        "HOME": temporary,
+                        "XDG_CONFIG_HOME": str(root / "config"),
+                        "XDG_DATA_HOME": str(root / "data"),
+                        "XDG_RUNTIME_DIR": str(runtime),
+                    }
+
+                    def unmounted_open(name, *args, **kwargs):
+                        if name == "/proc/self/mountinfo":
+                            return io.StringIO("")
+                        return io.open(name, *args, **kwargs)
+
+                    self.assertEqual(
+                        (0, "", ""),
+                        invoke(["_prepare"], environment, opened=unmounted_open),
+                    )
+                    private_runtime = runtime / "proton-drive-desktop"
+                    marker = private_runtime / "mountpoint.json"
+                    phase = private_runtime / "mountpoint-phase.json"
+                    with mock.patch("os.removexattr", side_effect=SystemExit(96)):
+                        interrupted = invoke(
+                            ["_post-stop"], environment, opened=unmounted_open
+                        )
+                    self.assertEqual(96, interrupted[0])
+                    self.assertTrue(marker.is_file())
+                    self.assertTrue(phase.is_file())
+                    if not marker_present:
+                        marker.unlink()
+
+                    phase_before = phase.read_bytes()
+                    marker_before = marker.read_bytes() if marker_present else None
+                    information_before = mount.lstat()
+                    identity_before = os.getxattr(
+                        mount, "user.proton-drive-desktop.identity"
+                    )
+                    encoded_mount = str(mount).replace(" ", "\\040")
+                    matching = (
+                        f"187 30 0:187 / {encoded_mount} ro,nosuid,nodev - "
+                        "fuse.rclone proton-dolphin: ro\n"
+                    )
+                    mountinfo = {
+                        "matching": matching,
+                        "foreign": (
+                            f"188 30 0:188 / {encoded_mount} rw,nosuid,nodev - "
+                            "fuse.other local: rw\n"
+                        ),
+                        "duplicate": matching + matching.replace("187", "189"),
+                    }[mounted_case]
+                    target_accesses = []
+                    target_mutations = []
+                    original_lstat = pathlib.Path.lstat
+                    original_getxattr = os.getxattr
+                    original_scandir = os.scandir
+                    original_setxattr = os.setxattr
+                    original_removexattr = os.removexattr
+
+                    def watched_lstat(path, *args, **kwargs):
+                        if path == mount:
+                            target_accesses.append("lstat")
+                        return original_lstat(path, *args, **kwargs)
+
+                    def watched_getxattr(path, *args, **kwargs):
+                        if pathlib.Path(path) == mount:
+                            target_accesses.append("getxattr")
+                        return original_getxattr(path, *args, **kwargs)
+
+                    def watched_scandir(path, *args, **kwargs):
+                        if pathlib.Path(path) == mount:
+                            target_accesses.append("scandir")
+                        return original_scandir(path, *args, **kwargs)
+
+                    def watched_setxattr(path, *args, **kwargs):
+                        if pathlib.Path(path) == mount:
+                            target_mutations.append("setxattr")
+                        return original_setxattr(path, *args, **kwargs)
+
+                    def watched_removexattr(path, *args, **kwargs):
+                        if pathlib.Path(path) == mount:
+                            target_mutations.append("removexattr")
+                        return original_removexattr(path, *args, **kwargs)
+
+                    def mounted_open(name, *args, **kwargs):
+                        if name == "/proc/self/mountinfo":
+                            return io.StringIO(mountinfo)
+                        return io.open(name, *args, **kwargs)
+
+                    with mock.patch.object(
+                        pathlib.Path,
+                        "lstat",
+                        autospec=True,
+                        side_effect=watched_lstat,
+                    ), mock.patch(
+                        "os.getxattr", side_effect=watched_getxattr
+                    ), mock.patch(
+                        "os.scandir", side_effect=watched_scandir
+                    ), mock.patch(
+                        "os.setxattr", side_effect=watched_setxattr
+                    ), mock.patch(
+                        "os.removexattr", side_effect=watched_removexattr
+                    ):
+                        result = invoke(
+                            ["_post-stop"], environment, opened=mounted_open
+                        )
+
+                    self.assertEqual(
+                        (1, "", "residual mount remains\n"), result
+                    )
+                    self.assertEqual([], target_accesses)
+                    self.assertEqual([], target_mutations)
+                    self.assertEqual(phase_before, phase.read_bytes())
+                    self.assertEqual(marker_present, marker.exists())
+                    if marker_present:
+                        self.assertEqual(marker_before, marker.read_bytes())
+                    information_after = mount.lstat()
+                    self.assertEqual(
+                        (
+                            information_before.st_mode,
+                            information_before.st_dev,
+                            information_before.st_ino,
+                        ),
+                        (
+                            information_after.st_mode,
+                            information_after.st_dev,
+                            information_after.st_ino,
+                        ),
+                    )
+                    self.assertEqual(
+                        identity_before,
+                        os.getxattr(
+                            mount, "user.proton-drive-desktop.identity"
+                        ),
+                    )
+                    self.assertEqual(
+                        unknown_value, os.getxattr(mount, unknown_name)
+                    )
 
     def test_service_prepare_rejects_mounted_targets_before_target_traversal(self):
         for mounted_case in ("matching", "wrong-source", "duplicate"):

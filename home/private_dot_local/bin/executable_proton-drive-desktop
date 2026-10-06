@@ -782,6 +782,8 @@ def credential(resolved):
 
 
 def cleanup_mountpoint(resolved):
+    if mount_state(resolved["mount"]) != "absent":
+        raise OperationError("residual mount remains")
     phase = read_phase(resolved)
     if phase is not None:
         if phase["phase"] != "cleanup-preexisting":
@@ -817,15 +819,11 @@ def cleanup_mountpoint(resolved):
         with os.scandir(mountpoint) as entries:
             if next(entries, None) is not None:
                 raise OperationError("mountpoint is not empty; preserving it")
-        if mount_state(mountpoint) != "absent":
-            raise OperationError("residual mount remains")
         remove_directory_nonce(mountpoint)
         marker_path(resolved).unlink()
         remove_phase(resolved)
         return
     ownership = read_marker(resolved, missing_ok=True)
-    if mount_state(resolved["mount"]) != "absent":
-        raise OperationError("residual mount remains")
     if ownership is None:
         return
     marker = marker_path(resolved)
