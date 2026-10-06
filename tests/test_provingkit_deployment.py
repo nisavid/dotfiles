@@ -180,6 +180,21 @@ class ProvingkitDeploymentTests(unittest.TestCase):
         self.assertEqual(opted_out.returncode, 0, opted_out.stderr)
         self.assertIsNone(json.loads(opted_out.stdout)["profile"])
 
+    def test_recovery_packets_are_projected_without_activating_a_profile(self):
+        data_path = self.source / ".chezmoidata/provingkit.json"
+        data = json.loads(data_path.read_text())
+        recoveries = data["provingkit"]["recovery_packets"]
+
+        result = self.chezmoi(
+            "execute-template", '{{ includeTemplate "provingkit-selection.tmpl" . }}'
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        selection = json.loads(result.stdout)
+        self.assertEqual(selection["recovery_packets"], recoveries)
+        self.assertIsNone(selection["profile"])
+        self.assertIsNone(selection["profile_name"])
+
     @unittest.skipUnless(
         os.uname().sysname == "Linux", "active materialization targets Linux"
     )
