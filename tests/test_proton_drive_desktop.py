@@ -349,6 +349,8 @@ class ServiceContractTests(unittest.TestCase):
     def test_systemd_accepts_disposable_user_lifecycle_fixture(self):
         analyzer = shutil.which("systemd-analyze")
         self.assertIsNotNone(analyzer, "systemd-analyze is required on Linux")
+        bus_runner = shutil.which("dbus-run-session")
+        self.assertIsNotNone(bus_runner, "dbus-run-session is required on Linux")
         source_unit = (
             ROOT / "home/dot_config/systemd/user/proton-drive-desktop.service"
         ).read_text()
@@ -386,6 +388,9 @@ class ServiceContractTests(unittest.TestCase):
                 )
                 return subprocess.run(
                     [
+                        bus_runner, "--", "/bin/sh", "-c",
+                        'DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" exec "$@"',
+                        "verify-user-unit",
                         analyzer, "--user", "--generators=no", "verify",
                         str(unit_dir / "proton-drive-desktop.service"),
                         str(unit_dir / "plasma-workspace.target"),
