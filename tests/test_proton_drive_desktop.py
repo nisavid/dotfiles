@@ -341,7 +341,7 @@ class ServiceContractTests(unittest.TestCase):
             )
 
             self.assertEqual(
-                (1, "", "unsafe managed mountpoint ancestor\n"), result
+                (1, "", "unsafe rclone config ancestor\n"), result
             )
             self.assertFalse((data_home / "proton-drive-desktop").exists())
 
@@ -1489,6 +1489,86 @@ class PublicCommandTests(unittest.TestCase):
             )
             self.assertFalse((data_home / "proton-drive-desktop").exists())
 
+    def test_prepare_rejects_world_writable_transitive_config_ancestor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            unsafe = root / "unsafe"
+            config_parent = unsafe / "private/config/rclone"
+            data_home = root / "data"
+            runtime = root / "run"
+            config_parent.mkdir(parents=True, mode=0o700)
+            data_home.mkdir(mode=0o700)
+            runtime.mkdir(mode=0o700)
+            unsafe.chmod(0o777)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            result = invoke(
+                ["_prepare"],
+                {
+                    "HOME": temporary,
+                    "XDG_CONFIG_HOME": str(unsafe / "private/config"),
+                    "XDG_DATA_HOME": str(data_home),
+                    "XDG_RUNTIME_DIR": str(runtime),
+                },
+                opened=opened,
+            )
+
+            self.assertEqual(
+                (1, "", "unsafe rclone config ancestor\n"), result
+            )
+            self.assertFalse(
+                (runtime / "proton-drive-desktop/mountpoint.json").exists()
+            )
+            self.assertFalse((data_home / "proton-drive-desktop").exists())
+
+    def test_prepare_rejects_symlinked_transitive_config_ancestor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            actual = root / "actual/private/config"
+            linked = root / "linked"
+            config_parent = linked / "private/config/rclone"
+            data_home = root / "data"
+            runtime = root / "run"
+            actual.mkdir(parents=True, mode=0o700)
+            linked.symlink_to(root / "actual", target_is_directory=True)
+            (actual / "rclone").mkdir(mode=0o700)
+            data_home.mkdir(mode=0o700)
+            runtime.mkdir(mode=0o700)
+            config = actual / "rclone/proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            result = invoke(
+                ["_prepare"],
+                {
+                    "HOME": temporary,
+                    "XDG_CONFIG_HOME": str(linked / "private/config"),
+                    "XDG_DATA_HOME": str(data_home),
+                    "XDG_RUNTIME_DIR": str(runtime),
+                },
+                opened=opened,
+            )
+
+            self.assertEqual(
+                (1, "", "unsafe rclone config ancestor\n"), result
+            )
+            self.assertFalse(
+                (runtime / "proton-drive-desktop/mountpoint.json").exists()
+            )
+            self.assertFalse((data_home / "proton-drive-desktop").exists())
+
     def test_prepare_rejects_symlinked_transitive_mount_ancestor(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -1575,6 +1655,66 @@ class PublicCommandTests(unittest.TestCase):
             launch.assert_not_called()
             self.assertEqual(marker_before, marker.read_bytes())
             self.assertTrue((original / "proton-drive-desktop/files").is_dir())
+
+    def test_mount_anchors_config_parent_across_late_ancestor_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_home = root / "config"
+            config_parent = config_home / "rclone"
+            data_home = root / "data"
+            runtime = root / "run"
+            config_parent.mkdir(parents=True, mode=0o700)
+            data_home.mkdir(mode=0o700)
+            runtime.mkdir(mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("trusted-encrypted-placeholder")
+            config.chmod(0o600)
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(config_home),
+                "XDG_DATA_HOME": str(data_home),
+                "XDG_RUNTIME_DIR": str(runtime),
+            }
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            self.assertEqual(
+                (0, "", ""), invoke(["_prepare"], environment, opened=opened)
+            )
+            observed = {}
+
+            def replace_before_rclone_opens_config(path, arguments, exec_environment):
+                original = root / "trusted-config"
+                root.chmod(0o777)
+                config_home.rename(original)
+                replacement_parent = config_home / "rclone"
+                replacement_parent.mkdir(parents=True, mode=0o700)
+                replacement = replacement_parent / "proton-drive.conf"
+                replacement.write_text("attacker-controlled-placeholder")
+                replacement.chmod(0o600)
+                config_argument = arguments[arguments.index("--config") + 1]
+                observed["argument"] = config_argument
+                observed["contents"] = pathlib.Path(config_argument).read_text()
+                raise SystemExit(0)
+
+            result = invoke(
+                ["_mount"],
+                environment,
+                execve=replace_before_rclone_opens_config,
+                opened=opened,
+            )
+
+            self.assertEqual((0, "", ""), result)
+            self.assertRegex(
+                observed["argument"],
+                r"\A/proc/self/fd/[0-9]+/proton-drive\.conf\Z",
+            )
+            self.assertEqual(
+                "trusted-encrypted-placeholder", observed["contents"]
+            )
 
     def test_mount_rechecks_data_home_owner_and_preserves_prepared_state(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3393,12 +3533,19 @@ class PublicCommandTests(unittest.TestCase):
             self.assertEqual("", output)
             self.assertEqual("unable to execute rclone\n", error)
             self.assertEqual("/usr/bin/rclone", captured["path"])
+            config_argument = captured["arguments"][
+                captured["arguments"].index("--config") + 1
+            ]
+            self.assertRegex(
+                config_argument,
+                r"\A/proc/self/fd/[0-9]+/proton-drive\.conf\Z",
+            )
             self.assertEqual(
                 [
                     "/usr/bin/rclone", "mount", "proton-dolphin:",
                     str(mount),
                     "--devname", mount_tag,
-                    "--config", str(config),
+                    "--config", config_argument,
                     "--password-command",
                     f'"{copied_program}" _credential {mount_tag}',
                     "--ask-password=false", "--read-only",
@@ -3943,10 +4090,7 @@ class PublicCommandTests(unittest.TestCase):
     def test_credential_helper_qualifies_kwallet_and_looks_up_exact_config_id(self):
         with tempfile.TemporaryDirectory(prefix="proton config ") as temporary:
             root = pathlib.Path(temporary)
-            actual_config = root / "actual config"
-            config_home = root / "config link spelling"
-            actual_config.mkdir()
-            config_home.symlink_to(actual_config, target_is_directory=True)
+            config_home = root / "config path spelling"
             config_parent = config_home / "rclone"
             config_parent.mkdir(parents=True, mode=0o700)
             config = config_parent / "proton-drive.conf"
@@ -8296,6 +8440,120 @@ class PublicCommandTests(unittest.TestCase):
                 recovered["nonce"].encode("ascii"),
                 os.getxattr(mount, "user.proton-drive-desktop.identity"),
             )
+
+    def test_interrupted_missing_leaf_recreation_recovers_exact_predecessor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_parent = root / "config/rclone"
+            data_home = root / "data"
+            runtime = root / "run"
+            config_parent.mkdir(parents=True, mode=0o700)
+            data_home.mkdir(mode=0o700)
+            runtime.mkdir(mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+            mount = data_home / "proton-drive-desktop/files"
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(data_home),
+                "XDG_RUNTIME_DIR": str(runtime),
+            }
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            self.assertEqual(
+                (0, "", ""), invoke(["_prepare"], environment, opened=opened)
+            )
+            private_runtime = runtime / "proton-drive-desktop"
+            marker = private_runtime / "mountpoint.json"
+            phase = private_runtime / "mountpoint-phase.json"
+            predecessor_bytes = marker.read_bytes()
+            predecessor = json.loads(predecessor_bytes)
+            mount.rmdir()
+
+            with mock.patch("os.setxattr", side_effect=SystemExit(95)):
+                interrupted = invoke(["_prepare"], environment, opened=opened)
+
+            self.assertEqual(95, interrupted[0])
+            self.assertEqual(predecessor_bytes, marker.read_bytes())
+            operation = json.loads(phase.read_text())
+            self.assertEqual("prepare-publish", operation["phase"])
+            self.assertNotEqual(predecessor["nonce"], operation["nonce"])
+
+            self.assertEqual(
+                (0, "", ""), invoke(["_prepare"], environment, opened=opened)
+            )
+            recovered = json.loads(marker.read_text())
+            self.assertFalse(phase.exists())
+            self.assertTrue(recovered["created"])
+            self.assertNotEqual(predecessor["nonce"], recovered["nonce"])
+            self.assertEqual(
+                recovered["nonce"].encode("ascii"),
+                os.getxattr(mount, "user.proton-drive-desktop.identity"),
+            )
+
+    def test_interrupted_missing_leaf_recreation_rejects_unrelated_marker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_parent = root / "config/rclone"
+            data_home = root / "data"
+            runtime = root / "run"
+            config_parent.mkdir(parents=True, mode=0o700)
+            data_home.mkdir(mode=0o700)
+            runtime.mkdir(mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+            mount = data_home / "proton-drive-desktop/files"
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(data_home),
+                "XDG_RUNTIME_DIR": str(runtime),
+            }
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            self.assertEqual(
+                (0, "", ""), invoke(["_prepare"], environment, opened=opened)
+            )
+            private_runtime = runtime / "proton-drive-desktop"
+            marker = private_runtime / "mountpoint.json"
+            phase = private_runtime / "mountpoint-phase.json"
+            mount.rmdir()
+            with mock.patch("os.setxattr", side_effect=SystemExit(95)):
+                self.assertEqual(
+                    95, invoke(["_prepare"], environment, opened=opened)[0]
+                )
+
+            unrelated = json.loads(marker.read_text())
+            unrelated["mount_tag"] = "proton-drive-desktop-" + "cd" * 32
+            marker.write_text(json.dumps(unrelated, separators=(",", ":")))
+            marker_before = marker.read_bytes()
+            phase_before = phase.read_bytes()
+
+            self.assertEqual(
+                (
+                    1,
+                    "",
+                    "interrupted mountpoint identity publication requires "
+                    "stopped recovery\n",
+                ),
+                invoke(["_prepare"], environment, opened=opened),
+            )
+            self.assertEqual(marker_before, marker.read_bytes())
+            self.assertEqual(phase_before, phase.read_bytes())
+            with self.assertRaises(OSError) as missing:
+                os.getxattr(mount, "user.proton-drive-desktop.identity")
+            self.assertEqual(XATTR_MISSING_ERRNO, missing.exception.errno)
 
     def test_legacy_record_requires_a_stopped_session_transition_for_existing_leaf(self):
         for command in ("_prepare", "_mount", "_post-stop"):

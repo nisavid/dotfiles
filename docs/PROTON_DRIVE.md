@@ -70,6 +70,12 @@ in `$XDG_CONFIG_HOME/rclone/proton-drive.conf` (normally
 entry. The integration consumes that binding; it does not enroll an account.
 Keep the configuration in place so rclone can update its session tokens.
 
+The configuration must be a regular, user-owned mode-0600 file. Its parent
+directory must also belong to the user. Every directory from `/` through that
+parent must be free of symlinks and group or other write permissions. Custom
+configuration paths below `/tmp` are unsupported, including private descendants
+of that sticky directory.
+
 The KWallet encryption-key entry must have the Secret Service attributes
 `application=rclone`, `purpose=proton-drive-config`, and `config-id` equal to
 the lowercase SHA-256 of the UTF-8 absolute configuration path. Moving the

@@ -291,20 +291,47 @@ def open_safe_directory_chain(path, label, missing_ok=False, owned_paths=None):
         raise
 
 
-def validate_config(resolved):
+@contextlib.contextmanager
+def open_validated_config(resolved):
     config = resolved["config"]
+    parent_descriptor = open_safe_directory_chain(
+        config.parent,
+        "rclone config ancestor",
+        owned_paths={config.parent: "rclone config directory"},
+    )
+    descriptor = None
     try:
-        information = config.lstat()
-    except FileNotFoundError:
-        raise OperationError("encrypted rclone config is missing") from None
-    if (
-        not stat.S_ISREG(information.st_mode)
-        or config.is_symlink()
-        or information.st_uid != os.getuid()
-        or stat.S_IMODE(information.st_mode) != 0o600
-    ):
-        raise OperationError("encrypted rclone config is not a user-owned mode-0600 file")
-    require_directory(config.parent, "rclone config directory")
+        try:
+            descriptor = os.open(
+                config.name,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                dir_fd=parent_descriptor,
+            )
+        except FileNotFoundError:
+            raise OperationError("encrypted rclone config is missing") from None
+        except OSError:
+            raise OperationError(
+                "encrypted rclone config is not a user-owned mode-0600 file"
+            ) from None
+        information = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(information.st_mode)
+            or information.st_uid != os.getuid()
+            or stat.S_IMODE(information.st_mode) != 0o600
+        ):
+            raise OperationError(
+                "encrypted rclone config is not a user-owned mode-0600 file"
+            )
+        yield parent_descriptor
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent_descriptor)
+
+
+def validate_config(resolved):
+    with open_validated_config(resolved):
+        pass
 
 
 def ensure_runtime(resolved):
@@ -541,6 +568,19 @@ def write_marker(resolved, ownership):
         json.dump(ownership, marker_file, separators=(",", ":"))
     os.chmod(temporary, 0o600)
     os.replace(temporary, marker_path(resolved))
+
+
+def predecessor_mount_tag(ownership, nonce):
+    encoded = json.dumps(
+        ownership, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    commitment = hashlib.sha256(
+        b"proton-drive-desktop predecessor\0"
+        + nonce.encode("ascii")
+        + b"\0"
+        + encoded
+    ).hexdigest()
+    return f"proton-drive-desktop-{commitment}"
 
 
 def require_unmounted_target(resolved):
@@ -841,6 +881,12 @@ def prepare_mountpoint(resolved):
                     if (
                         retained_marker is not None
                         and retained_marker != recovered_marker
+                        and not secrets.compare_digest(
+                            predecessor_mount_tag(
+                                retained_marker, phase["nonce"]
+                            ),
+                            phase["mount_tag"],
+                        )
                     ):
                         raise OperationError(INTERRUPTED_PUBLICATION)
                     nonce = read_directory_nonce(descriptor)
@@ -848,7 +894,7 @@ def prepare_mountpoint(resolved):
                         set_directory_nonce(descriptor, phase["nonce"])
                     elif nonce != phase["nonce"]:
                         raise OperationError(INTERRUPTED_PUBLICATION)
-                    if retained_marker is None:
+                    if retained_marker != recovered_marker:
                         try:
                             write_marker(resolved, recovered_marker)
                         except OSError:
@@ -875,6 +921,8 @@ def prepare_mountpoint(resolved):
             planned_nonce = None
             if descriptor is None:
                 planned_nonce = secrets.token_hex(32)
+                if prior is not None:
+                    mount_tag = predecessor_mount_tag(prior, planned_nonce)
                 write_phase(resolved, {
                     "phase": "prepare-create",
                     "mount": str(mountpoint),
@@ -1135,29 +1183,34 @@ def require_rclone_version():
 
 
 def mount_exec(resolved):
-    validate_config(resolved)
     environment = rclone_environment()
-    with open_prepared_mountpoint(resolved) as (ownership, descriptor):
-        arguments = [
-            "/usr/bin/rclone", "mount", "proton-dolphin:",
-            str(resolved["mount"]),
-            "--devname", ownership["mount_tag"],
-            "--config", str(resolved["config"]),
-            "--password-command", password_command(ownership["mount_tag"]),
-            "--ask-password=false", "--read-only",
-            "--protondrive-enable-caching=false", "--vfs-cache-mode=off",
-            "--dir-cache-time=2s", "--attr-timeout=1s", "--log-level=ERROR",
-        ]
-        # open_prepared_mountpoint performed the final descriptor-backed
-        # pathname inspection. The supported contract reserves the managed
-        # parent and mountpoint throughout startup, the mounted session, and
-        # completed shutdown, including logout and direct service stop. Other
-        # programs must not rename or replace them, mount over the managed path,
-        # or independently unmount it during that interval. This last recorded-
-        # identity check and the held close-on-exec descriptors do not enforce
-        # that reservation or guarantee later pathname identity.
-        require_recorded_directory(descriptor, ownership, os.fstat(descriptor))
-        os.execve("/usr/bin/rclone", arguments, environment)
+    with open_validated_config(resolved) as config_parent_descriptor:
+        os.set_inheritable(config_parent_descriptor, True)
+        config_argument = (
+            f"/proc/self/fd/{config_parent_descriptor}/"
+            f"{resolved['config'].name}"
+        )
+        with open_prepared_mountpoint(resolved) as (ownership, descriptor):
+            arguments = [
+                "/usr/bin/rclone", "mount", "proton-dolphin:",
+                str(resolved["mount"]),
+                "--devname", ownership["mount_tag"],
+                "--config", config_argument,
+                "--password-command", password_command(ownership["mount_tag"]),
+                "--ask-password=false", "--read-only",
+                "--protondrive-enable-caching=false", "--vfs-cache-mode=off",
+                "--dir-cache-time=2s", "--attr-timeout=1s", "--log-level=ERROR",
+            ]
+            # open_prepared_mountpoint performed the final descriptor-backed
+            # pathname inspection. The supported contract reserves the managed
+            # parent and mountpoint throughout startup, the mounted session, and
+            # completed shutdown, including logout and direct service stop. Other
+            # programs must not rename or replace them, mount over the managed path,
+            # or independently unmount it during that interval. This last recorded-
+            # identity check and the held close-on-exec descriptors do not enforce
+            # that reservation or guarantee later pathname identity.
+            require_recorded_directory(descriptor, ownership, os.fstat(descriptor))
+            os.execve("/usr/bin/rclone", arguments, environment)
     raise OperationError("unable to execute rclone")
 
 
