@@ -1,6 +1,6 @@
-# Buildkite pipeline (dotfiles) for the portability test battery, on Linux only.
-# It runs the groups from scripts/ci-test-group in parallel; GitHub Actions runs
-# the same groups on macOS. See docs/research/BUILDKITE_GHA_PR_BUILDS.md.
+# Retained native pipeline for the archived dotfiles Buildkite experiment.
+# GitHub Actions runs the portability battery on both platforms. Do not
+# reactivate this pipeline; see docs/research/BUILDKITE_GHA_PR_BUILDS.md.
 steps:
   - group: ":linux: Ubuntu"
     key: linux
