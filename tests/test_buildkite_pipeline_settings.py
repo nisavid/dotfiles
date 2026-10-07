@@ -82,6 +82,13 @@ class BuildkitePipelineSettingsTests(unittest.TestCase):
         self.assertIn("Queue state, active builds, and spending limits are not checked", result.stdout)
         self.assertEqual(self.calls(), [["api", "--no-pager", "-q", "/pipelines/dotfiles"]])
 
+    def test_documented_utc_archive_timestamp_passes(self) -> None:
+        self.pipeline["archived_at"] = "2021-06-01 08:23:35 UTC"
+        result = self.run_script("check")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("pipeline dotfiles is archived", result.stdout)
+        self.assertEqual(self.calls(), [["api", "--no-pager", "-q", "/pipelines/dotfiles"]])
+
     def test_apply_is_retired_without_provider_access(self) -> None:
         for arguments in (("apply",), ("apply", "--yes")):
             with self.subTest(arguments=arguments):
@@ -107,7 +114,10 @@ class BuildkitePipelineSettingsTests(unittest.TestCase):
         self.assertEqual(self.calls(), [["api", "--no-pager", "-q", "/pipelines/dotfiles"]])
 
     def test_missing_or_malformed_archive_state_is_not_success(self) -> None:
-        for value in (True, 1, "", "yesterday", "2026-10-07T07:00:00", [], {}):
+        for value in (
+            True, 1, "", "yesterday", "2026-10-07T07:00:00", [], {},
+            "yesterday UTC", "2021-02-30 08:23:35 UTC", "2021-06-01 UTC",
+        ):
             with self.subTest(value=value):
                 self.pipeline["archived_at"] = value
                 result = self.run_script()

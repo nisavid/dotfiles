@@ -164,6 +164,8 @@ def check(record: dict[str, Any]) -> int:
     try:
         if not isinstance(archived, str) or not archived:
             raise ValueError
+        if archived.endswith(" UTC"):
+            archived = archived.removesuffix(" UTC") + "+00:00"
         instant = datetime.fromisoformat(archived.replace("Z", "+00:00"))
         if instant.tzinfo is None:
             raise ValueError
