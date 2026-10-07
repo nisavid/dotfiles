@@ -12,9 +12,12 @@ import os
 import pathlib
 import re
 import secrets
+import selectors
+import signal
 import stat
 import subprocess
 import sys
+import time
 
 
 class UserError(Exception):
@@ -26,14 +29,29 @@ class OperationError(Exception):
 
 
 STATUS_OBSERVATION_LIMIT = 2
+STARTUP_SETTLE_TIMEOUT_SECONDS = 45
+STARTUP_SETTLE_POLL_SECONDS = 0.1
+CREDENTIAL_MAX_BYTES = 4096
+CREDENTIAL_READ_LIMIT = CREDENTIAL_MAX_BYTES + 3
+CREDENTIAL_TIMEOUT_SECONDS = 10
+CREDENTIAL_TERMINATE_SECONDS = 1
+RCLONE_VERSION = "rclone v1.75.1"
+RCLONE_VERSION_MAX_BYTES = 4096
+RCLONE_VERSION_READ_LIMIT = RCLONE_VERSION_MAX_BYTES + 1
+RCLONE_VERSION_TIMEOUT_SECONDS = 5
+RCLONE_VERSION_TERMINATE_SECONDS = 1
 DIRECTORY_IDENTITY_XATTR = "user.proton-drive-desktop.identity"
 NONCE_PATTERN = re.compile(r"[0-9a-f]{64}")
+MOUNT_TAG_PATTERN = re.compile(r"proton-drive-desktop-[0-9a-f]{64}")
+LEGACY_MARKER_KEYS = frozenset({"mount", "device", "inode", "created"})
+PREPARED_MARKER_KEYS = LEGACY_MARKER_KEYS | {"nonce", "mount_tag"}
+VERIFIED_MARKER_KEYS = PREPARED_MARKER_KEYS | {"mount_id"}
 INTERRUPTED_CREATION = "interrupted mountpoint creation requires stopped recovery"
 INTERRUPTED_PUBLICATION = (
     "interrupted mountpoint identity publication requires stopped recovery"
 )
 INTERRUPTED_CLEANUP = (
-    "interrupted preexisting mountpoint cleanup requires stopped recovery"
+    "interrupted retained mountpoint cleanup requires stopped recovery"
 )
 
 
@@ -59,21 +77,34 @@ def paths():
 
 
 def service_state():
-    completed = subprocess.run(
-        [
-            "/usr/bin/systemctl", "--user", "show", "proton-drive-desktop.service",
-            "--property=ActiveState", "--property=SubState", "--property=Result",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                "/usr/bin/systemctl", "--user", "show",
+                "proton-drive-desktop.service", "--property=ActiveState",
+                "--property=SubState", "--property=Result",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
     if completed.returncode != 0:
-        return {"ActiveState": "failed", "SubState": "failed", "Result": "unknown"}
-    return dict(
-        line.split("=", 1) for line in completed.stdout.splitlines() if "=" in line
-    )
+        return None
+    required = {"ActiveState", "SubState", "Result"}
+    observed = {}
+    for line in completed.stdout.splitlines():
+        if line.count("=") != 1:
+            return None
+        key, value = line.split("=", 1)
+        if key not in required or key in observed or not value:
+            return None
+        observed[key] = value
+    if set(observed) != required:
+        return None
+    return observed
 
 
 def mountinfo_unescape(value):
@@ -82,6 +113,8 @@ def mountinfo_unescape(value):
 
 def mount_details(mountpoint):
     entries = []
+    # Mountinfo collapses dot segments; retained path spellings remain unchanged.
+    expected_mountpoint = os.path.normpath(str(mountpoint))
     with open("/proc/self/mountinfo", encoding="utf-8") as mountinfo:
         for line in mountinfo:
             fields = line.split()
@@ -91,50 +124,88 @@ def mount_details(mountpoint):
                 continue
             if len(fields) <= separator + 3:
                 continue
-            if mountinfo_unescape(fields[4]) == str(mountpoint):
+            if mountinfo_unescape(fields[4]) == expected_mountpoint:
                 entries.append((fields, separator))
     if not entries:
-        return "absent", None
+        return "absent", None, None
     if len(entries) != 1:
-        return "foreign", None
+        return "foreign", None, None
     fields, separator = entries[0]
     options = set(fields[5].split(",")) | set(fields[separator + 3].split(","))
     source = mountinfo_unescape(fields[separator + 2])
-    expected_source = re.fullmatch(
+    legacy_source = re.fullmatch(
         r"proton-dolphin(?:\{[A-Za-z0-9_-]{5}\})?:", source
     )
     if (
         mountinfo_unescape(fields[3]) != "/"
         or fields[separator + 1] != "fuse.rclone"
-        or not expected_source
+        or (not legacy_source and MOUNT_TAG_PATTERN.fullmatch(source) is None)
     ):
-        return "foreign", None
+        return "foreign", None, None
     if "rw" in options or not {"ro", "nosuid", "nodev"}.issubset(options):
-        return "foreign", None
-    return "ready", fields[0]
+        return "foreign", None, None
+    return "ready", fields[0], source
 
 
 def mount_state(mountpoint):
     return mount_details(mountpoint)[0]
 
 
-def public_status(resolved, require_ownership=True):
+def untracked_mountpoint_is_clean(resolved):
+    try:
+        with open_unmounted_mountpoint(resolved, missing_ok=True) as descriptor:
+            if descriptor is None:
+                return True
+            information = os.fstat(descriptor)
+            if information.st_uid != os.getuid() or information.st_mode & 0o022:
+                return False
+            if read_directory_nonce(descriptor) is not None:
+                return False
+            with os.scandir(descriptor) as entries:
+                return next(entries, None) is None
+    except OperationError:
+        return False
+
+
+def stopped_mountpoint_is_clean(resolved):
+    if (
+        read_marker(resolved, missing_ok=True) is not None
+        or read_phase(resolved) is not None
+    ):
+        return True
+    return untracked_mountpoint_is_clean(resolved)
+
+
+def public_status(
+    resolved, require_ownership=True, allow_active_without_mount=False,
+):
     for observation in range(STATUS_OBSERVATION_LIMIT):
         service = service_state()
-        mounted, mount_id = mount_details(resolved["mount"])
-        active = service.get("ActiveState", "failed")
-        if mounted == "foreign":
+        mounted, mount_id, mount_source = mount_details(resolved["mount"])
+        try:
+            with open_mountpoint_parent(resolved, missing_ok=True):
+                pass
+        except OperationError:
+            parent_is_coherent = False
+        else:
+            parent_is_coherent = True
+        active = None if service is None else service["ActiveState"]
+        if service is None:
+            status = "unknown", 1
+        elif not parent_is_coherent or mounted == "foreign":
             status = "inconsistent/foreign state", 1
         elif active == "activating":
             status = "starting", 3
         elif active == "deactivating":
             status = "stopping", 3
         elif active == "active":
-            if mounted != "ready":
+            if allow_active_without_mount and mounted == "absent":
+                status = "active without mount", 3
+            elif mounted != "ready":
                 status = "inconsistent/foreign state", 1
             elif require_ownership:
                 try:
-                    require_owned_mount(resolved, mount_id)
+                    require_owned_mount(resolved, mount_id, mount_source)
                 except OperationError:
                     status = "inconsistent/foreign state", 1
                 else:
@@ -146,11 +217,17 @@ def public_status(resolved, require_ownership=True):
         elif active == "failed":
             status = "failed", 1
         elif active == "inactive" and mounted == "absent":
-            status = "stopped", 0
+            status = (
+                ("stopped", 0)
+                if stopped_mountpoint_is_clean(resolved)
+                else ("inconsistent/foreign state", 1)
+            )
         else:
             status = "inconsistent/foreign state", 1
         if (
-            status[0] == "inconsistent/foreign state"
+            status[0] in {
+                "unknown", "inconsistent/foreign state", "active without mount",
+            }
             and observation + 1 < STATUS_OBSERVATION_LIMIT
         ):
             continue
@@ -169,6 +246,49 @@ def require_directory(path, label, owner=False):
         raise OperationError(f"unsafe {label}")
     if information.st_mode & 0o022:
         raise OperationError(f"unsafe permissions on {label}")
+
+
+def open_safe_directory_chain(path, label, missing_ok=False, owned_paths=None):
+    owned_paths = owned_paths or {}
+    flags = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    descriptor = os.open("/", flags)
+    try:
+        information = os.fstat(descriptor)
+        if information.st_mode & 0o022:
+            raise OperationError(f"unsafe {label}")
+        root_owner_label = owned_paths.get(pathlib.Path("/"))
+        if root_owner_label is not None and information.st_uid != os.getuid():
+            raise OperationError(f"unsafe {root_owner_label}")
+        current_path = pathlib.Path("/")
+        for component in path.parts[1:]:
+            try:
+                next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                if missing_ok:
+                    os.close(descriptor)
+                    return None
+                raise OperationError(f"{label} is missing") from None
+            except OSError:
+                raise OperationError(f"unsafe {label}") from None
+            try:
+                next_information = os.fstat(next_descriptor)
+            except BaseException:
+                os.close(next_descriptor)
+                raise
+            if next_information.st_mode & 0o022:
+                os.close(next_descriptor)
+                raise OperationError(f"unsafe {label}")
+            current_path /= component
+            owner_label = owned_paths.get(current_path)
+            if owner_label is not None and next_information.st_uid != os.getuid():
+                os.close(next_descriptor)
+                raise OperationError(f"unsafe {owner_label}")
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def validate_config(resolved):
@@ -298,20 +418,22 @@ def read_phase(resolved):
         and isinstance(phase.get("created"), bool)
         and isinstance(phase.get("nonce"), str)
         and NONCE_PATTERN.fullmatch(phase["nonce"]) is not None
+        and isinstance(phase.get("mount_tag"), str)
+        and MOUNT_TAG_PATTERN.fullmatch(phase["mount_tag"]) is not None
     )
     if name == "prepare-create":
         valid = common_valid and phase["created"] is True and set(phase) == {
-            "phase", "mount", "created", "nonce",
+            "phase", "mount", "created", "nonce", "mount_tag",
         }
-    elif name in {"prepare-publish", "cleanup-preexisting"}:
+    elif name in {"prepare-publish", "cleanup-retained"}:
         valid = (
             common_valid
             and type(phase.get("device")) is int
             and type(phase.get("inode")) is int
             and set(phase) == {
                 "phase", "mount", "device", "inode", "created", "nonce",
+                "mount_tag",
             }
-            and (name != "cleanup-preexisting" or phase["created"] is False)
         )
     else:
         valid = False
@@ -360,6 +482,9 @@ def read_marker(resolved, missing_ok=False, error_message="mountpoint ownership 
         raise OperationError(error_message) from None
     if (
         not isinstance(ownership, dict)
+        or set(ownership) not in {
+            LEGACY_MARKER_KEYS, PREPARED_MARKER_KEYS, VERIFIED_MARKER_KEYS,
+        }
         or not isinstance(ownership.get("mount"), str)
         or type(ownership.get("device")) is not int
         or type(ownership.get("inode")) is not int
@@ -376,6 +501,13 @@ def read_marker(resolved, missing_ok=False, error_message="mountpoint ownership 
             and (
                 not isinstance(ownership["mount_id"], str)
                 or not ownership["mount_id"].isdigit()
+            )
+        )
+        or (
+            "mount_tag" in ownership
+            and (
+                not isinstance(ownership["mount_tag"], str)
+                or MOUNT_TAG_PATTERN.fullmatch(ownership["mount_tag"]) is None
             )
         )
     ):
@@ -396,11 +528,135 @@ def require_unmounted_target(resolved):
         raise OperationError("mountpoint is already mounted; preserving it")
 
 
+def descriptor_mount_id(descriptor):
+    try:
+        with open(f"/proc/self/fdinfo/{descriptor}", encoding="utf-8") as fdinfo:
+            for line in fdinfo:
+                if line.startswith("mnt_id:\t"):
+                    value = line.removeprefix("mnt_id:\t").strip()
+                    if value.isdigit():
+                        return value
+                    break
+    except OSError:
+        pass
+    raise OperationError("mountpoint mount identity is unavailable")
+
+
+@contextlib.contextmanager
+def open_mountpoint_parent(resolved, missing_ok=False, create=False):
+    mountpoint = resolved["mount"]
+    data_home = mountpoint.parent.parent
+    data_descriptor = open_safe_directory_chain(
+        data_home,
+        "managed mountpoint ancestor",
+        missing_ok,
+        {
+            data_home: "XDG data directory",
+        },
+    )
+    if data_descriptor is None:
+        yield None, None
+        return
+    parent_descriptor = None
+    try:
+        data_mount_id = descriptor_mount_id(data_descriptor)
+        if create:
+            try:
+                os.mkdir(
+                    mountpoint.parent.name, 0o700, dir_fd=data_descriptor
+                )
+            except FileExistsError:
+                pass
+        flags = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        try:
+            parent_descriptor = os.open(
+                mountpoint.parent.name, flags, dir_fd=data_descriptor
+            )
+        except FileNotFoundError:
+            if missing_ok:
+                yield None, None
+                return
+            raise OperationError("managed mountpoint ancestor is missing") from None
+        except OSError:
+            raise OperationError("unsafe managed mountpoint ancestor") from None
+        information = os.fstat(parent_descriptor)
+        if information.st_mode & 0o022:
+            raise OperationError("unsafe managed mountpoint ancestor")
+        if information.st_uid != os.getuid():
+            raise OperationError("unsafe managed mountpoint directory")
+        parent_mount_id = descriptor_mount_id(parent_descriptor)
+        if parent_mount_id != data_mount_id:
+            raise OperationError(
+                "managed mountpoint directory crosses a mount boundary"
+            )
+        yield parent_descriptor, parent_mount_id
+    finally:
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+        os.close(data_descriptor)
+
+
+def open_mountpoint_at(resolved, parent_descriptor, parent_mount_id, missing_ok=False):
+    path_flags = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        path_descriptor = os.open(
+            resolved["mount"].name, path_flags, dir_fd=parent_descriptor
+        )
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise OperationError("mountpoint is missing") from None
+    except OSError:
+        raise OperationError("mountpoint was replaced; preserving it") from None
+    try:
+        if descriptor_mount_id(path_descriptor) != parent_mount_id:
+            raise OperationError("mountpoint is already mounted; preserving it")
+        path_information = os.fstat(path_descriptor)
+        descriptor = os.open(
+            f"/proc/self/fd/{path_descriptor}",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+        )
+        information = os.fstat(descriptor)
+        if (
+            descriptor_mount_id(descriptor) != parent_mount_id
+            or information.st_dev != path_information.st_dev
+            or information.st_ino != path_information.st_ino
+        ):
+            os.close(descriptor)
+            raise OperationError("mountpoint was replaced; preserving it")
+        return descriptor
+    finally:
+        os.close(path_descriptor)
+
+
+@contextlib.contextmanager
+def open_unmounted_mountpoint(resolved, missing_ok=False):
+    with open_mountpoint_parent(resolved, missing_ok) as (
+        parent_descriptor, parent_mount_id,
+    ):
+        if parent_descriptor is None:
+            yield None
+            return
+        descriptor = open_mountpoint_at(
+            resolved, parent_descriptor, parent_mount_id, missing_ok
+        )
+        if descriptor is None:
+            yield None
+            return
+        try:
+            yield descriptor
+        finally:
+            os.close(descriptor)
+
+
 def read_directory_nonce(mountpoint):
     try:
-        value = os.getxattr(
-            mountpoint, DIRECTORY_IDENTITY_XATTR, follow_symlinks=False
-        )
+        if isinstance(mountpoint, int):
+            value = os.getxattr(mountpoint, DIRECTORY_IDENTITY_XATTR)
+        else:
+            value = os.getxattr(
+                mountpoint, DIRECTORY_IDENTITY_XATTR, follow_symlinks=False
+            )
     except OSError as error:
         missing_errors = {
             value for value in (
@@ -425,21 +681,29 @@ def set_directory_nonce(mountpoint, nonce):
     if read_directory_nonce(mountpoint) is not None:
         raise OperationError("mountpoint identity already exists; preserving it")
     try:
-        os.setxattr(
-            mountpoint,
-            DIRECTORY_IDENTITY_XATTR,
-            nonce.encode("ascii"),
-            follow_symlinks=False,
-        )
+        if isinstance(mountpoint, int):
+            os.setxattr(
+                mountpoint, DIRECTORY_IDENTITY_XATTR, nonce.encode("ascii")
+            )
+        else:
+            os.setxattr(
+                mountpoint,
+                DIRECTORY_IDENTITY_XATTR,
+                nonce.encode("ascii"),
+                follow_symlinks=False,
+            )
     except OSError:
         raise OperationError("mountpoint identity is unavailable") from None
 
 
 def remove_directory_nonce(mountpoint):
     try:
-        os.removexattr(
-            mountpoint, DIRECTORY_IDENTITY_XATTR, follow_symlinks=False
-        )
+        if isinstance(mountpoint, int):
+            os.removexattr(mountpoint, DIRECTORY_IDENTITY_XATTR)
+        else:
+            os.removexattr(
+                mountpoint, DIRECTORY_IDENTITY_XATTR, follow_symlinks=False
+            )
     except OSError:
         raise OperationError("mountpoint identity is unavailable") from None
 
@@ -456,154 +720,213 @@ def require_recorded_directory(mountpoint, ownership, information):
         raise OperationError("mountpoint was replaced; preserving it")
 
 
-def require_prepared_mountpoint(resolved):
+def require_cleanup_commit_state(resolved, evidence, held_descriptor):
+    held_information = os.fstat(held_descriptor)
+    with open_unmounted_mountpoint(resolved) as current_descriptor:
+        information = os.fstat(current_descriptor)
+        if (
+            information.st_dev != evidence["device"]
+            or information.st_ino != evidence["inode"]
+            or information.st_dev != held_information.st_dev
+            or information.st_ino != held_information.st_ino
+        ):
+            raise OperationError("mountpoint was replaced; preserving it")
+        if information.st_uid != os.getuid() or information.st_mode & 0o022:
+            raise OperationError("unsafe mountpoint; preserving it")
+        with os.scandir(current_descriptor) as entries:
+            if next(entries, None) is not None:
+                raise OperationError("mountpoint is not empty; preserving it")
+        if read_directory_nonce(current_descriptor) is not None:
+            raise OperationError(INTERRUPTED_CLEANUP)
+
+
+@contextlib.contextmanager
+def open_prepared_mountpoint(resolved):
     require_unmounted_target(resolved)
     phase = read_phase(resolved)
     if phase is not None:
         raise OperationError(phase_error(phase))
     mountpoint = resolved["mount"]
     ownership = read_marker(resolved)
-    if ownership["mount"] != str(mountpoint):
+    if (
+        ownership["mount"] != str(mountpoint)
+        or ownership.get("mount_tag") is None
+    ):
         raise OperationError("mountpoint ownership record is invalid")
-    require_directory(mountpoint, "mountpoint", owner=True)
-    information = mountpoint.lstat()
-    require_recorded_directory(mountpoint, ownership, information)
-    with os.scandir(mountpoint) as entries:
-        if next(entries, None) is not None:
-            raise OperationError("mountpoint contains unexpected local contents")
+    with open_unmounted_mountpoint(resolved) as descriptor:
+        information = os.fstat(descriptor)
+        if information.st_uid != os.getuid() or information.st_mode & 0o022:
+            raise OperationError("unsafe mountpoint")
+        require_recorded_directory(descriptor, ownership, information)
+        with os.scandir(descriptor) as entries:
+            if next(entries, None) is not None:
+                raise OperationError("mountpoint contains unexpected local contents")
+        yield ownership, descriptor
 
 
 def prepare_mountpoint(resolved):
     require_unmounted_target(resolved)
     validate_config(resolved)
     mountpoint = resolved["mount"]
-    phase = read_phase(resolved)
-    if phase is not None:
-        if phase["mount"] != str(mountpoint):
-            raise OperationError("mountpoint identity operation is invalid")
-        if phase["phase"] == "prepare-create":
-            try:
-                mountpoint.lstat()
-            except FileNotFoundError:
-                remove_phase(resolved)
-            else:
-                raise OperationError(INTERRUPTED_CREATION)
-        elif phase["phase"] == "prepare-publish":
-            require_directory(mountpoint, "mountpoint", owner=True)
-            information = mountpoint.lstat()
-            with os.scandir(mountpoint) as entries:
+    mount_tag = f"proton-drive-desktop-{secrets.token_hex(32)}"
+    with open_mountpoint_parent(resolved, create=True) as (
+        parent_descriptor, parent_mount_id,
+    ):
+        descriptor = open_mountpoint_at(
+            resolved, parent_descriptor, parent_mount_id, missing_ok=True
+        )
+        try:
+            phase = read_phase(resolved)
+            if phase is not None:
+                if phase["mount"] != str(mountpoint):
+                    raise OperationError("mountpoint identity operation is invalid")
+                if phase["phase"] == "prepare-create":
+                    if descriptor is None:
+                        remove_phase(resolved)
+                    else:
+                        raise OperationError(INTERRUPTED_CREATION)
+                elif phase["phase"] == "prepare-publish":
+                    if descriptor is None:
+                        raise OperationError(INTERRUPTED_PUBLICATION)
+                    information = os.fstat(descriptor)
+                    with os.scandir(descriptor) as entries:
+                        if next(entries, None) is not None:
+                            raise OperationError(
+                                "mountpoint contains unexpected local contents"
+                            )
+                    if (
+                        information.st_dev != phase["device"]
+                        or information.st_ino != phase["inode"]
+                    ):
+                        raise OperationError(INTERRUPTED_PUBLICATION)
+                    nonce = read_directory_nonce(descriptor)
+                    if nonce is None:
+                        set_directory_nonce(descriptor, phase["nonce"])
+                    elif nonce != phase["nonce"]:
+                        raise OperationError(INTERRUPTED_PUBLICATION)
+                    try:
+                        write_marker(resolved, {
+                            "mount": phase["mount"],
+                            "device": phase["device"],
+                            "inode": phase["inode"],
+                            "created": phase["created"],
+                            "nonce": phase["nonce"],
+                            "mount_tag": phase["mount_tag"],
+                        })
+                    except OSError:
+                        raise OperationError(
+                            "mountpoint ownership record is unavailable"
+                        ) from None
+                    remove_phase(resolved)
+                else:
+                    raise OperationError(INTERRUPTED_CLEANUP)
+            prior = read_marker(resolved, missing_ok=True)
+            if prior is not None:
+                if prior["mount"] != str(mountpoint):
+                    raise OperationError("mountpoint ownership record is invalid")
+                if prior.get("mount_tag") is None:
+                    if descriptor is None:
+                        marker_path(resolved).unlink()
+                        prior = None
+                    else:
+                        raise OperationError(
+                            "mountpoint ownership record is invalid"
+                        )
+
+            created = False
+            planned_nonce = None
+            if descriptor is None:
+                planned_nonce = secrets.token_hex(32)
+                write_phase(resolved, {
+                    "phase": "prepare-create",
+                    "mount": str(mountpoint),
+                    "created": True,
+                    "nonce": planned_nonce,
+                    "mount_tag": mount_tag,
+                })
+                try:
+                    os.mkdir(
+                        mountpoint.name, 0o700, dir_fd=parent_descriptor
+                    )
+                except FileExistsError:
+                    remove_phase(resolved)
+                    raise OperationError(
+                        "mountpoint appeared during preparation; preserving it"
+                    ) from None
+                created = True
+                descriptor = open_mountpoint_at(
+                    resolved, parent_descriptor, parent_mount_id
+                )
+            information = os.fstat(descriptor)
+            if information.st_uid != os.getuid() or information.st_mode & 0o022:
+                raise OperationError("unsafe mountpoint")
+            with os.scandir(descriptor) as entries:
                 if next(entries, None) is not None:
                     raise OperationError(
                         "mountpoint contains unexpected local contents"
                     )
-            if (
-                information.st_dev != phase["device"]
-                or information.st_ino != phase["inode"]
-                or read_directory_nonce(mountpoint) != phase["nonce"]
-            ):
-                raise OperationError(INTERRUPTED_PUBLICATION)
-            write_marker(resolved, {
-                "mount": phase["mount"],
-                "device": phase["device"],
-                "inode": phase["inode"],
-                "created": phase["created"],
-                "nonce": phase["nonce"],
-            })
-            remove_phase(resolved)
-        else:
-            raise OperationError(INTERRUPTED_CLEANUP)
-    prior = read_marker(resolved, missing_ok=True)
-    if prior is not None and prior["mount"] != str(mountpoint):
-        raise OperationError("mountpoint ownership record is invalid")
-    data_home = mountpoint.parent.parent
-    require_directory(data_home, "XDG data directory", owner=True)
-    managed_parent = mountpoint.parent
-    try:
-        os.mkdir(managed_parent, 0o700)
-    except FileExistsError:
-        pass
-    require_directory(managed_parent, "managed mountpoint directory", owner=True)
-
-    created = False
-    planned_nonce = None
-    try:
-        mountpoint.lstat()
-    except FileNotFoundError:
-        planned_nonce = secrets.token_hex(32)
-        write_phase(resolved, {
-            "phase": "prepare-create",
-            "mount": str(mountpoint),
-            "created": True,
-            "nonce": planned_nonce,
-        })
-        try:
-            os.mkdir(mountpoint, 0o700)
-            created = True
-        except FileExistsError:
-            remove_phase(resolved)
-    require_directory(mountpoint, "mountpoint", owner=True)
-    with os.scandir(mountpoint) as entries:
-        if next(entries, None) is not None:
-            raise OperationError("mountpoint contains unexpected local contents")
-    information = mountpoint.lstat()
-    prior_created = False
-    nonce = None
-    nonce_assigned = False
-    if prior is not None:
-        if not created:
-            require_recorded_directory(mountpoint, prior, information)
-            nonce = prior["nonce"]
-            prior_created = prior["created"]
-    if nonce is None:
-        nonce = planned_nonce or secrets.token_hex(32)
-        publication = {
-            "phase": "prepare-publish",
-            "mount": str(mountpoint),
-            "device": information.st_dev,
-            "inode": information.st_ino,
-            "created": created or prior_created,
-            "nonce": nonce,
-        }
-        write_phase(resolved, publication)
-        try:
-            set_directory_nonce(mountpoint, nonce)
-            nonce_assigned = True
-        except OperationError:
-            if created:
-                os.rmdir(mountpoint)
-            remove_phase(resolved)
-            raise
-    marker = {
-        "mount": str(mountpoint),
-        "device": information.st_dev,
-        "inode": information.st_ino,
-        "created": created or prior_created,
-        "nonce": nonce,
-    }
-    try:
-        write_marker(resolved, marker)
-    except OSError:
-        if nonce_assigned:
-            remove_directory_nonce(mountpoint)
-        if created:
-            os.rmdir(mountpoint)
-        if nonce_assigned:
-            remove_phase(resolved)
-        raise OperationError("mountpoint ownership record is unavailable") from None
-    if nonce_assigned:
-        remove_phase(resolved)
+            prior_created = False
+            nonce = None
+            nonce_assigned = False
+            if prior is not None and not created:
+                require_recorded_directory(descriptor, prior, information)
+                nonce = prior["nonce"]
+                prior_created = prior["created"]
+            if nonce is None:
+                nonce = planned_nonce or secrets.token_hex(32)
+                publication = {
+                    "phase": "prepare-publish",
+                    "mount": str(mountpoint),
+                    "device": information.st_dev,
+                    "inode": information.st_ino,
+                    "created": created or prior_created,
+                    "nonce": nonce,
+                    "mount_tag": mount_tag,
+                }
+                write_phase(resolved, publication)
+                try:
+                    set_directory_nonce(descriptor, nonce)
+                    nonce_assigned = True
+                except OperationError:
+                    remove_phase(resolved)
+                    raise
+            marker = {
+                "mount": str(mountpoint),
+                "device": information.st_dev,
+                "inode": information.st_ino,
+                "created": created or prior_created,
+                "nonce": nonce,
+                "mount_tag": mount_tag,
+            }
+            try:
+                write_marker(resolved, marker)
+            except OSError:
+                if nonce_assigned:
+                    remove_directory_nonce(descriptor)
+                    remove_phase(resolved)
+                raise OperationError(
+                    "mountpoint ownership record is unavailable"
+                ) from None
+            if nonce_assigned:
+                remove_phase(resolved)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
 
 
 def record_mount_instance(resolved):
-    state, mount_id = mount_details(resolved["mount"])
+    state, mount_id, mount_source = mount_details(resolved["mount"])
     if state != "ready":
         raise OperationError("expected read-only Proton Drive mount not found")
     ownership = read_marker(resolved)
     if (
         ownership["mount"] != str(resolved["mount"])
         or ownership.get("nonce") is None
+        or ownership.get("mount_tag") is None
     ):
         raise OperationError("mountpoint ownership record is invalid")
+    if ownership["mount_tag"] != mount_source:
+        raise OperationError("expected read-only Proton Drive mount not found")
     previous = ownership.get("mount_id")
     if previous is not None and previous != mount_id:
         raise OperationError("mounted instance changed; preserving it")
@@ -618,15 +941,17 @@ def diagnose_start_failure(resolved):
     phase = read_phase(resolved)
     if phase is not None:
         raise OperationError(phase_error(phase))
-    try:
-        information = mountpoint.lstat()
-    except FileNotFoundError:
-        return
-    if not stat.S_ISDIR(information.st_mode) or stat.S_ISLNK(information.st_mode):
-        raise OperationError("unsafe mountpoint")
-    with os.scandir(mountpoint) as entries:
-        if next(entries, None) is not None:
-            raise OperationError("mountpoint contains unexpected local contents")
+    with open_unmounted_mountpoint(resolved, missing_ok=True) as descriptor:
+        if descriptor is None:
+            return
+        information = os.fstat(descriptor)
+        if information.st_uid != os.getuid() or information.st_mode & 0o022:
+            raise OperationError("unsafe mountpoint")
+        with os.scandir(descriptor) as entries:
+            if next(entries, None) is not None:
+                raise OperationError(
+                    "mountpoint contains unexpected local contents"
+                )
 
 
 def start_locked(resolved, announce=True):
@@ -676,32 +1001,125 @@ def open_drive(resolved):
         return 0
 
 
-def password_command():
+def password_command(mount_tag):
     stream = io.StringIO()
     writer = csv.writer(
         stream, delimiter=" ", quotechar='"', doublequote=True,
         lineterminator="", quoting=csv.QUOTE_MINIMAL,
     )
-    writer.writerow([str(pathlib.Path(__file__).absolute()), "_credential"])
+    writer.writerow([
+        str(pathlib.Path(__file__).absolute()), "_credential", mount_tag,
+    ])
     return stream.getvalue()
+
+
+def rclone_environment():
+    return {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("RCLONE_") and not key.startswith("_RCLONE_")
+    }
+
+
+def terminate_process_group(process, terminate_seconds):
+    # The unreaped session leader pins its PID as this group's identifier until
+    # both group signals are complete, so it cannot be recycled underneath us.
+    if process.returncode is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        else:
+            time.sleep(terminate_seconds)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    process.wait()
+
+
+def terminate_rclone_version_process(process):
+    terminate_process_group(process, RCLONE_VERSION_TERMINATE_SECONDS)
+
+
+def read_rclone_version_output(process):
+    output = bytearray()
+    deadline = time.monotonic() + RCLONE_VERSION_TIMEOUT_SECONDS
+    descriptor = process.stdout.fileno()
+    with selectors.DefaultSelector() as selector:
+        selector.register(descriptor, selectors.EVENT_READ)
+        while True:
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0 or not selector.select(remaining_time):
+                raise OperationError("rclone version check failed")
+            try:
+                chunk = os.read(
+                    descriptor, RCLONE_VERSION_READ_LIMIT - len(output)
+                )
+            except OSError:
+                raise OperationError("rclone version check failed") from None
+            if chunk:
+                output.extend(chunk)
+                if len(output) >= RCLONE_VERSION_READ_LIMIT:
+                    raise OperationError("rclone version check failed")
+                continue
+            remaining_time = max(0, deadline - time.monotonic())
+            try:
+                return process.wait(timeout=remaining_time), bytes(output)
+            except subprocess.TimeoutExpired:
+                raise OperationError("rclone version check failed") from None
+
+
+def require_rclone_version():
+    try:
+        process = subprocess.Popen(
+            ["/usr/bin/rclone", "version"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=rclone_environment(),
+            start_new_session=True,
+        )
+    except OSError:
+        raise OperationError("rclone version check failed") from None
+    try:
+        returncode, output = read_rclone_version_output(process)
+    except OperationError:
+        terminate_rclone_version_process(process)
+        raise
+    finally:
+        process.stdout.close()
+    try:
+        version_lines = output.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        raise OperationError("rclone version check failed") from None
+    if returncode != 0 or not version_lines or version_lines[0] != RCLONE_VERSION:
+        raise OperationError("rclone version check failed")
 
 
 def mount_exec(resolved):
     validate_config(resolved)
-    require_prepared_mountpoint(resolved)
-    arguments = [
-        "/usr/bin/rclone", "mount", "proton-dolphin:", str(resolved["mount"]),
-        "--config", str(resolved["config"]),
-        "--password-command", password_command(),
-        "--ask-password=false", "--read-only",
-        "--protondrive-enable-caching=false", "--vfs-cache-mode=off",
-        "--dir-cache-time=2s", "--attr-timeout=1s", "--log-level=ERROR",
-    ]
-    environment = {
-        key: value for key, value in os.environ.items()
-        if not key.startswith("RCLONE_") and not key.startswith("_RCLONE_")
-    }
-    os.execve("/usr/bin/rclone", arguments, environment)
+    environment = rclone_environment()
+    with open_prepared_mountpoint(resolved) as (ownership, descriptor):
+        arguments = [
+            "/usr/bin/rclone", "mount", "proton-dolphin:",
+            str(resolved["mount"]),
+            "--devname", ownership["mount_tag"],
+            "--config", str(resolved["config"]),
+            "--password-command", password_command(ownership["mount_tag"]),
+            "--ask-password=false", "--read-only",
+            "--protondrive-enable-caching=false", "--vfs-cache-mode=off",
+            "--dir-cache-time=2s", "--attr-timeout=1s", "--log-level=ERROR",
+        ]
+        # open_prepared_mountpoint performed the final descriptor-backed
+        # pathname inspection. The supported contract reserves the managed
+        # parent and mountpoint throughout startup, the mounted session, and
+        # completed shutdown, including logout and direct service stop. Other
+        # programs must not rename or replace them, mount over the managed path,
+        # or independently unmount it during that interval. This last recorded-
+        # identity check and the held close-on-exec descriptors do not enforce
+        # that reservation or guarantee later pathname identity.
+        require_recorded_directory(descriptor, ownership, os.fstat(descriptor))
+        os.execve("/usr/bin/rclone", arguments, environment)
     raise OperationError("unable to execute rclone")
 
 
@@ -741,42 +1159,145 @@ def bus_owner(name):
     return owner
 
 
-def credential(resolved):
-    validate_config(resolved)
-    if bus_owner("org.freedesktop.secrets") != bus_owner("org.kde.ksecretd"):
-        raise OperationError("credential service unavailable")
-    config_id = hashlib.sha256(str(resolved["config"].absolute()).encode()).hexdigest()
+def require_credential_launch(resolved, launch_tag):
+    if (
+        not isinstance(launch_tag, str)
+        or MOUNT_TAG_PATTERN.fullmatch(launch_tag) is None
+    ):
+        raise OperationError("credential unavailable")
     try:
-        completed = subprocess.run(
-            [
-                "/usr/bin/secret-tool", "lookup",
-                "application", "rclone",
-                "purpose", "proton-drive-config",
-                "config-id", config_id,
-            ],
+        if read_phase(resolved) is not None:
+            raise OperationError("credential unavailable")
+        ownership = read_marker(resolved)
+        if (
+            ownership["mount"] != str(resolved["mount"])
+            or ownership.get("nonce") is None
+            or ownership.get("mount_tag") != launch_tag
+        ):
+            raise OperationError("credential unavailable")
+        state, mount_id, mount_source = mount_details(resolved["mount"])
+        if state == "ready":
+            if ownership.get("mount_id") is None:
+                if mount_source != launch_tag:
+                    raise OperationError("credential unavailable")
+            else:
+                require_owned_mount(resolved, mount_id, mount_source)
+        elif state == "absent":
+            with open_unmounted_mountpoint(resolved) as descriptor:
+                information = os.fstat(descriptor)
+                if (
+                    information.st_uid != os.getuid()
+                    or information.st_mode & 0o022
+                ):
+                    raise OperationError("credential unavailable")
+                require_recorded_directory(descriptor, ownership, information)
+                with os.scandir(descriptor) as entries:
+                    if next(entries, None) is not None:
+                        raise OperationError("credential unavailable")
+        else:
+            raise OperationError("credential unavailable")
+    except OperationError:
+        raise OperationError("credential unavailable") from None
+
+
+def require_credential_pipe():
+    try:
+        information = os.fstat(sys.stdout.fileno())
+    except (OSError, ValueError, io.UnsupportedOperation):
+        raise OperationError("credential unavailable") from None
+    if not stat.S_ISFIFO(information.st_mode):
+        raise OperationError("credential unavailable")
+
+
+def terminate_credential_process(process):
+    terminate_process_group(process, CREDENTIAL_TERMINATE_SECONDS)
+
+
+def read_credential_output(process):
+    output = bytearray()
+    deadline = time.monotonic() + CREDENTIAL_TIMEOUT_SECONDS
+    descriptor = process.stdout.fileno()
+    with selectors.DefaultSelector() as selector:
+        selector.register(descriptor, selectors.EVENT_READ)
+        while True:
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                raise OperationError("credential unavailable")
+            if not selector.select(remaining_time):
+                raise OperationError("credential unavailable")
+            try:
+                chunk = os.read(
+                    descriptor, CREDENTIAL_READ_LIMIT - len(output)
+                )
+            except OSError:
+                raise OperationError("credential unavailable") from None
+            if chunk:
+                output.extend(chunk)
+                if len(output) >= CREDENTIAL_READ_LIMIT:
+                    raise OperationError("credential unavailable")
+                continue
+            remaining_time = max(0, deadline - time.monotonic())
+            try:
+                return process.wait(timeout=remaining_time), bytes(output)
+            except subprocess.TimeoutExpired:
+                raise OperationError("credential unavailable") from None
+
+
+def acquire_credential_output(command):
+    try:
+        process = subprocess.Popen(
+            command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=10,
-            check=False,
+            start_new_session=True,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         raise OperationError("credential unavailable") from None
-    secret = completed.stdout
-    if isinstance(secret, str):
-        secret = secret.encode()
-    if completed.returncode != 0 or not secret or len(secret) > 4098:
+    try:
+        return read_credential_output(process)
+    except OperationError:
+        terminate_credential_process(process)
+        raise
+    finally:
+        process.stdout.close()
+
+
+def credential(resolved, launch_tag):
+    require_credential_pipe()
+    require_credential_launch(resolved, launch_tag)
+    validate_config(resolved)
+    qualified_owner = bus_owner("org.freedesktop.secrets")
+    if qualified_owner != bus_owner("org.kde.ksecretd"):
+        raise OperationError("credential service unavailable")
+    config_id = hashlib.sha256(str(resolved["config"].absolute()).encode()).hexdigest()
+    returncode, secret = acquire_credential_output([
+        "/usr/bin/secret-tool", "lookup",
+        "application", "rclone",
+        "purpose", "proton-drive-config",
+        "config-id", config_id,
+    ])
+    if returncode != 0 or not secret:
         raise OperationError("credential unavailable")
     if secret.endswith(b"\n"):
         secret = secret[:-1]
         if secret.endswith(b"\r"):
             secret = secret[:-1]
-    if not secret or len(secret) > 4096 or any(byte in secret for byte in (0, 10, 13)):
+    if (
+        not secret
+        or len(secret) > CREDENTIAL_MAX_BYTES
+        or any(byte in secret for byte in (0, 10, 13))
+    ):
         raise OperationError("credential unavailable")
     try:
         value = secret.decode("utf-8")
     except UnicodeDecodeError:
         raise OperationError("credential unavailable") from None
+    if (
+        bus_owner("org.freedesktop.secrets") != qualified_owner
+        or bus_owner("org.kde.ksecretd") != qualified_owner
+    ):
+        raise OperationError("credential service unavailable")
     print(value)
     return 0
 
@@ -786,93 +1307,96 @@ def cleanup_mountpoint(resolved):
         raise OperationError("residual mount remains")
     phase = read_phase(resolved)
     if phase is not None:
-        if phase["phase"] != "cleanup-preexisting":
+        if phase["phase"] != "cleanup-retained":
             raise OperationError(phase_error(phase))
         ownership = read_marker(resolved, missing_ok=True)
-        if ownership is None:
-            remove_phase(resolved)
-            return
         mountpoint = resolved["mount"]
-        if (
-            phase["mount"] != str(mountpoint)
-            or ownership.get("mount") != phase["mount"]
-            or ownership.get("device") != phase["device"]
-            or ownership.get("inode") != phase["inode"]
-            or ownership.get("created") is not False
-            or ownership.get("nonce") != phase["nonce"]
+        if phase["mount"] != str(mountpoint):
+            raise OperationError("mountpoint identity operation is invalid")
+        if ownership is not None and any(
+            ownership.get(key) != phase[key]
+            for key in (
+                "mount", "device", "inode", "created", "nonce", "mount_tag",
+            )
         ):
             raise OperationError("mountpoint identity operation is invalid")
-        try:
-            information = mountpoint.lstat()
-        except FileNotFoundError:
-            raise OperationError(INTERRUPTED_CLEANUP) from None
-        if (
-            not stat.S_ISDIR(information.st_mode)
-            or stat.S_ISLNK(information.st_mode)
-            or information.st_uid != os.getuid()
-            or information.st_mode & 0o022
-            or information.st_dev != phase["device"]
-            or information.st_ino != phase["inode"]
-            or read_directory_nonce(mountpoint) != phase["nonce"]
-        ):
-            raise OperationError(INTERRUPTED_CLEANUP)
-        with os.scandir(mountpoint) as entries:
-            if next(entries, None) is not None:
-                raise OperationError("mountpoint is not empty; preserving it")
-        remove_directory_nonce(mountpoint)
-        marker_path(resolved).unlink()
-        remove_phase(resolved)
+        with open_unmounted_mountpoint(resolved, missing_ok=True) as descriptor:
+            if descriptor is None:
+                raise OperationError("mountpoint was replaced; preserving it")
+            information = os.fstat(descriptor)
+            if (
+                information.st_uid != os.getuid()
+                or information.st_mode & 0o022
+                or information.st_dev != phase["device"]
+                or information.st_ino != phase["inode"]
+            ):
+                raise OperationError(INTERRUPTED_CLEANUP)
+            with os.scandir(descriptor) as entries:
+                if next(entries, None) is not None:
+                    raise OperationError("mountpoint is not empty; preserving it")
+            nonce = read_directory_nonce(descriptor)
+            if nonce == phase["nonce"]:
+                remove_directory_nonce(descriptor)
+            elif nonce is not None:
+                raise OperationError(INTERRUPTED_CLEANUP)
+            require_cleanup_commit_state(resolved, phase, descriptor)
+            if ownership is not None:
+                marker_path(resolved).unlink()
+                require_cleanup_commit_state(resolved, phase, descriptor)
+            remove_phase(resolved)
         return
     ownership = read_marker(resolved, missing_ok=True)
     if ownership is None:
+        if not untracked_mountpoint_is_clean(resolved):
+            raise OperationError("inconsistent/foreign state")
         return
     marker = marker_path(resolved)
     mountpoint = resolved["mount"]
-    if ownership["mount"] != str(mountpoint):
-        raise OperationError("mountpoint ownership record is invalid")
-    try:
-        information = mountpoint.lstat()
-    except FileNotFoundError:
-        marker.unlink()
-        return
     if (
-        not stat.S_ISDIR(information.st_mode)
-        or stat.S_ISLNK(information.st_mode)
-        or information.st_uid != os.getuid()
-        or information.st_mode & 0o022
+        ownership["mount"] != str(mountpoint)
+        or ownership.get("mount_tag") is None
     ):
-        raise OperationError("mountpoint was replaced; preserving it")
-    require_recorded_directory(mountpoint, ownership, information)
-    with os.scandir(mountpoint) as entries:
-        if next(entries, None) is not None:
-            raise OperationError("mountpoint is not empty; preserving it")
-    if ownership.get("created") is True:
-        os.rmdir(mountpoint)
-    else:
+        raise OperationError("mountpoint ownership record is invalid")
+    with open_unmounted_mountpoint(resolved, missing_ok=True) as descriptor:
+        if descriptor is None:
+            raise OperationError("mountpoint was replaced; preserving it")
+        information = os.fstat(descriptor)
+        if information.st_uid != os.getuid() or information.st_mode & 0o022:
+            raise OperationError("mountpoint was replaced; preserving it")
+        require_recorded_directory(descriptor, ownership, information)
+        with os.scandir(descriptor) as entries:
+            if next(entries, None) is not None:
+                raise OperationError("mountpoint is not empty; preserving it")
         write_phase(resolved, {
-            "phase": "cleanup-preexisting",
+            "phase": "cleanup-retained",
             "mount": ownership["mount"],
             "device": ownership["device"],
             "inode": ownership["inode"],
-            "created": False,
+            "created": ownership["created"],
             "nonce": ownership["nonce"],
+            "mount_tag": ownership["mount_tag"],
         })
-        remove_directory_nonce(mountpoint)
-    marker.unlink()
-    if ownership.get("created") is False:
+        remove_directory_nonce(descriptor)
+        require_cleanup_commit_state(resolved, ownership, descriptor)
+        marker.unlink()
+        require_cleanup_commit_state(resolved, ownership, descriptor)
         remove_phase(resolved)
 
 
-def require_owned_mount(resolved, mount_id):
+def require_owned_mount(resolved, mount_id, mount_source):
     ownership = read_marker(
         resolved, error_message="mount is not owned by this session"
     )
     if (
         ownership["mount"] != str(resolved["mount"])
         or ownership.get("nonce") is None
+        or ownership.get("mount_tag") is None
     ):
         raise OperationError("mount is not owned by this session")
-    if ownership.get("mount_id") != mount_id:
+    if (
+        ownership.get("mount_id") != mount_id
+        or ownership["mount_tag"] != mount_source
+    ):
         raise OperationError("mounted instance changed; preserving it")
     return ownership
 
@@ -880,25 +1404,113 @@ def require_owned_mount(resolved, mount_id):
 def cleanup_stopped_mountpoint(resolved):
     with metadata_lock(resolved):
         state, _ = public_status(resolved)
+        if state == "failed":
+            completed = subprocess.run(
+                [
+                    "/usr/bin/systemctl", "--user", "reset-failed",
+                    "proton-drive-desktop.service",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise OperationError("service failure reset failed")
+            state, _ = public_status(resolved)
         if state != "stopped":
             raise OperationError(f"service stop incomplete: {state}")
         cleanup_mountpoint(resolved)
 
 
+def require_detached_managed_launch(resolved):
+    if read_phase(resolved) is not None:
+        raise OperationError("inconsistent/foreign state")
+    ownership = read_marker(
+        resolved, error_message="mount is not owned by this session"
+    )
+    if (
+        ownership["mount"] != str(resolved["mount"])
+        or ownership.get("nonce") is None
+        or ownership.get("mount_tag") is None
+        or ownership.get("mount_id") is None
+    ):
+        raise OperationError("mount is not owned by this session")
+    with open_unmounted_mountpoint(resolved) as descriptor:
+        information = os.fstat(descriptor)
+        if information.st_uid != os.getuid() or information.st_mode & 0o022:
+            raise OperationError("mountpoint was replaced; preserving it")
+        require_recorded_directory(descriptor, ownership, information)
+        with os.scandir(descriptor) as entries:
+            if next(entries, None) is not None:
+                raise OperationError(
+                    "mountpoint contains unexpected local contents"
+                )
+    if mount_state(resolved["mount"]) != "absent":
+        raise OperationError("mount appeared during stop recovery; preserving it")
+
+
+def wait_for_startup_to_settle():
+    deadline = time.monotonic() + STARTUP_SETTLE_TIMEOUT_SECONDS
+    while True:
+        observed = service_state()
+        if observed is None:
+            raise OperationError("service startup state unavailable during stop")
+        if observed["ActiveState"] != "activating":
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise OperationError("service startup did not settle before stop")
+        time.sleep(min(STARTUP_SETTLE_POLL_SECONDS, remaining))
+
+
 def stop(resolved):
     with control_lock(resolved):
         resolved = authoritative_paths(resolved)
-        state, result = public_status(resolved, require_ownership=False)
-        starting_unmounted = False
+        state, result = public_status(
+            resolved,
+            require_ownership=False,
+            allow_active_without_mount=True,
+        )
+        if state == "unknown":
+            raise OperationError("service state is unknown; preserving it")
         if state == "starting":
             starting_mount = mount_state(resolved["mount"])
             if starting_mount == "ready":
+                with metadata_lock(resolved):
+                    record_mount_instance(resolved)
                 state = "ready"
             elif starting_mount == "absent":
-                starting_unmounted = True
+                wait_for_startup_to_settle()
+                state, result = public_status(
+                    resolved,
+                    require_ownership=False,
+                    allow_active_without_mount=True,
+                )
+                if state == "ready":
+                    with metadata_lock(resolved):
+                        record_mount_instance(resolved)
+                elif state == "starting":
+                    raise OperationError("service startup did not settle before stop")
             else:
                 raise OperationError("inconsistent/foreign state")
-        if state in {"stopped", "failed"} or starting_unmounted:
+        if state == "active without mount":
+            with metadata_lock(resolved):
+                require_detached_managed_launch(resolved)
+            completed = subprocess.run(
+                [
+                    "/usr/bin/systemctl", "--user", "stop",
+                    "proton-drive-desktop.service",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise OperationError("service stop failed")
+            cleanup_stopped_mountpoint(resolved)
+            print("stopped")
+            return 0
+        if state in {"stopped", "failed"}:
             completed = subprocess.run(
                 [
                     "/usr/bin/systemctl", "--user", "stop",
@@ -915,18 +1527,22 @@ def stop(resolved):
             return 0
         if state != "ready":
             raise OperationError(state)
-        mounted, mount_id = mount_details(resolved["mount"])
+        mounted, mount_id, mount_source = mount_details(resolved["mount"])
         if mounted != "ready":
             raise OperationError("inconsistent/foreign state")
-        require_owned_mount(resolved, mount_id)
+        require_owned_mount(resolved, mount_id, mount_source)
         completed = subprocess.run(
             ["/usr/bin/fusermount3", "-u", str(resolved["mount"])],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
         )
-        after_unmount, after_mount_id = mount_details(resolved["mount"])
-        if after_unmount == "ready" and after_mount_id != mount_id:
+        after_unmount, after_mount_id, after_mount_source = mount_details(
+            resolved["mount"]
+        )
+        if after_unmount == "ready" and (
+            after_mount_id != mount_id or after_mount_source != mount_source
+        ):
             raise OperationError("mounted instance changed; preserving it")
         if after_unmount == "foreign":
             raise OperationError("mount changed; preserving it")
@@ -946,6 +1562,7 @@ def stop(resolved):
 
 
 def service_prepare(resolved):
+    require_rclone_version()
     ensure_runtime(resolved)
     resolved = establish_binding(resolved)
     with metadata_lock(resolved):
@@ -954,7 +1571,8 @@ def service_prepare(resolved):
 
 
 def service_verify_mount(resolved):
-    record_mount_instance(resolved)
+    with metadata_lock(resolved):
+        record_mount_instance(resolved)
     return 0
 
 
@@ -965,15 +1583,24 @@ def service_post_stop(resolved):
 
 
 def main(argv):
+    if argv and argv[0] == "_credential":
+        resolved = authoritative_paths(paths())
+        launch_tag = argv[1] if len(argv) == 2 else None
+        return credential(resolved, launch_tag)
     if len(argv) != 1 or argv[0] not in {
         "start", "open", "status", "stop", "_prepare", "_mount",
-        "_verify-mount", "_post-stop", "_credential",
+        "_verify-mount", "_post-stop",
     }:
         print("usage: proton-drive-desktop {start|open|status|stop}", file=sys.stderr)
         return 2
     resolved = authoritative_paths(paths())
     if argv[0] == "status":
         message, result = public_status(resolved)
+        if message == "stopped" and (
+            read_marker(resolved, missing_ok=True) is not None
+            or read_phase(resolved) is not None
+        ):
+            message, result = "inconsistent/foreign state", 1
         print(message)
         return result
     if argv[0] == "start":
@@ -982,8 +1609,6 @@ def main(argv):
         return open_drive(resolved)
     if argv[0] == "_mount":
         return mount_exec(resolved)
-    if argv[0] == "_credential":
-        return credential(resolved)
     if argv[0] == "stop":
         return stop(resolved)
     if argv[0] == "_prepare":

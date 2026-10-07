@@ -110,8 +110,8 @@ main() {
       export DEBIAN_FRONTEND=noninteractive
       apt-get -qq update
       apt-get -qq install -y --no-install-recommends \
-        acl bat ca-certificates curl gcc git jq libc6-dev openssh-client procps psmisc \
-        python3 ripgrep systemd util-linux zsh >/dev/null
+        acl bat ca-certificates curl dbus-daemon dbus-tests gcc git jq libc6-dev \
+        libglib2.0-bin openssh-client procps psmisc python3 ripgrep systemd util-linux zsh >/dev/null
       [[ -e /usr/local/bin/bat ]] || ln -s /usr/bin/batcat /usr/local/bin/bat
       install_tools "$tools" "$platform" /usr/bin/python3
       chmod -R a+rX "$tools"

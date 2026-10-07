@@ -561,7 +561,7 @@ expected_linux_source_inventory=$(
     'dot_config/systemd/user/proton-drive-desktop.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
     'private_dot_local/private_share/applications/claude-code-url-handler.desktop' \
-    'private_dot_local/private_share/applications/proton-drive.desktop' \
+    'private_dot_local/private_share/applications/proton-drive.desktop.tmpl' \
     'private_dot_local/private_share/applications/proton-pass-url-handler.desktop'
 )
 [[ $linux_source_inventory == $expected_linux_source_inventory ]] ||

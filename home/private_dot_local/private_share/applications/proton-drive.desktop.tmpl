@@ -1,0 +1,13 @@
+{{- $binary := joinPath .chezmoi.homeDir ".local/bin/proton-drive-desktop" -}}
+{{- $exec := $binary | replace "\\" "\\\\\\\\" | replace "\"" "\\\\\"" | replace "`" "\\\\`" | replace "$" "\\\\$" | replace "%" "%%" -}}
+{{- $tryExec := $binary | replace "\\" "\\\\" | replace "\n" "\\n" | replace "\r" "\\r" | replace "\t" "\\t" -}}
+[Desktop Entry]
+Type=Application
+Name=Proton Drive (read-only)
+Comment=Open Proton Drive in Dolphin after verifying the cloud mount
+Exec="{{ $exec }}" open
+TryExec={{ $tryExec }}
+Icon=folder-cloud
+Terminal=false
+StartupNotify=false
+Categories=Network;FileTransfer;

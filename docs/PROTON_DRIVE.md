@@ -9,19 +9,60 @@ synthetic tests do not establish actual login, logout, wallet, or FUSE
 behavior. The official Proton Drive CLI and unattended Hindsight backups have
 separate credential and recovery procedures.
 
+Startup gives rclone the exact managed mountpoint as a supported ordinary-user
+pathname. Immediately before executing rclone, the final descriptor-backed
+inspection in `_mount` safely opens the managed parent and leaf, rejects a
+mount or replacement, checks the recorded directory identity and nonce, and
+requires the leaf to be empty. Reserve the managed parent and mountpoint for
+this integration throughout startup, the mounted session, and completed
+shutdown. Other programs must not rename or replace either directory, mount
+over the managed path, or independently unmount it during that interval. Use
+the provided controls to stop the mount; normal Dolphin browsing and opening
+files are unaffected. Repeated checks and held close-on-exec descriptors do
+not enforce this reservation or prove unconditional pathname identity.
+
+Before preparation and again during the final launch inspection, the helper
+opens every lexical directory from `/` through the managed parent without
+following symlinks. Every component must be a directory with no group or
+other write bit; the data directory and managed parent must also belong to the
+user. There is no sticky-directory exception: a custom layout below `/tmp` is
+rejected even when its private descendants use mode `0700`.
+
+Readiness proves that exactly one constrained read-only `fuse.rclone` mount at
+the reserved pathname carries this launch's random source tag and recorded
+mount ID. It does not identify the directory hidden beneath that mount. A
+change detected before launch, during a later status check, or during cleanup
+fails closed and is preserved. A concurrent change during the reserved
+interval is unsupported: stock rclone/FUSE mounts and unmounts by pathname,
+so a replacement may be mounted over or unmounted despite a preceding identity
+check. This contract also applies at logout and direct service shutdown.
+Activation therefore still requires an ordinary-user live check
+with rclone 1.75.1 and the distribution FUSE helper; synthetic exec mocks do
+not establish that FUSE works.
+
 ## Prerequisites
 
 Use Linux with Plasma, systemd user services, Dolphin, rclone 1.75.1, the
 distribution FUSE helper, KWallet's Secret Service, and the credential client
-at `/usr/bin/secret-tool`. Confirm that the required client is executable:
+at `/usr/bin/secret-tool`. Before authentication or mounting, inspect the
+installed client and confirm that the credential client is executable:
 
 ```sh
+/usr/bin/rclone version
 test -x /usr/bin/secret-tool
 ```
 
-This preflight checks only the client file. KWallet and Secret Service
-readiness remain part of live qualification. The Plasma session must already
-be running; the command does not start a desktop session.
+The first version line must be `rclone v1.75.1`. Stop on a different version
+or a failed command; qualify that client revision before proceeding. Confirm
+the executable belongs to the expected distribution package and has not been
+locally replaced. On Arch, use `pacman -Qo /usr/bin/rclone` and
+`pacman -Qkk rclone`, and retain the signed package's version and provenance
+with the qualification results. Resolve unexpected ownership or file changes
+before starting the service.
+
+These checks establish the installed prerequisites. KWallet and Secret
+Service readiness remain part of live qualification. The Plasma session must
+already be running; the command does not start a desktop session.
 
 Enrollment must already have produced the encrypted `proton-dolphin` remote
 in `$XDG_CONFIG_HOME/rclone/proton-drive.conf` (normally
@@ -29,11 +70,44 @@ in `$XDG_CONFIG_HOME/rclone/proton-drive.conf` (normally
 entry. The integration consumes that binding; it does not enroll an account.
 Keep the configuration in place so rclone can update its session tokens.
 
+The KWallet encryption-key entry must have the Secret Service attributes
+`application=rclone`, `purpose=proton-drive-config`, and `config-id` equal to
+the lowercase SHA-256 of the UTF-8 absolute configuration path. Moving the
+configuration changes that binding. Use `proton-drive-desktop start` to check
+that the existing entry can unlock the configuration: `ready` confirms the
+binding works without displaying the key. If it fails, resolve the binding
+through the separate enrollment or repair procedure before enabling startup.
+
+For each lookup, the helper requires `org.freedesktop.secrets` and
+`org.kde.ksecretd` to have the same unique D-Bus owner before invoking
+`secret-tool`, then requires both names to retain that owner before releasing
+the captured value to rclone. A provider restart has a different unique owner
+and is rejected. These two samples do not bind `secret-tool` directly to the
+unique owner and do not close an owner-change-and-return race between samples;
+actual provider behavior remains part of live qualification.
+
+Rclone's password command includes the current launch's nonsecret source tag.
+The credential endpoint requires that tag to match the prepared or verified
+ownership record and confirms that standard output is a pipe before any Secret
+Service lookup. Direct calls, terminal output, regular-file output, stale tags,
+and mismatched launch state fail with a fixed diagnostic. This binding prevents
+accidental misuse; it does not resist a hostile same-UID process that can read
+and reproduce the private state.
+
+The helper starts `secret-tool` without a secret in its arguments or
+environment, discards its diagnostics, and reads through a pipe under a
+10-second deadline. It reads no more than a 4,096-byte key plus its permitted
+line ending and one overflow byte. Oversized, continuous, failed, or timed-out
+producers are terminated and reaped before the helper reports the fixed
+credential error. No temporary credential file is used.
+
 The mount is `$XDG_DATA_HOME/proton-drive-desktop/files`, normally
 `~/.local/share/proton-drive-desktop/files`. The user service and invoking
 shell must agree on the XDG directories. Custom values must be absolute;
 paths containing spaces are supported. Leave the mount directory empty and
-reserve it for this service.
+reserve it for this service. After a clean stop, the helper retains that empty
+underlying directory; it removes only its private identity xattr and runtime
+ownership records.
 
 The helper records one XDG binding for the session in its private runtime
 directory. Public controls and service entrypoints then use that same binding,
@@ -165,11 +239,10 @@ processes, so choose that layout before using this procedure.
    Repeating the block reuses only those exact links. Other files and links
    are reported and preserved. Updates to the managed sources appear through
    the links; run `systemctl --user daemon-reload` after a unit update. Then
-   require systemd and the chosen desktop data layout to discover the reviewed
-   bytes:
+   run the effective-unit qualification below and require the chosen desktop
+   data layout to expose the reviewed launcher bytes:
 
    ```sh
-   systemctl --user cat proton-drive-desktop.service >/dev/null
    test -r "${XDG_DATA_HOME:-$HOME/.local/share}/applications/proton-drive.desktop"
    ```
 
@@ -185,6 +258,12 @@ For deliberate disable or recovery, first disable the unit and complete the
 normal safe stop. Then this block removes only the two exact links above. It
 leaves the managed payloads, conflicting destinations, and unrelated data in
 place:
+
+Run the block with the same `XDG_CONFIG_HOME` and `XDG_DATA_HOME` values used
+during setup. If the layout has changed, restore those original values in a
+subshell and run the block there; current values would address different
+links. Remove the original links before changing or removing the persistent
+environment file.
 
 ```sh
 # proton-drive-custom-xdg-links: remove
@@ -231,6 +310,50 @@ check_exact_link "$launcher_source" "$launcher_link"
   [ ! -L "$launcher_link" ] || rm -- "$launcher_link"
 ```
 
+### Qualify the effective loaded unit
+
+Run this block from the reviewed repository root after `systemctl --user
+daemon-reload` and before the first `start` or `enable`. Run it for both the
+standard layout and the custom-XDG discovery-link layout. It refuses a unit
+loaded from any other fragment, installed-byte drift, and every drop-in; keep
+activation disabled if it fails.
+
+```sh
+# proton-drive-effective-unit: qualify
+set -eu
+reviewed_unit=home/dot_config/systemd/user/proton-drive-desktop.service
+installed_unit="$HOME/.config/systemd/user/proton-drive-desktop.service"
+
+test -f "$reviewed_unit"
+test -f "$installed_unit"
+cmp -s -- "$reviewed_unit" "$installed_unit" || {
+  printf '%s\n' 'installed Proton Drive unit differs from reviewed source' >&2
+  exit 1
+}
+
+effective_fragment=$(systemctl --user show proton-drive-desktop.service \
+  --property=FragmentPath --value)
+effective_drop_ins=$(systemctl --user show proton-drive-desktop.service \
+  --property=DropInPaths --value)
+test -n "$effective_fragment" || {
+  printf '%s\n' 'Proton Drive unit has no loaded fragment' >&2
+  exit 1
+}
+test "$(readlink -f -- "$effective_fragment")" = \
+  "$(readlink -f -- "$installed_unit")" || {
+  printf '%s\n' 'Proton Drive unit is loaded from an unexpected fragment' >&2
+  exit 1
+}
+cmp -s -- "$reviewed_unit" "$effective_fragment" || {
+  printf '%s\n' 'loaded Proton Drive unit differs from reviewed source' >&2
+  exit 1
+}
+test -z "$effective_drop_ins" || {
+  printf '%s\n' 'unreviewed Proton Drive unit drop-ins are loaded' >&2
+  exit 1
+}
+```
+
 ## Install and qualify
 
 Read this procedure before installing, activating, updating, or recovering
@@ -238,28 +361,80 @@ the desktop integration. Use the reviewed repository revision and retain the
 results for that revision. Keep account values and file contents out of test
 reports.
 
-1. Apply only the command, user unit, and desktop entry from the reviewed
+1. Complete the prerequisite checks above. For an update, use the installed
+   command to stop the existing mount cleanly before replacing its files.
+   Apply only the command, user unit, and desktop entry from the reviewed
    source. Chezmoi installs those files without enabling or starting the unit.
+   The desktop entry renders an absolute command path so it does not depend
+   on Plasma inheriting the shell's `PATH`.
 2. Exclude the service data directory from Baloo indexing before starting
    the mount. Baloo requires an existing directory. Under the existing XDG
    data directory, create the dedicated parent below with mode `0700`; the
-   service will create its `files` mountpoint when starting. If the parent
+   service will create its `files` mountpoint on the first start and retain the
+   empty reserved mountpoint after clean stops. If the parent
    already exists, verify it is the expected user-owned directory, rather
    than a symlink or unrelated data, before reusing it. Preserve other
    exclusions. With the same XDG environment used by the service:
 
    ```sh
-   proton_desktop_root="${XDG_DATA_HOME:-$HOME/.local/share}/proton-drive-desktop"
-   mkdir -m 0700 -- "$proton_desktop_root"
+   # proton-drive-baloo: setup
+   set -eu
+
+   xdg_data_root=${XDG_DATA_HOME:-"$HOME/.local/share"}
+   case "$xdg_data_root" in
+     /*) ;;
+     *) printf '%s\n' 'XDG_DATA_HOME must be an absolute path' >&2; exit 1 ;;
+   esac
+   while [ "$xdg_data_root" != "/" ] && [ "${xdg_data_root%/}" != "$xdg_data_root" ]; do
+     xdg_data_root=${xdg_data_root%/}
+   done
+   if [ "$xdg_data_root" = "/" ]; then
+     proton_desktop_root=/proton-drive-desktop
+   else
+     proton_desktop_root=$xdg_data_root/proton-drive-desktop
+   fi
+
+   if [ ! -e "$proton_desktop_root" ] && [ ! -L "$proton_desktop_root" ]; then
+     mkdir -m 0700 -- "$proton_desktop_root"
+   fi
+   if [ -L "$proton_desktop_root" ] || [ ! -d "$proton_desktop_root" ]; then
+     printf '%s\n' 'managed Baloo parent is not a directory or is a symlink' >&2
+     exit 1
+   fi
+   if ! proton_desktop_identity=$(stat -Lc '%u %a' -- "$proton_desktop_root"); then
+     printf '%s\n' 'managed Baloo parent identity is unavailable' >&2
+     exit 1
+   fi
+   proton_desktop_owner=${proton_desktop_identity%% *}
+   proton_desktop_mode=${proton_desktop_identity#* }
+   case "$proton_desktop_owner:$proton_desktop_mode" in
+     *[!0-9:]*|:*|*:|*:*:*)
+       printf '%s\n' 'managed Baloo parent identity is malformed' >&2
+       exit 1
+       ;;
+   esac
+   if [ "$proton_desktop_owner" != "$(id -u)" ] || [ "$proton_desktop_mode" != 700 ]; then
+     printf '%s\n' 'managed Baloo parent must be user-owned with mode 0700' >&2
+     exit 1
+   fi
+
    balooctl6 config add excludeFolders "$proton_desktop_root"
    balooctl6 config list excludeFolders
    ```
 
    Confirm the intended absolute path is listed. This prevents intentional
    recursive indexing; browsing and previews can still fetch files.
-3. Reload the user units with `systemctl --user daemon-reload`, then run
-   `proton-drive-desktop start` and `proton-drive-desktop status`. Confirm
-   readiness before opening Dolphin through `proton-drive-desktop open`.
+3. Reload the user units with `systemctl --user daemon-reload`, run the
+   effective-unit qualification block above, then run `proton-drive-desktop
+   start` and `proton-drive-desktop status`. Confirm readiness before opening
+   Dolphin through `proton-drive-desktop open`.
+   During this qualification, confirm that stock rclone and the distribution
+   FUSE helper can mount the exact absolute managed pathname as the ordinary
+   user and that `findmnt` reports one read-only `fuse.rclone` mount there with
+   the launch-specific source tag. Keep the managed parent and mountpoint
+   reserved for this service from startup through completed shutdown. No other
+   process may rename or replace either directory, mount over the managed
+   path, or independently unmount it during the session or logout.
 4. Browse and open a known synthetic file, close it, and run
    `proton-drive-desktop stop`. Confirm a clean stop, repeat stop, and then
    start again. An unmount failure or unexpected contents must be resolved
@@ -292,8 +467,20 @@ proton-drive-desktop start
 ```
 
 `status` checks the service and mount without starting either or retrieving
-credentials. If the graphical launcher does not open Dolphin, run `open` in
-a terminal to see its fixed diagnostic and inspect `status`.
+credentials. Retained mountpoint ownership or recovery records prevent it
+from reporting a completed stop, even when the service is inactive and the
+mount has detached. With no records, only an absent target or a user-owned,
+empty, unmarked reserved directory is a clean stopped state. An identity
+xattr, contents, symlink, non-directory, unsafe directory, or mount is
+inconsistent and preserved. If the graphical launcher does not open Dolphin,
+run `open` in a terminal to see its fixed diagnostic and inspect `status`.
+
+If `stop` overlaps `_verify-mount` after rclone has mounted, both operations
+serialize ownership recording through the private metadata lock. `stop` may
+record the still-unverified mount only when its launch tag and every mount
+constraint match, then follows the normal unmount-before-process-stop path.
+A busy unmount leaves the service running and preserves the recorded mount so
+open files can be closed before retrying.
 
 Once the mount is ready, add its folder to Dolphin Places if desired. A
 Places entry is a shortcut to a directory: it does not start the service or
@@ -316,25 +503,38 @@ mount, an explicit `start` retries it after the normal safety checks. An
 explicit `stop` clears an already failed, unmounted unit and its owned empty
 mountpoint. Neither command proceeds when a residual or foreign mount remains.
 
+Public `stop` also recovers a stable active service with an absent target mount,
+including a detach followed by a failed manager stop. It requires two stable
+observations, a valid verified ownership record, the unchanged empty underlying
+directory, and a final absent-mount check before asking systemd to stop the
+service. A mount, replacement, unsafe mode, or unexpected entry that appears at
+those boundaries is reported and preserved. `start` and `open` still reject
+that state, and no branch uses a forced or lazy unmount or a background restart.
+
 The mountpoint must be on a Linux filesystem that provides persistent,
 reliable `user.*` extended attributes for directories. Preparation, launch,
 and cleanup fail closed when those xattrs cannot be read, written, or removed;
 device and inode numbers alone are never accepted as the directory identity.
-The nonce protects against ordinary inode reuse, not a same-user process that
+Before inspecting contents or xattrs, the helper opens the target with
+`O_PATH`, compares its kernel mount ID with the held parent directory, and then
+uses a descriptor for directory identity, inspection, and xattr operations.
+The initial mount-table absence observation does not authorize later pathname
+traversal. The nonce protects against ordinary inode reuse. This procedure
+does not claim hostile same-UID forgery or power-loss durability; a process that
 can change both the private runtime record and directory xattr, or a filesystem
-clone or rollback that reproduces both.
+clone or rollback that reproduces both, remains outside its guarantees.
 
 ### Recover an interrupted mountpoint identity operation
 
 Preparation records its intent before creating or identifying the mountpoint,
-and preexisting-directory cleanup records its intent before removing the
-identity xattr. A matching retained phase lets preparation finish publishing
-the identity automatically. These fixed diagnostics mean the remaining state
+and retained-directory cleanup records its intent before removing the identity
+xattr. A matching retained phase lets preparation finish publishing the
+identity automatically. These fixed diagnostics mean the remaining state
 cannot be reconciled from the evidence source still has:
 
 - `interrupted mountpoint creation requires stopped recovery`
 - `interrupted mountpoint identity publication requires stopped recovery`
-- `interrupted preexisting mountpoint cleanup requires stopped recovery`
+- `interrupted retained mountpoint cleanup requires stopped recovery`
 
 Do not copy or guess the recorded nonce. Do not start rclone, edit either JSON
 record, remove an unfamiliar xattr, or use forced, lazy, or recursive cleanup.
@@ -365,54 +565,138 @@ findmnt --mountpoint "$mountpoint"
 ```
 
 Continue only when `ActiveState` is `inactive` or `failed`, `MainPID` is `0`,
-and `findmnt` reports no mount at that exact path. Require the mountpoint to be
-a user-owned, non-symlink directory with mode `0700`, and require it to be
-empty. This inspection prints the operation name, its `created` decision, and
-xattr names, but not xattr values:
+and `findmnt` reports no mount at that exact path. If the leaf exists, run this
+read-only evidence check. It requires a user-owned, non-symlink, empty mode-
+`0700` directory. For `prepare-publish` and `cleanup-retained`, it also compares
+the current device and inode with the phase before recovery, checks any marker
+against the same phase, and accepts only an absent or matching application
+identity xattr. It prints xattr names, but not their values:
 
 ```sh
-test -d "$mountpoint" && test ! -L "$mountpoint"
-test "$(stat -c %u "$mountpoint")" -eq "$(id -u)"
-test "$(stat -c %a "$mountpoint")" = 700
-test -z "$(find "$mountpoint" -mindepth 1 -maxdepth 1 -print -quit)"
-python3 - "$phase" "$mountpoint" <<'PY'
+# proton-drive-recovery-evidence: inspect
+python3 - "$phase" "$marker" "$mountpoint" <<'PY'
 import json
+import errno
 import os
 import pathlib
+import re
+import stat
 import sys
 
 phase_path = pathlib.Path(sys.argv[1])
-mountpoint = sys.argv[2]
+marker_path = pathlib.Path(sys.argv[2])
+mountpoint = pathlib.Path(sys.argv[3])
 operation = json.loads(phase_path.read_text())
-if operation.get("mount") != mountpoint:
+if operation.get("mount") != str(mountpoint):
     raise SystemExit("phase names a different mountpoint; preserve everything")
-print("phase:", operation.get("phase"))
-print("created:", operation.get("created"))
+information = mountpoint.lstat()
+if (
+    not stat.S_ISDIR(information.st_mode)
+    or mountpoint.is_symlink()
+    or information.st_uid != os.getuid()
+    or stat.S_IMODE(information.st_mode) != 0o700
+):
+    raise SystemExit("unsafe mountpoint; preserve everything")
+if next(mountpoint.iterdir(), None) is not None:
+    raise SystemExit("mountpoint is not empty; preserve everything")
+
+name = operation.get("phase")
+common = (
+    isinstance(operation.get("created"), bool)
+    and isinstance(operation.get("nonce"), str)
+    and re.fullmatch(r"[0-9a-f]{64}", operation["nonce"]) is not None
+    and isinstance(operation.get("mount_tag"), str)
+    and re.fullmatch(
+        r"proton-drive-desktop-[0-9a-f]{64}", operation["mount_tag"]
+    ) is not None
+)
+if name == "prepare-create":
+    if not common or set(operation) != {
+        "phase", "mount", "created", "nonce", "mount_tag",
+    }:
+        raise SystemExit("invalid prepare-create phase; preserve everything")
+    raise SystemExit(
+        "prepare-create cannot authorize an existing leaf; preserve everything"
+    )
+if (
+    name not in {"prepare-publish", "cleanup-retained"}
+    or not common
+    or type(operation.get("device")) is not int
+    or type(operation.get("inode")) is not int
+    or set(operation) != {
+        "phase", "mount", "device", "inode", "created", "nonce",
+        "mount_tag",
+    }
+):
+    raise SystemExit("invalid recovery phase; preserve everything")
+if (
+    information.st_dev != operation["device"]
+    or information.st_ino != operation["inode"]
+):
+    raise SystemExit("directory identity mismatch; preserve everything")
+
+if marker_path.exists():
+    marker = json.loads(marker_path.read_text())
+    compared = ("mount", "device", "inode", "created", "nonce", "mount_tag")
+    marker_keys = set(marker) if isinstance(marker, dict) else set()
+    if (
+        not isinstance(marker, dict)
+        or marker_keys not in (set(compared), set(compared) | {"mount_id"})
+        or any(marker.get(key) != operation[key] for key in compared)
+        or (
+            "mount_id" in marker
+            and (
+                not isinstance(marker["mount_id"], str)
+                or not marker["mount_id"].isdigit()
+            )
+        )
+    ):
+        raise SystemExit("marker does not match phase; preserve everything")
+
+identity_name = "user.proton-drive-desktop.identity"
+try:
+    identity = os.getxattr(
+        mountpoint, identity_name, follow_symlinks=False
+    ).decode("ascii")
+except OSError as error:
+    missing = {
+        number for number in (
+            getattr(errno, "ENODATA", None), getattr(errno, "ENOATTR", None),
+        ) if number is not None
+    }
+    if error.errno not in missing:
+        raise
+    identity = None
+except UnicodeDecodeError:
+    identity = ""
+if identity not in {None, operation["nonce"]}:
+    raise SystemExit("directory identity mismatch; preserve everything")
+
+print("evidence matched:", name)
+print("created:", operation["created"])
 print("xattrs:", *sorted(os.listxattr(mountpoint, follow_symlinks=False)))
 PY
 ```
 
-Apply only the matching recovery below:
+Apply only the matching branch:
 
-- For `prepare-create`, require the application identity xattr and all other
-  `user.*` xattrs to be absent. Remove only the empty leaf with
-  `rmdir -- "$mountpoint"`, then retry `proton-drive-desktop start`. The
-  retained phase preserves the helper-created decision and preparation creates
-  a newly identified leaf.
-- For `prepare-publish`, retry `proton-drive-desktop start` once. Preparation
-  completes automatically when the directory still has the recorded nonce. If
-  the same diagnostic returns and the application identity xattr is absent,
-  use the phase's displayed `created` value: for `true`, require no other
-  `user.*` xattrs and run `rmdir -- "$mountpoint"`; for `false`, leave the
-  empty directory and every other xattr in place. Remove an existing marker
-  with `test ! -e "$marker" || rm -- "$marker"`, remove the phase with
-  `rm -- "$phase"`, then retry start. If the application identity xattr is
-  present but cannot be reconciled automatically, preserve the directory,
-  records, and xattrs for investigation.
-- For `cleanup-preexisting`, require `created` to be `false` and the
-  application identity xattr to be absent. Leave the empty directory and every
-  other xattr in place, run `rm -- "$marker" "$phase"`, then retry start. The
-  directory is admitted again as preexisting and remains after later cleanup.
+- A `prepare-create` intention does not identify an existing leaf. If the leaf
+  is absent, retry `proton-drive-desktop start`; preparation clears the intent
+  and creates a newly identified leaf. If a leaf exists, preserve the leaf,
+  phase, marker, contents, and xattrs for investigation. Do not infer ownership
+  from `created=true` or remove the leaf.
+- For `prepare-publish`, require the evidence check to pass, then retry
+  `proton-drive-desktop start`. Preparation accepts the unchanged recorded
+  directory, restores the planned application identity when the interrupted
+  write left it absent, publishes the marker, and removes the phase. A
+  different identity, device, inode, marker, mode, or directory entry preserves
+  every record and filesystem object.
+- For `cleanup-retained`, require the evidence check to pass, then retry
+  `proton-drive-desktop stop`. Cleanup accepts the unchanged recorded directory
+  with the application identity either present or already removed. It removes
+  only that identity and the matching private records. It retains the empty
+  directory and every other xattr. This covers marker-present and phase-only
+  interruptions.
 
 If the private runtime directory is gone, its phase and ownership records are
 gone too. An identity xattr without those records remains unknown and is
@@ -443,7 +727,7 @@ unmount it. Leave existing credentials and user data in place.
 
 - Command: `home/private_dot_local/bin/executable_proton-drive-desktop`
 - Unit: `home/dot_config/systemd/user/proton-drive-desktop.service`
-- Launcher: `home/private_dot_local/private_share/applications/proton-drive.desktop`
+- Launcher: `home/private_dot_local/private_share/applications/proton-drive.desktop.tmpl`
 - Behavior and disposable-deployment tests:
   `python3 -m unittest tests.test_proton_drive_desktop tests.test_proton_drive_desktop_deployment`
 - Platform bindings: `zsh tests/platform-portability.zsh`
