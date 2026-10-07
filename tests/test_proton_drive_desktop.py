@@ -208,6 +208,78 @@ class SyntheticDirectoryXattrs:
         self.descriptors.clear()
 
 
+def retained_publication_snapshot(mount, marker, phase):
+    def xattrs(path):
+        return tuple(
+            (name, os.getxattr(path, name, follow_symlinks=False))
+            for name in sorted(os.listxattr(path, follow_symlinks=False))
+        )
+
+    def tree(path):
+        information = path.lstat()
+        common = (
+            information.st_dev,
+            information.st_ino,
+            information.st_uid,
+            stat.S_IMODE(information.st_mode),
+            xattrs(path),
+        )
+        if stat.S_ISDIR(information.st_mode):
+            return (
+                "directory",
+                common,
+                tuple((child.name, tree(child)) for child in sorted(path.iterdir())),
+            )
+        if stat.S_ISREG(information.st_mode):
+            return "file", common, path.read_bytes()
+        return "other", common, os.readlink(path) if path.is_symlink() else None
+
+    def record(path):
+        return tree(path) if path.exists() else None
+
+    return record(marker), record(phase), tree(mount)
+
+
+@contextlib.contextmanager
+def interrupted_publication_fixture():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = pathlib.Path(temporary)
+        config_parent = root / "config/rclone"
+        data_home = root / "data"
+        runtime = root / "run"
+        config_parent.mkdir(parents=True, mode=0o700)
+        data_home.mkdir(mode=0o700)
+        runtime.mkdir(mode=0o700)
+        config = config_parent / "proton-drive.conf"
+        config.write_text("encrypted-placeholder")
+        config.chmod(0o600)
+        mount = data_home / "proton-drive-desktop/files"
+        mount.mkdir(parents=True, mode=0o700)
+        environment = {
+            "HOME": temporary,
+            "XDG_CONFIG_HOME": str(root / "config"),
+            "XDG_DATA_HOME": str(data_home),
+            "XDG_RUNTIME_DIR": str(runtime),
+        }
+
+        def opened(name, *args, **kwargs):
+            if name == "/proc/self/mountinfo":
+                return io.StringIO("")
+            return io.open(name, *args, **kwargs)
+
+        with mock.patch("os.setxattr", side_effect=SystemExit(96)):
+            interrupted = invoke(["_prepare"], environment, opened=opened)
+        if interrupted[0] != 96:
+            raise AssertionError(f"publication was not interrupted: {interrupted!r}")
+
+        private_runtime = runtime / "proton-drive-desktop"
+        marker = private_runtime / "mountpoint.json"
+        phase = private_runtime / "mountpoint-phase.json"
+        if marker.exists() or not phase.is_file():
+            raise AssertionError("fixture did not retain only the publication phase")
+        yield mount, marker, phase, environment, opened
+
+
 class ServiceContractTests(unittest.TestCase):
     def test_service_is_a_plasma_scoped_foreground_notify_service(self):
         unit = (ROOT / "home/dot_config/systemd/user/proton-drive-desktop.service").read_text()
@@ -592,6 +664,38 @@ class PublicCommandTests(unittest.TestCase):
             self.enterContext(mock.patch(
                 "os.removexattr", side_effect=xattrs.remove, create=True
             ))
+
+    def assert_interrupted_publication_rejected(
+        self, mount, marker, phase, environment, opened, expected_error,
+        fstat=None,
+    ):
+        before = retained_publication_snapshot(mount, marker, phase)
+        fstat_patch = (
+            mock.patch("os.fstat", side_effect=fstat)
+            if fstat is not None
+            else contextlib.nullcontext()
+        )
+        with fstat_patch:
+            result = invoke(["_prepare"], environment, opened=opened)
+
+        self.assertEqual((1, "", expected_error), result)
+        self.assertEqual(
+            before, retained_publication_snapshot(mount, marker, phase)
+        )
+        launch = mock.Mock()
+        self.assertEqual(
+            (
+                1,
+                "",
+                "interrupted mountpoint identity publication requires "
+                "stopped recovery\n",
+            ),
+            invoke(["_mount"], environment, execve=launch, opened=opened),
+        )
+        launch.assert_not_called()
+        self.assertEqual(
+            before, retained_publication_snapshot(mount, marker, phase)
+        )
 
     def test_prepare_accepts_only_the_fixed_scrubbed_rclone_version_command(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -7157,6 +7261,231 @@ class PublicCommandTests(unittest.TestCase):
             private_runtime = runtime / "proton-drive-desktop"
             self.assertFalse((private_runtime / "mountpoint.json").exists())
             self.assertFalse((private_runtime / "mountpoint-phase.json").exists())
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux xattrs")
+    def test_interrupted_publication_rejects_unsafe_mode_without_mutation(self):
+        with interrupted_publication_fixture() as (
+            mount, marker, phase, environment, opened,
+        ):
+            mount.chmod(0o770)
+            os.setxattr(mount, "user.proton-drive-desktop.keep", b"keep-xattr")
+            self.assert_interrupted_publication_rejected(
+                mount, marker, phase, environment, opened,
+                "unsafe mountpoint\n",
+            )
+
+    def test_interrupted_publication_rejects_other_unsafe_directory_evidence(self):
+        for evidence in ("owner", "contents", "identity"):
+            with self.subTest(evidence=evidence), interrupted_publication_fixture() as (
+                mount, marker, phase, environment, opened,
+            ):
+                os.setxattr(
+                    mount,
+                    "user.proton-drive-desktop.keep",
+                    b"keep-directory-xattr",
+                )
+                fstat = None
+                if evidence == "owner":
+                    mount_identity = (mount.stat().st_dev, mount.stat().st_ino)
+                    baseline_fstat = os.fstat
+
+                    def changed_owner(descriptor):
+                        information = baseline_fstat(descriptor)
+                        if (
+                            information.st_dev,
+                            information.st_ino,
+                        ) == mount_identity:
+                            return with_uid(information, os.getuid() + 1)
+                        return information
+
+                    fstat = changed_owner
+                    expected_error = "unsafe mountpoint\n"
+                elif evidence == "contents":
+                    retained = mount / "retained.bin"
+                    retained.write_bytes(b"retained directory contents\x00")
+                    retained.chmod(0o640)
+                    os.setxattr(retained, "user.keep", b"keep-file-xattr")
+                    expected_error = (
+                        "mountpoint contains unexpected local contents\n"
+                    )
+                else:
+                    os.setxattr(
+                        mount,
+                        "user.proton-drive-desktop.identity",
+                        b"cd" * 32,
+                    )
+                    expected_error = (
+                        "interrupted mountpoint identity publication requires "
+                        "stopped recovery\n"
+                    )
+
+                self.assert_interrupted_publication_rejected(
+                    mount, marker, phase, environment, opened,
+                    expected_error, fstat=fstat,
+                )
+
+    def test_interrupted_publication_rejects_nonidentical_markers_without_mutation(self):
+        cases = (
+            "malformed",
+            "missing-field",
+            "unexpected-field",
+            "mount-id-field",
+            "symlink",
+            "path",
+            "created",
+            "nonce",
+            "tag",
+            "device",
+            "inode",
+        )
+        for evidence in cases:
+            with self.subTest(evidence=evidence), interrupted_publication_fixture() as (
+                mount, marker, phase, environment, opened,
+            ):
+                operation = json.loads(phase.read_bytes())
+                retained = {
+                    "mount": operation["mount"],
+                    "device": operation["device"],
+                    "inode": operation["inode"],
+                    "created": operation["created"],
+                    "nonce": operation["nonce"],
+                    "mount_tag": operation["mount_tag"],
+                }
+                if evidence == "malformed":
+                    marker_bytes = b'{"mount":'
+                else:
+                    if evidence == "missing-field":
+                        del retained["mount_tag"]
+                    elif evidence == "unexpected-field":
+                        retained["unexpected"] = "preserve"
+                    elif evidence == "mount-id-field":
+                        retained["mount_id"] = "17"
+                    elif evidence == "path":
+                        retained["mount"] = str(mount.parent / "elsewhere")
+                    elif evidence == "created":
+                        retained["created"] = not retained["created"]
+                    elif evidence == "nonce":
+                        retained["nonce"] = "cd" * 32
+                    elif evidence == "tag":
+                        retained["mount_tag"] = (
+                            "proton-drive-desktop-" + "cd" * 32
+                        )
+                    elif evidence == "device":
+                        retained["device"] += 1
+                    elif evidence == "inode":
+                        retained["inode"] += 1
+                    marker_bytes = (
+                        json.dumps(retained, separators=(",", ":")) + "\n"
+                    ).encode()
+                target = None
+                if evidence == "symlink":
+                    target = marker.parent / "retained-marker-target.json"
+                    target.write_bytes(marker_bytes)
+                    target.chmod(0o600)
+                    marker.symlink_to(target)
+                else:
+                    marker.write_bytes(marker_bytes)
+                    marker.chmod(0o600)
+                os.setxattr(
+                    mount,
+                    "user.proton-drive-desktop.keep",
+                    b"keep-marker-case-xattr",
+                )
+                target_before = target.read_bytes() if target is not None else None
+
+                self.assert_interrupted_publication_rejected(
+                    mount, marker, phase, environment, opened,
+                    "interrupted mountpoint identity publication requires "
+                    "stopped recovery\n",
+                )
+                if target is not None:
+                    self.assertEqual(target_before, target.read_bytes())
+
+    def test_interrupted_publication_recovers_absent_and_exact_markers(self):
+        for marker_state in ("absent", "exact"):
+            with self.subTest(marker_state=marker_state), interrupted_publication_fixture() as (
+                mount, marker, phase, environment, opened,
+            ):
+                operation = json.loads(phase.read_bytes())
+                expected_marker = {
+                    "mount": operation["mount"],
+                    "device": operation["device"],
+                    "inode": operation["inode"],
+                    "created": operation["created"],
+                    "nonce": operation["nonce"],
+                    "mount_tag": operation["mount_tag"],
+                }
+                os.setxattr(
+                    mount,
+                    "user.proton-drive-desktop.keep",
+                    b"keep-through-shutdown",
+                )
+                if marker_state == "exact":
+                    marker_bytes = (
+                        json.dumps(expected_marker, indent=2) + "\n"
+                    ).encode()
+                    marker.write_bytes(marker_bytes)
+                    marker.chmod(0o600)
+                    os.setxattr(
+                        mount,
+                        "user.proton-drive-desktop.identity",
+                        operation["nonce"].encode("ascii"),
+                    )
+
+                self.assertEqual(
+                    (0, "", ""),
+                    invoke(["_prepare"], environment, opened=opened),
+                )
+                self.assertFalse(phase.exists())
+                recovered_marker = json.loads(marker.read_bytes())
+                for key in (
+                    "mount", "device", "inode", "created", "nonce",
+                ):
+                    self.assertEqual(expected_marker[key], recovered_marker[key])
+                self.assertRegex(
+                    recovered_marker["mount_tag"],
+                    r"\Aproton-drive-desktop-[0-9a-f]{64}\Z",
+                )
+                self.assertEqual(0o700, stat.S_IMODE(mount.stat().st_mode))
+                self.assertEqual([], list(mount.iterdir()))
+                self.assertEqual(
+                    operation["nonce"].encode("ascii"),
+                    os.getxattr(
+                        mount, "user.proton-drive-desktop.identity"
+                    ),
+                )
+                self.assertEqual(
+                    b"keep-through-shutdown",
+                    os.getxattr(mount, "user.proton-drive-desktop.keep"),
+                )
+
+                launch = mock.Mock(side_effect=SystemExit(0))
+                self.assertEqual(
+                    (0, "", ""),
+                    invoke(
+                        ["_mount"], environment,
+                        execve=launch, opened=opened,
+                    ),
+                )
+                launch.assert_called_once()
+                self.assertEqual(
+                    (0, "", ""),
+                    invoke(["_post-stop"], environment, opened=opened),
+                )
+                self.assertTrue(mount.is_dir())
+                self.assertEqual(0o700, stat.S_IMODE(mount.stat().st_mode))
+                self.assertEqual([], list(mount.iterdir()))
+                self.assertFalse(marker.exists())
+                self.assertFalse(phase.exists())
+                with self.assertRaises(OSError) as missing:
+                    os.getxattr(
+                        mount, "user.proton-drive-desktop.identity"
+                    )
+                self.assertEqual(XATTR_MISSING_ERRNO, missing.exception.errno)
+                self.assertEqual(
+                    b"keep-through-shutdown",
+                    os.getxattr(mount, "user.proton-drive-desktop.keep"),
+                )
 
     def test_interrupted_identity_publication_reconciles_before_mounting(self):
         for preexisting in (False, True):

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import time
@@ -61,10 +62,8 @@ class DesktopDeploymentTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         ignore.write_text(result.stdout)
 
-    def documented_wiring(self, action):
-        guide = (ROOT / "docs/PROTON_DRIVE.md").read_text()
-        marker = f"# proton-drive-custom-xdg-links: {action}"
-        lines = guide.splitlines()
+    def documented_sh_block(self, marker):
+        lines = (ROOT / "docs/PROTON_DRIVE.md").read_text().splitlines()
         start = next(
             index for index, line in enumerate(lines) if line.strip() == marker
         )
@@ -74,34 +73,15 @@ class DesktopDeploymentTests(unittest.TestCase):
             if lines[index].strip() == "```"
         )
         return textwrap.dedent("\n".join(lines[start:end])) + "\n"
+
+    def documented_wiring(self, action):
+        return self.documented_sh_block(f"# proton-drive-custom-xdg-links: {action}")
 
     def documented_effective_unit_qualification(self):
-        guide = (ROOT / "docs/PROTON_DRIVE.md").read_text()
-        marker = "# proton-drive-effective-unit: qualify"
-        lines = guide.splitlines()
-        start = next(
-            index for index, line in enumerate(lines) if line.strip() == marker
-        )
-        self.assertEqual("```sh", lines[start - 1].strip())
-        end = next(
-            index for index in range(start + 1, len(lines))
-            if lines[index].strip() == "```"
-        )
-        return textwrap.dedent("\n".join(lines[start:end])) + "\n"
+        return self.documented_sh_block("# proton-drive-effective-unit: qualify")
 
     def documented_baloo_setup(self):
-        guide = (ROOT / "docs/PROTON_DRIVE.md").read_text()
-        marker = "# proton-drive-baloo: setup"
-        lines = guide.splitlines()
-        start = next(
-            index for index, line in enumerate(lines) if line.strip() == marker
-        )
-        self.assertEqual("```sh", lines[start - 1].strip())
-        end = next(
-            index for index in range(start + 1, len(lines))
-            if lines[index].strip() == "```"
-        )
-        return textwrap.dedent("\n".join(lines[start:end])) + "\n"
+        return self.documented_sh_block("# proton-drive-baloo: setup")
 
     def documented_recovery_evidence_inspector(self):
         guide = (ROOT / "docs/PROTON_DRIVE.md").read_text()
@@ -182,6 +162,7 @@ class DesktopDeploymentTests(unittest.TestCase):
             "SYNTHETIC_BALOO_CALLS": str(calls),
         }, state, calls
 
+    @unittest.skipUnless(sys.platform == "linux", "Baloo setup requires Linux stat")
     def test_documented_baloo_setup_creates_once_and_preserves_exclusions(self):
         environment, state, calls = self.baloo_fixture()
         data_home = self.root / "XDG data with spaces"
@@ -202,6 +183,7 @@ class DesktopDeploymentTests(unittest.TestCase):
         )
         self.assertEqual(4, len(calls.read_text().splitlines()))
 
+    @unittest.skipUnless(sys.platform == "linux", "Baloo setup requires Linux stat")
     def test_documented_baloo_setup_accepts_a_valid_existing_parent(self):
         environment, state, calls = self.baloo_fixture()
         data_home = self.root / "existing data"
@@ -221,6 +203,7 @@ class DesktopDeploymentTests(unittest.TestCase):
         )
         self.assertEqual(2, len(calls.read_text().splitlines()))
 
+    @unittest.skipUnless(sys.platform == "linux", "Baloo setup requires Linux stat")
     def test_documented_baloo_setup_rejects_unsafe_paths_before_baloo(self):
         cases = ("symlink", "file", "unsafe-mode", "relative")
         for case in cases:

@@ -470,10 +470,30 @@ def phase_error(phase):
     return INTERRUPTED_CLEANUP
 
 
-def read_marker(resolved, missing_ok=False, error_message="mountpoint ownership record is invalid"):
+def read_marker(
+    resolved,
+    missing_ok=False,
+    error_message="mountpoint ownership record is invalid",
+    nofollow=False,
+):
     try:
-        with open(marker_path(resolved), encoding="utf-8") as marker_file:
-            ownership = json.load(marker_file)
+        if nofollow:
+            flags = (
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+            )
+            descriptor = os.open(marker_path(resolved), flags)
+            try:
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise OSError(errno.EINVAL, "marker is not a regular file")
+                with os.fdopen(descriptor, encoding="utf-8") as marker_file:
+                    descriptor = None
+                    ownership = json.load(marker_file)
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+        else:
+            with open(marker_path(resolved), encoding="utf-8") as marker_file:
+                ownership = json.load(marker_file)
     except FileNotFoundError:
         if missing_ok:
             return None
@@ -789,6 +809,11 @@ def prepare_mountpoint(resolved):
                     if descriptor is None:
                         raise OperationError(INTERRUPTED_PUBLICATION)
                     information = os.fstat(descriptor)
+                    if (
+                        information.st_uid != os.getuid()
+                        or information.st_mode & 0o022
+                    ):
+                        raise OperationError("unsafe mountpoint")
                     with os.scandir(descriptor) as entries:
                         if next(entries, None) is not None:
                             raise OperationError(
@@ -799,24 +824,37 @@ def prepare_mountpoint(resolved):
                         or information.st_ino != phase["inode"]
                     ):
                         raise OperationError(INTERRUPTED_PUBLICATION)
+                    recovered_marker = {
+                        "mount": phase["mount"],
+                        "device": phase["device"],
+                        "inode": phase["inode"],
+                        "created": phase["created"],
+                        "nonce": phase["nonce"],
+                        "mount_tag": phase["mount_tag"],
+                    }
+                    retained_marker = read_marker(
+                        resolved,
+                        missing_ok=True,
+                        error_message=INTERRUPTED_PUBLICATION,
+                        nofollow=True,
+                    )
+                    if (
+                        retained_marker is not None
+                        and retained_marker != recovered_marker
+                    ):
+                        raise OperationError(INTERRUPTED_PUBLICATION)
                     nonce = read_directory_nonce(descriptor)
                     if nonce is None:
                         set_directory_nonce(descriptor, phase["nonce"])
                     elif nonce != phase["nonce"]:
                         raise OperationError(INTERRUPTED_PUBLICATION)
-                    try:
-                        write_marker(resolved, {
-                            "mount": phase["mount"],
-                            "device": phase["device"],
-                            "inode": phase["inode"],
-                            "created": phase["created"],
-                            "nonce": phase["nonce"],
-                            "mount_tag": phase["mount_tag"],
-                        })
-                    except OSError:
-                        raise OperationError(
-                            "mountpoint ownership record is unavailable"
-                        ) from None
+                    if retained_marker is None:
+                        try:
+                            write_marker(resolved, recovered_marker)
+                        except OSError:
+                            raise OperationError(
+                                "mountpoint ownership record is unavailable"
+                            ) from None
                     remove_phase(resolved)
                 else:
                     raise OperationError(INTERRUPTED_CLEANUP)
