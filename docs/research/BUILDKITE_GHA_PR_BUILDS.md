@@ -1,5 +1,27 @@
 # Buildkite `buildkite-gha` pull request builds
 
+GitHub Actions runs the portability battery on Linux and macOS. The workflow
+reports separate `linux portability` and `platform portability` aggregates;
+each requires every group on its platform to succeed. The required-check
+cutover replaces `buildkite/dotfiles` with `linux portability` from GitHub
+Actions after the migration revision passes. The distinct Linux name keeps
+older macOS-only results from satisfying the Linux requirement.
+
+The retained Buildkite pipelines stay archived. Queue pauses and the absence
+of active builds are separate provider controls to inspect; they are not a
+spending cap. `scripts/buildkite-pipeline-settings check` only verifies that
+the recorded `dotfiles` pipeline is archived. It does not change the archived
+pipeline's historical provider flags, inspect queues or active work, or verify
+spending controls. Its `apply` command is retired and fails without provider
+access, including with `--yes` or an alternate record. The adjacent JSON is an
+archive requirement, not a provider configuration to restore.
+
+The `.buildkite/` files and their offline regressions retain the native
+pipeline's implementation for inspection. They do not define an active CI
+route. The research below records earlier experiments, including the archived
+`dotfiles-gha` build-number legend; its provider recommendations and settings
+procedures are historical and must not be used to reactivate CI.
+
 Research date: 2026-09-25. Scope: pipeline `nisavid/dotfiles`, which runs this repository's `.github/workflows/*` through the `github-actions` Buildkite plugin and the `buildkite-gha` runtime (v0.90.0).
 
 Evidence tags:

@@ -1,107 +1,33 @@
 #!/usr/bin/env python3
-"""Check the Buildkite pipeline settings the merge gate relies on, or apply them.
+"""Verify that the retained dotfiles Buildkite pipeline is archived.
 
-The record beside this script, buildkite-pipeline-settings.json, names the
-organization and pipeline, and lists pipeline fields, GitHub provider settings
-and whether incoming GitHub webhook processing is enabled, with their required
-values.
+GitHub Actions owns CI. This tool reads the pipeline named in the adjacent
+record; it never changes provider settings or unarchives a pipeline. The
+retired apply command fails before provider access, including with --yes or
+an alternate record. Archive verification does not inspect queue pauses,
+active builds, schedules, or account spending controls.
 
-  check (the default)  Read the live pipeline with `bk api /pipelines/SLUG`, and
-                       its webhook processing state with
-                       `bk api /pipelines/SLUG/github-webhooks`, and compare
-                       only the recorded keys.
-  apply --yes          Write the recorded values that differ, then read the
-                       pipeline back and verify that exactly those settings
-                       changed. Run it only with the pipeline owner's approval.
-
-When a provider setting differs, apply sends the full current provider settings
-with only the differing keys changed, so no other provider setting resets to
-its default. It leaves out the keys Buildkite derives or manages elsewhere, and
-switches webhook processing through its own endpoint. Buildkite's API has no
-conditional write, so a setting someone else changes between apply's read and
-its write can revert unnoticed: run apply only while nobody else edits the
-pipeline.
-
-Exit status: 0 when the live pipeline matches the record (for apply, after
-reading it back); 1 when it differs, or when apply could not be verified; 2 on
-errors, such as a failed bk call, malformed JSON, an invalid record, a pipeline
-in another organization, a recorded key the live pipeline lacks before apply
-writes, or apply without --yes.
-
-Set BK to run a different bk executable. Output shows values only for recorded
-keys, after redacting URLs, Buildkite tokens and the values of secret-named
-keys. It names other keys only when apply finds they changed, and never prints
-the pipeline's webhook URL.
+Exit status: 0 when the pipeline is archived, 1 when it is not, and 2 when
+verification is unavailable or the invocation/record is invalid.
 """
 
 from __future__ import annotations
 
 import argparse
-import difflib
+from datetime import datetime
 import json
 import os
+from pathlib import Path
 import re
-import shlex
 import subprocess
 import sys
-from collections.abc import Iterator
-from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True
-
 PROG = "buildkite-pipeline-settings"
 DEFAULT_RECORD = Path(__file__).resolve().with_name(f"{PROG}.json")
-PIPELINE = "pipeline_settings"
-PROVIDER = "provider_settings"
-WEBHOOKS = "github_webhooks"
-SECTIONS = (PIPELINE, PROVIDER, WEBHOOKS)
-REQUIRED_SECTIONS = (PIPELINE, PROVIDER)
-RECORD_KEYS = frozenset({"description", "organization", "pipeline", *SECTIONS})
-# Fields that identify the pipeline, hold a URL or secret, or are derived. The
-# record must not hold them, so apply never writes them and check never prints
-# them.
-UNRECORDABLE = frozenset(
-    {
-        "archived_at",
-        "badge_url",
-        "builds_url",
-        "clone_mirror_url",
-        "cluster_id",
-        "cluster_url",
-        "created_at",
-        "created_by",
-        "env",
-        "github_webhooks_disabled",
-        "graphql_id",
-        "id",
-        "name",
-        "pipeline_template_uuid",
-        "provider",
-        "provider_settings",
-        "repository",
-        "slug",
-        "steps",
-        "url",
-        "web_url",
-        "webhook_url",
-    }
-)
-# Provider settings the pipeline GET returns but provider_settings doesn't
-# accept: Buildkite derives repository from the pipeline's repository URL, and
-# github_webhooks_disabled belongs to /pipelines/SLUG/github-webhooks.
-PROVIDER_DERIVED = frozenset({"github_webhooks_disabled", "repository"})
-# Counters that change whenever a build starts or finishes.
-VOLATILE = frozenset(
-    {
-        "running_builds_count",
-        "running_jobs_count",
-        "scheduled_builds_count",
-        "scheduled_jobs_count",
-        "waiting_jobs_count",
-    }
-)
+RECORD_KEYS = {"description", "organization", "pipeline", "archived"}
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 SECRET_ASSIGNMENT = re.compile(
     r"(?i)(\b\w*(?:token|secret|password|passwd|credential|api_?key|private_?key)\w*[\"']?\s*[:=]\s*)\S.*"
@@ -111,34 +37,15 @@ STDERR_EXCERPT_LINES = 5
 
 
 class Failure(Exception):
-    """An error that ends the run with exit status 2."""
-
-
-Difference = tuple[str, str, Any, Any]
-State = dict[str, Any]
+    """Verification could not establish the required state."""
 
 
 def fail(message: str) -> NoReturn:
     raise Failure(message)
 
 
-def same(left: object, right: object) -> bool:
-    # JSON text tells true from 1, which Python's == does not.
-    return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
-
-
 def show(value: object) -> str:
     return json.dumps(value, ensure_ascii=False)
-
-
-def settings_count(count: int) -> str:
-    return f"{count} setting" if count == 1 else f"{count} settings"
-
-
-def record_label(path: Path) -> str:
-    if path == DEFAULT_RECORD:
-        return str(DEFAULT_RECORD.relative_to(DEFAULT_RECORD.parents[1]))
-    return str(path)
 
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -154,43 +61,21 @@ def reject_constant(name: str) -> NoReturn:
     fail(f"non-standard JSON constant {name}")
 
 
-def load_record(path: Path, label: str) -> dict[str, Any]:
+def load_record(path: Path) -> dict[str, Any]:
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        fail(f"cannot read {label}: {error}")
-    try:
-        record = json.loads(text, object_pairs_hook=unique_object, parse_constant=reject_constant)
-    except (json.JSONDecodeError, Failure) as error:
-        fail(f"{label} is not a valid record: {error}")
-    if not isinstance(record, dict):
-        fail(f"{label} must hold a JSON object")
-    extra = sorted(set(record) - RECORD_KEYS)
-    if extra:
-        fail(f"{label} has unknown keys: {', '.join(extra)}")
+        record = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object, parse_constant=reject_constant)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, Failure) as error:
+        fail(f"cannot read retirement record: {error}")
+    if not isinstance(record, dict) or set(record) != RECORD_KEYS:
+        fail("retirement record must contain only description, organization, pipeline, and archived")
+    if not isinstance(record["description"], str):
+        fail("retirement record description must be a string")
     for field in ("organization", "pipeline"):
-        slug = record.get(field)
-        if not isinstance(slug, str) or not SLUG.match(slug):
-            fail(f"{label} must name the {field} slug in {field}")
-    if not isinstance(record.get("description", ""), str):
-        fail(f"{label}: description must be a string")
-    for section in REQUIRED_SECTIONS:
-        settings = record.get(section)
-        if not isinstance(settings, dict):
-            fail(f"{label}: {section} must be an object")
-        for key, value in settings.items():
-            if key == "github_webhooks_disabled":
-                fail(f"{label}: record webhook processing as {WEBHOOKS}.enabled, not {section}.{key}")
-            if key in UNRECORDABLE or key in VOLATILE:
-                fail(f"{label}: {section}.{key} must not be recorded")
-            if value is not None and not isinstance(value, (bool, int, str)):
-                fail(f"{label}: {section}.{key} must be null, a boolean, a number or a string")
-    if WEBHOOKS in record:
-        webhooks = record[WEBHOOKS]
-        if not isinstance(webhooks, dict) or set(webhooks) != {"enabled"} or not isinstance(webhooks["enabled"], bool):
-            fail(f'{label}: {WEBHOOKS} must be {{"enabled": true}} or {{"enabled": false}}')
-    if not any(True for _ in recorded(record)):
-        fail(f"{label} records no settings")
+        slug = record[field]
+        if not isinstance(slug, str) or not SLUG.fullmatch(slug):
+            fail(f"retirement record must name the {field} slug")
+    if record["archived"] is not True:
+        fail("retirement record must require archived: true")
     return record
 
 
@@ -265,248 +150,48 @@ def read_pipeline(record: dict[str, Any]) -> dict[str, Any]:
             f"bk api {endpoint} returned pipeline {slug} of {found}, not {organization};"
             f" select organization {organization} in bk"
         )
-    provider = pipeline.get("provider")
-    if not isinstance(provider, dict) or not isinstance(provider.get("settings"), dict):
-        fail(f"bk api {endpoint} returned no provider settings")
     return pipeline
 
 
-def read_webhooks(slug: str) -> dict[str, Any]:
-    endpoint = f"/pipelines/{slug}/github-webhooks"
-    webhooks = read_json(endpoint, f"read GitHub webhook processing of pipeline {slug}")
-    if not isinstance(webhooks, dict) or not isinstance(webhooks.get("enabled"), bool):
-        fail(f"bk api {endpoint} returned no webhook processing state")
-    return webhooks
-
-
-def read_state(record: dict[str, Any]) -> State:
-    state: State = {PIPELINE: read_pipeline(record)}
-    if WEBHOOKS in record:
-        state[WEBHOOKS] = read_webhooks(record["pipeline"])
-    return state
-
-
-def live_settings(state: State, section: str) -> dict[str, Any]:
-    if section == PROVIDER:
-        return state[PIPELINE]["provider"]["settings"]
-    return state[section]
-
-
-def recorded(record: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
-    for section in SECTIONS:
-        for key, value in record.get(section, {}).items():
-            yield section, key, value
-
-
-def differences(record: dict[str, Any], state: State) -> tuple[list[Difference], list[str]]:
-    """Return the recorded settings that differ, and those the state lacks."""
-
-    found: list[Difference] = []
-    missing: list[str] = []
-    for section, key, committed in recorded(record):
-        live = live_settings(state, section)
-        if key not in live:
-            missing.append(f"{section}.{key}")
-        elif not same(live[key], committed):
-            found.append((section, key, committed, live[key]))
-    return found, missing
-
-
-def present_differences(record: dict[str, Any], state: State) -> list[Difference]:
-    found, missing = differences(record, state)
-    if missing:
-        fail(f"pipeline {record['pipeline']} has no {', '.join(missing)}")
-    return found
-
-
-def printable(line: str) -> str:
-    if line.isprintable():
-        return line
-    return show(line)[1:-1]
-
-
-def value_lines(text: str) -> list[str]:
-    """Split text after each newline, keeping it, so a diff shows line endings."""
-
-    parts = text.split("\n")
-    lines = [f"{part}\n" for part in parts[:-1]]
-    if parts[-1]:
-        lines.append(parts[-1])
-    return lines
-
-
-def diff_lines(committed: str, live: str) -> list[str]:
-    diff = difflib.unified_diff(value_lines(committed), value_lines(live), "committed", "live", lineterm="")
-    rendered: list[str] = []
-    for index, line in enumerate(diff):
-        # The two file headers and the hunk headers carry no line ending.
-        if index < 2 or line.startswith("@@"):
-            rendered.append(line)
-        elif line.endswith("\n"):
-            rendered.append(printable(line[:-1]))
-        else:
-            rendered.extend((printable(line), "\\ No newline at end of value"))
-    return rendered
-
-
-def describe(difference: Difference) -> list[str]:
-    section, key, committed, live = difference
-    if isinstance(committed, str) and isinstance(live, str) and "\n" in committed + live:
-        return [f"  {section}.{key}: committed and live differ:"] + [
-            f"    {redact(line)}" for line in diff_lines(committed, live)
-        ]
-    return [f"  {section}.{key}: committed {redact(show(committed))}, live {redact(show(live))}"]
-
-
-def check(record: dict[str, Any], label: str) -> int:
-    slug = record["pipeline"]
-    found = present_differences(record, read_state(record))
-    count = sum(1 for _ in recorded(record))
-    if not found:
-        print(f"{PROG}: pipeline {slug} matches {label} ({settings_count(count)})")
-        return 0
-    print(f"{PROG}: pipeline {slug} differs from {label} in {len(found)} of {settings_count(count)}:")
-    for difference in found:
-        print("\n".join(describe(difference)))
-    # The suggested apply must use the record that check compared.
-    record_option = "" if label == record_label(DEFAULT_RECORD) else f" --record {shlex.quote(label)}"
-    print(
-        "Restore the committed values, with the owner's approval, by running"
-        f" scripts/{PROG}{record_option} apply --yes, or update {label} if the change is intended."
-    )
-    return 1
-
-
-def changed_keys(old: dict[str, Any], new: dict[str, Any], skipped: set[str]) -> list[str]:
-    return [
-        key
-        for key in sorted((set(old) | set(new)) - skipped)
-        if (key in old) != (key in new) or not same(old.get(key), new.get(key))
-    ]
-
-
-def unexpected_changes(before: State, after: State, found: list[Difference]) -> list[str]:
-    intended = {(section, key) for section, key, _, _ in found}
-    provider_skipped = {key for section, key in intended if section == PROVIDER}
-    pipeline_skipped = set(VOLATILE) | {"provider"} | {key for section, key in intended if section == PIPELINE}
-    if (PIPELINE, "configuration") in intended:
-        # Buildkite derives steps and env from a YAML pipeline's configuration.
-        pipeline_skipped |= {"steps", "env"}
-    if (WEBHOOKS, "enabled") in intended:
-        # The pipeline mirrors webhook processing in this provider setting.
-        provider_skipped.add("github_webhooks_disabled")
-    old_provider, new_provider = before[PIPELINE]["provider"], after[PIPELINE]["provider"]
-    old_settings, new_settings = old_provider["settings"], new_provider["settings"]
-    # The webhook processing state holds only enabled, which differences()
-    # verifies, and fields that follow from it.
-    return (
-        [f"{PROVIDER}.{key}" for key in changed_keys(old_settings, new_settings, provider_skipped)]
-        + [f"provider.{key}" for key in changed_keys(old_provider, new_provider, {"settings"})]
-        + [f"{PIPELINE}.{key}" for key in changed_keys(before[PIPELINE], after[PIPELINE], pipeline_skipped)]
-    )
-
-
-def apply(record: dict[str, Any], label: str) -> int:
-    slug = record["pipeline"]
-    before = read_state(record)
-    found = present_differences(record, before)
-    if not found:
-        print(f"{PROG}: pipeline {slug} already matches {label}; nothing to apply")
-        return 0
-    payload: dict[str, Any] = {}
-    provider_changes = {key: committed for section, key, committed, _ in found if section == PROVIDER}
-    if provider_changes:
-        # Send every provider setting, so the ones not sent can't reset, except
-        # those provider_settings doesn't accept.
-        current = before[PIPELINE]["provider"]["settings"]
-        payload[PROVIDER] = {
-            **{key: value for key, value in current.items() if key not in PROVIDER_DERIVED},
-            **provider_changes,
-        }
-    for section, key, committed, _ in found:
-        if section == PIPELINE:
-            payload[key] = committed
-    webhooks = [committed for section, _, committed, _ in found if section == WEBHOOKS]
-    body = json.dumps(payload, sort_keys=True)
-    webhook_url = before[PIPELINE]["provider"].get("webhook_url")
-    if isinstance(webhook_url, str) and webhook_url and webhook_url in body:
-        fail("refusing to send the pipeline's webhook URL")
-    print(f"{PROG}: applying {settings_count(len(found))} from {label} to pipeline {slug}:")
-    for section, key, committed, live in found:
-        if isinstance(committed, str) and "\n" in committed:
-            print(f"  {section}.{key}: set to the committed value")
-        else:
-            print(f"  {section}.{key}: {redact(show(live))} -> {redact(show(committed))}")
-    recovery = "run check to see its current settings"
-    if payload:
-        patch = ["api", "--no-pager", "-q", "--yes", "--method", "PATCH", "--data", body, f"/pipelines/{slug}"]
-        run_bk(patch, f"update pipeline {slug} ({recovery})")
-    if webhooks:
-        enable = webhooks[0]
-        written = " after updating its other settings" if payload else ""
-        run_bk(
-            [
-                "api", "--no-pager", "-q", "--yes",
-                "--method", "PUT" if enable else "DELETE",
-                f"/pipelines/{slug}/github-webhooks",
-            ],
-            f"{'enable' if enable else 'disable'} GitHub webhook processing of pipeline {slug}{written} ({recovery})",
-        )
+def check(record: dict[str, Any]) -> int:
+    pipeline = read_pipeline(record)
+    if "archived_at" not in pipeline:
+        fail("pipeline response has no archive state")
+    archived = pipeline["archived_at"]
+    if archived is None:
+        print(f"{PROG}: pipeline {record['pipeline']} is not archived; CI must remain on GitHub Actions")
+        return 1
     try:
-        after = read_state(record)
-    except Failure as error:
-        fail(f"wrote pipeline {slug}, but could not read it back: {error}")
-    still, missing = differences(record, after)
-    unexpected = unexpected_changes(before, after, found)
-    if not still and not missing and not unexpected:
-        print(
-            f"{PROG}: read pipeline {slug} back: it matches {label},"
-            " and nothing else differs from what apply read before writing"
-        )
-        return 0
-    lines = [f"{PROG}: pipeline {slug} did not verify after apply:"]
-    for difference in still:
-        lines.extend(describe(difference))
-    lines.extend(f"  {name}: missing after apply" for name in missing)
-    lines.extend(f"  {name} changed, though apply did not set it" for name in unexpected)
-    lines.append(f"Review pipeline {slug}'s settings in Buildkite before trying again.")
-    print("\n".join(lines), file=sys.stderr)
-    return 1
+        if not isinstance(archived, str) or not archived:
+            raise ValueError
+        if archived.endswith(" UTC"):
+            archived = archived.removesuffix(" UTC") + "+00:00"
+        instant = datetime.fromisoformat(archived.replace("Z", "+00:00"))
+        if instant.tzinfo is None:
+            raise ValueError
+    except ValueError:
+        fail("pipeline response has an invalid archive state")
+    print(f"{PROG}: pipeline {record['pipeline']} is archived")
+    print("Queue state, active builds, and spending limits are not checked.")
+    return 0
 
 
 def parse_arguments(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog=PROG,
-        description="Check the Buildkite pipeline settings the merge gate relies on, or apply them.",
-    )
-    parser.add_argument(
-        "--record",
-        type=Path,
-        default=DEFAULT_RECORD,
-        help=f"settings record (default: scripts/{PROG}.json)",
-    )
+    parser = argparse.ArgumentParser(prog=PROG, description=__doc__)
+    parser.add_argument("--record", type=Path, default=DEFAULT_RECORD, help="retirement record")
     commands = parser.add_subparsers(dest="command", metavar="{check,apply}")
-    commands.add_parser("check", help="report recorded settings that differ from the live pipeline (default)")
-    apply_parser = commands.add_parser("apply", help="write the recorded settings that differ, then verify them")
-    apply_parser.add_argument(
-        "--yes",
-        action="store_true",
-        help="confirm the change to the live pipeline, which needs the owner's approval",
-    )
+    commands.add_parser("check", help="verify the pipeline is archived (default; read-only)")
+    retired = commands.add_parser("apply", help="retired; always fails without provider access")
+    retired.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = parse_arguments(argv)
-    command = arguments.command or "check"
-    label = record_label(arguments.record)
     try:
-        if command == "apply" and not arguments.yes:
-            fail("apply changes the live pipeline; rerun with --yes once its owner has approved the change")
-        record = load_record(arguments.record, label)
-        if command == "apply":
-            return apply(record, label)
-        return check(record, label)
+        if arguments.command == "apply":
+            fail("Buildkite CI is retired; apply is disabled and no settings were changed")
+        return check(load_record(arguments.record))
     except Failure as error:
         print(f"{PROG}: {error}", file=sys.stderr)
         return 2

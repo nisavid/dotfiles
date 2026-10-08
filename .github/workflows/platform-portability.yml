@@ -1,7 +1,7 @@
 name: Platform portability
 
-# Runs the portability test battery on macOS. Buildkite runs the same groups
-# on Linux (.buildkite/pipeline.yml).
+# Runs every portability test group on macOS and Linux. Each platform has
+# its own required aggregate so an older macOS-only result cannot satisfy Linux.
 on:
   pull_request:
   push:
@@ -124,7 +124,123 @@ jobs:
           GROUP: ${{ matrix.group }}
         run: bash scripts/ci-test-group "$GROUP"
 
-  # This job is the required check for the whole matrix.
+  verify-linux:
+    name: ubuntu-24.04 · ${{ matrix.group }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - shell-bindings
+          - proton-pass
+          - discover
+          - python-checks
+          - age-admission
+          - age-provisioning
+          - zsh-deployment
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Select Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Install Linux dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y --no-install-recommends \
+            acl bat ca-certificates curl gcc git jq libc6-dev openssh-client procps psmisc \
+            python3 ripgrep systemd util-linux zsh
+          [[ -e /usr/local/bin/bat ]] || sudo ln -s /usr/bin/batcat /usr/local/bin/bat
+          archive=chezmoi_${CHEZMOI_VERSION}_linux_amd64.tar.gz
+          package="$RUNNER_TEMP/$archive"
+          curl --fail --location --silent --show-error \
+            --output "$package" \
+            "https://github.com/twpayne/chezmoi/releases/download/v${CHEZMOI_VERSION}/$archive"
+          printf '%s  %s\n' \
+            6ea2040ecc0e82d3dac604289e100b0157afefcd94ebb818e5f6e31655156d34 \
+            "$package" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/chezmoi-bin"
+          tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
+          age_archive=age-v${AGE_VERSION}-linux-amd64.tar.gz
+          age_digest=bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377
+          age_package="$RUNNER_TEMP/$age_archive"
+          curl --fail --location --silent --show-error \
+            --output "$age_package" \
+            "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/$age_archive"
+          printf '%s  %s\n' \
+            "$age_digest" \
+            "$age_package" | sha256sum --check
+          {
+            printf 'AGE_TOOLING_ARCHIVE=%s\n' "$age_package"
+            printf 'AGE_TOOLING_ARCHIVE_SHA256=%s\n' "$age_digest"
+          } >>"$GITHUB_ENV"
+          tar -xzf "$age_package" -C "$RUNNER_TEMP"
+          install -m 0755 \
+            "$RUNNER_TEMP/age/age" \
+            "$RUNNER_TEMP/age/age-keygen" \
+            "$RUNNER_TEMP/age/age-inspect" \
+            "$RUNNER_TEMP/chezmoi-bin"
+          printf '%s\n' "$RUNNER_TEMP/chezmoi-bin" >>"$GITHUB_PATH"
+
+          uv_archive=uv-x86_64-unknown-linux-gnu.tar.gz
+          uv_package="$RUNNER_TEMP/$uv_archive"
+          curl --fail --location --silent --show-error \
+            --output "$uv_package" \
+            "https://github.com/astral-sh/uv/releases/download/0.11.32/$uv_archive"
+          printf '%s  %s\n' \
+            aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967 \
+            "$uv_package" | sha256sum --check
+          tar -xzf "$uv_package" -C "$RUNNER_TEMP"
+          install -m 0755 \
+            "$RUNNER_TEMP/uv-x86_64-unknown-linux-gnu/uv" \
+            "$RUNNER_TEMP/uv-x86_64-unknown-linux-gnu/uvx" \
+            "$RUNNER_TEMP/chezmoi-bin"
+
+      - name: Verify chezmoi version
+        shell: bash
+        run: chezmoi --version | grep -Fq "chezmoi version v${CHEZMOI_VERSION},"
+
+      - name: Verify age parser version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(age --version)" = "v${AGE_VERSION}"
+          test "$(age-inspect --version)" = "v${AGE_VERSION}"
+
+      - name: Verify uv version
+        shell: bash
+        run: uv --version | grep -Eq '^uv 0\.11\.32( |$)'
+
+      - name: Run test group
+        shell: bash
+        env:
+          AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin
+          GROUP: ${{ matrix.group }}
+        run: bash scripts/ci-test-group "$GROUP"
+
+  linux-aggregate:
+    name: linux portability
+    if: always()
+    needs:
+      - verify-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every Linux group
+        env:
+          VERIFY_RESULT: ${{ needs.verify-linux.result }}
+        run: test "$VERIFY_RESULT" = success
+
+  # Keep the existing required macOS check identity.
   aggregate:
     name: platform portability
     if: always()

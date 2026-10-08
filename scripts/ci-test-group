@@ -2,8 +2,8 @@
 # Run one named group of the portability test battery from the repository root.
 #
 # The groups split the portability test battery so CI can run it in parallel.
-# GitHub Actions runs every group on macOS (.github/workflows/platform-portability.yml),
-# and Buildkite runs every group on Linux (.buildkite/pipeline.yml);
+# GitHub Actions runs every group on macOS and Linux
+# (.github/workflows/platform-portability.yml);
 # tests/ci-test-group.zsh checks those lists.
 # Each group expects the workflow's dependencies on PATH: zsh, chezmoi, age tooling
 # (AGE_TOOLING_DIRECTORY), python3 with uv/uvx, jq, rg, bat, and flock on macOS.

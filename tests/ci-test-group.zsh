@@ -63,12 +63,12 @@ hidden=$(LC_ALL=C grep -anE $'[\x01-\x09\x0b-\x1f\x7f]|\xc2\x85|\xe2\x80[\xa8\xa
 [[ -z $hidden ]] ||
   fail "${portability#$repo_root/} must not hold control characters or line breaks other than LF:"$'\n'"$hidden"
 
-# GitHub Actions pin. Invariants: the matrix lists every group, on macOS, with
+# GitHub Actions pin. Invariants: each platform matrix lists every group with
 # no exclude, include or condition; the checkout is the pull request's own,
 # tested in place; the Run test group step runs bash scripts/ci-test-group with
 # GROUP from matrix.group, under shell: bash with no BASH_ENV or defaults; no
-# step continues on error; and the "platform portability" aggregate needs only
-# the matrix job, always runs, and fails unless that job succeeded.
+# step continues on error; each named platform aggregate needs only its own
+# matrix job, always runs, and fails unless that entire matrix succeeded.
 expected_workflow=$(cat <<'PIN'
 name: Platform portability
 on:
@@ -172,6 +172,106 @@ jobs:
           AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin
           GROUP: ${{ matrix.group }}
         run: bash scripts/ci-test-group "$GROUP"
+  verify-linux:
+    name: ubuntu-24.04 · ${{ matrix.group }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+@GROUPS@
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Select Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Install Linux dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y --no-install-recommends \
+            acl bat ca-certificates curl gcc git jq libc6-dev openssh-client procps psmisc \
+            python3 ripgrep systemd util-linux zsh
+          [[ -e /usr/local/bin/bat ]] || sudo ln -s /usr/bin/batcat /usr/local/bin/bat
+          archive=chezmoi_${CHEZMOI_VERSION}_linux_amd64.tar.gz
+          package="$RUNNER_TEMP/$archive"
+          curl --fail --location --silent --show-error \
+            --output "$package" \
+            "https://github.com/twpayne/chezmoi/releases/download/v${CHEZMOI_VERSION}/$archive"
+          printf '%s  %s\n' \
+            6ea2040ecc0e82d3dac604289e100b0157afefcd94ebb818e5f6e31655156d34 \
+            "$package" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/chezmoi-bin"
+          tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
+          age_archive=age-v${AGE_VERSION}-linux-amd64.tar.gz
+          age_digest=bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377
+          age_package="$RUNNER_TEMP/$age_archive"
+          curl --fail --location --silent --show-error \
+            --output "$age_package" \
+            "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/$age_archive"
+          printf '%s  %s\n' \
+            "$age_digest" \
+            "$age_package" | sha256sum --check
+          {
+            printf 'AGE_TOOLING_ARCHIVE=%s\n' "$age_package"
+            printf 'AGE_TOOLING_ARCHIVE_SHA256=%s\n' "$age_digest"
+          } >>"$GITHUB_ENV"
+          tar -xzf "$age_package" -C "$RUNNER_TEMP"
+          install -m 0755 \
+            "$RUNNER_TEMP/age/age" \
+            "$RUNNER_TEMP/age/age-keygen" \
+            "$RUNNER_TEMP/age/age-inspect" \
+            "$RUNNER_TEMP/chezmoi-bin"
+          printf '%s\n' "$RUNNER_TEMP/chezmoi-bin" >>"$GITHUB_PATH"
+          uv_archive=uv-x86_64-unknown-linux-gnu.tar.gz
+          uv_package="$RUNNER_TEMP/$uv_archive"
+          curl --fail --location --silent --show-error \
+            --output "$uv_package" \
+            "https://github.com/astral-sh/uv/releases/download/0.11.32/$uv_archive"
+          printf '%s  %s\n' \
+            aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967 \
+            "$uv_package" | sha256sum --check
+          tar -xzf "$uv_package" -C "$RUNNER_TEMP"
+          install -m 0755 \
+            "$RUNNER_TEMP/uv-x86_64-unknown-linux-gnu/uv" \
+            "$RUNNER_TEMP/uv-x86_64-unknown-linux-gnu/uvx" \
+            "$RUNNER_TEMP/chezmoi-bin"
+      - name: Verify chezmoi version
+        shell: bash
+        run: chezmoi --version | grep -Fq "chezmoi version v${CHEZMOI_VERSION},"
+      - name: Verify age parser version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(age --version)" = "v${AGE_VERSION}"
+          test "$(age-inspect --version)" = "v${AGE_VERSION}"
+      - name: Verify uv version
+        shell: bash
+        run: uv --version | grep -Eq '^uv 0\.11\.32( |$)'
+      - name: Run test group
+        shell: bash
+        env:
+          AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin
+          GROUP: ${{ matrix.group }}
+        run: bash scripts/ci-test-group "$GROUP"
+  linux-aggregate:
+    name: linux portability
+    if: always()
+    needs:
+      - verify-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every Linux group
+        env:
+          VERIFY_RESULT: ${{ needs.verify-linux.result }}
+        run: test "$VERIFY_RESULT" = success
   aggregate:
     name: platform portability
     if: always()
@@ -186,21 +286,40 @@ jobs:
         run: test "$VERIFY_RESULT" = success
 PIN
 )
-require_pin "$portability" 'the GitHub Actions pin' "${expected_workflow/@GROUPS@/$workflow_groups}"
+require_pin "$portability" 'the GitHub Actions pin' "${expected_workflow//@GROUPS@/$workflow_groups}"
 # Branch protection matches the check by job name, so no job in another
 # workflow may carry it.
 workflows=("$repo_root"/.github/workflows/*.(yml|yaml)(N))
 others=(${workflows:#$portability})
 if (( ${#others} )); then
-  names=$(grep -Ein 'platform portability' "${others[@]}" /dev/null |
+  names=$(grep -Ein '(platform|linux) portability' "${others[@]}" /dev/null |
     grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#') || names=
   [[ -z $names ]] ||
-    fail 'only the platform-portability.yml aggregate job may be named "platform portability":'$'\n'"$names"
+    fail 'only platform-portability.yml may define the "platform portability" and "linux portability" checks:'$'\n'"$names"
 fi
 
-# Buildkite pin. Buildkite has no aggregate job, and it reports a blocked build
-# to GitHub as passed unless the pipeline publishes it as pending, a setting
-# scripts/buildkite-pipeline-settings checks on the live pipeline. Invariants:
+# Exercise the actual aggregate shell command with all Actions dependency
+# results. A skipped or cancelled matrix must never become a passing gate.
+for aggregate in aggregate linux-aggregate; do
+  aggregate_command=$(awk -v job="  $aggregate:" '
+    $0 == job { found = 1; next }
+    found && /^  [^ ]/ { exit }
+    found && /^        run: / { sub(/^        run: /, ""); print; exit }
+  ' "$portability")
+  [[ -n $aggregate_command ]] || fail "$aggregate has no aggregate command"
+  for dependency_result in success failure cancelled skipped ''; do
+    aggregate_status=0
+    VERIFY_RESULT=$dependency_result bash -e -c "$aggregate_command" || aggregate_status=$?
+    if [[ $dependency_result == success ]]; then
+      (( aggregate_status == 0 )) || fail "$aggregate rejects a successful matrix"
+    else
+      (( aggregate_status != 0 )) || fail "$aggregate accepts matrix result '$dependency_result'"
+    fi
+  done
+done
+
+# Retained Buildkite source pin. This pipeline is archived and supplies no
+# required check. These offline checks preserve its historical behavior:
 # one Linux matrix runs every group through run-group.sh, with no skip,
 # condition, soft fail, block, input or trigger step, and no container
 # override; then the timing annotation runs.
@@ -249,7 +368,7 @@ elif (( $? > 1 )); then
   fail 'could not scan the Buildkite scripts for pipeline uploads'
 fi
 
-# Buildkite is the only Linux gate, so run run-group.sh's Linux path the way
+# Exercise the retained run-group.sh Linux path without provider access, as
 # the docker plugin runs it: in a copy of the checkout, under a clean
 # environment holding the plugin's Buildkite variables, with root-only
 # provisioning stubbed, downloads blocked and a fake scripts/ci-test-group.
