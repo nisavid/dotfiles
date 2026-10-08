@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import textwrap
@@ -1484,6 +1485,150 @@ class QualificationProcedureTests(unittest.TestCase):
             self.assertEqual(1, result.returncode)
             self.assertIn("unmarked state directory", result.stderr)
             self.assertEqual("preserve\n", sentinel.read_text(encoding="utf-8"))
+
+    def test_interop_close_rejects_absent_ownership_marker_before_state_access(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            state.mkdir()
+            (state / "state.json").write_bytes(b"malformed session data\n")
+            (state / "payload.bin").write_bytes(b"preserve state bytes\n")
+            (state / "payload-link").symlink_to("payload.bin")
+            before = _snapshot_tree(state)
+            output = root / "results/macos-ci.json"
+            retained_peer_result = output.with_name("hatchery.json")
+            retained_peer_result.parent.mkdir()
+            retained_peer_result.write_bytes(b"preserve external result bytes\n")
+
+            result = self.run_cli(
+                "interop-close",
+                "--root",
+                str(ROOT),
+                "--sq",
+                "/bin/true",
+                "--sqv",
+                "/bin/true",
+                "--session-id",
+                "a" * 64,
+                "--peer-envelope",
+                str(root / "malformed-phase-c.json"),
+                "--state-dir",
+                str(state),
+                "--relay-metadata",
+                str(root / "malformed-relay.json"),
+                "--expected-relay-run-id",
+                "1",
+                "--expected-relay-title",
+                "unused",
+                "--candidate-commit",
+                "b" * 40,
+                "--output",
+                str(output),
+            )
+
+            self.assertEqual(1, result.returncode)
+            self.assertIn("unmarked state directory", result.stderr)
+            self.assertNotIn("invalid JSON input", result.stderr)
+            self.assertEqual(before, _snapshot_tree(state))
+            self.assertFalse(output.exists())
+            self.assertEqual(
+                b"preserve external result bytes\n",
+                retained_peer_result.read_bytes(),
+            )
+
+    def test_closing_commands_reject_invalid_ownership_markers_without_mutation(
+        self,
+    ) -> None:
+        module = _load_cli()
+        for command in ("interop-close", "cleanup"):
+            for marker_case in ("absent", "wrong", "symlink", "nonregular"):
+                with (
+                    self.subTest(command=command, marker=marker_case),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    root = Path(directory)
+                    state = root / "state"
+                    state.mkdir()
+                    (state / "state.json").write_bytes(b"malformed session data\n")
+                    (state / "payload.bin").write_bytes(b"preserve state bytes\n")
+                    (state / "payload-link").symlink_to("payload.bin")
+                    marker = state / module.STATE_MARKER
+                    external_marker = root / "external-marker"
+                    if marker_case == "wrong":
+                        marker.write_bytes(b"wrong marker bytes\n")
+                    elif marker_case == "symlink":
+                        external_marker.write_text(
+                            module.STATE_MARKER_CONTENT,
+                            encoding="utf-8",
+                        )
+                        marker.symlink_to(external_marker)
+                    elif marker_case == "nonregular":
+                        marker.mkdir()
+                        (marker / "nested").write_bytes(
+                            module.STATE_MARKER_CONTENT.encode()
+                        )
+
+                    before = _snapshot_tree(state)
+                    output = root / "results/macos-ci.json"
+                    retained_peer_result = output.with_name("hatchery.json")
+                    retained_peer_result.parent.mkdir()
+                    retained_peer_result.write_bytes(
+                        b"preserve external result bytes\n"
+                    )
+                    arguments = [command, "--state-dir", str(state)]
+                    if command == "interop-close":
+                        arguments.extend(
+                            (
+                                "--root",
+                                str(ROOT),
+                                "--sq",
+                                "/bin/true",
+                                "--sqv",
+                                "/bin/true",
+                                "--session-id",
+                                "a" * 64,
+                                "--peer-envelope",
+                                str(root / "malformed-phase-c.json"),
+                                "--relay-metadata",
+                                str(root / "malformed-relay.json"),
+                                "--expected-relay-run-id",
+                                "1",
+                                "--expected-relay-title",
+                                "unused",
+                                "--candidate-commit",
+                                "b" * 40,
+                                "--output",
+                                str(output),
+                            )
+                        )
+
+                    result = self.run_cli(*arguments)
+
+                    self.assertEqual(1, result.returncode)
+                    self.assertIn("unmarked state directory", result.stderr)
+                    self.assertNotIn("invalid JSON input", result.stderr)
+                    self.assertEqual(before, _snapshot_tree(state))
+                    self.assertFalse(output.exists())
+                    self.assertEqual(
+                        b"preserve external result bytes\n",
+                        retained_peer_result.read_bytes(),
+                    )
+                    if marker_case == "symlink":
+                        self.assertEqual(
+                            module.STATE_MARKER_CONTENT,
+                            external_marker.read_text(encoding="utf-8"),
+                        )
+
+    def test_cleanup_keeps_absent_state_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "absent-state"
+
+            result = self.run_cli("cleanup", "--state-dir", str(state))
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertFalse(state.exists())
 
     def test_protocol_bytes_are_part_of_static_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3632,6 +3777,28 @@ def _payload(content: bytes) -> dict[str, object]:
         "sha256": hashlib.sha256(content).hexdigest(),
         "data": base64.b64encode(content).decode("ascii"),
     }
+
+
+def _snapshot_tree(root: Path) -> dict[str, dict[str, object]]:
+    snapshot: dict[str, dict[str, object]] = {}
+    for directory, directory_names, file_names in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        for name in [*directory_names, *file_names]:
+            path = directory_path / name
+            relative = path.relative_to(root).as_posix()
+            metadata = path.lstat()
+            if stat.S_ISREG(metadata.st_mode):
+                snapshot[relative] = {"type": "file", "bytes": path.read_bytes()}
+            elif stat.S_ISDIR(metadata.st_mode):
+                snapshot[relative] = {"type": "directory"}
+            elif stat.S_ISLNK(metadata.st_mode):
+                snapshot[relative] = {
+                    "type": "symlink",
+                    "target": os.readlink(path),
+                }
+            else:
+                snapshot[relative] = {"type": "other"}
+    return snapshot
 
 
 def _sha256_bytes(content: bytes) -> str:

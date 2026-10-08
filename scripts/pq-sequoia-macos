@@ -2216,8 +2216,29 @@ def interop_open(arguments: argparse.Namespace) -> None:
         raise
 
 
+def require_owned_state(path: Path) -> None:
+    marker = path / STATE_MARKER
+    try:
+        metadata = marker.lstat()
+    except OSError as error:
+        raise ProcedureError(
+            "refusing to remove an unmarked state directory"
+        ) from error
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ProcedureError("refusing to remove an unmarked state directory")
+    try:
+        content = marker.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ProcedureError(
+            "refusing to remove an unmarked state directory"
+        ) from error
+    if content != STATE_MARKER_CONTENT:
+        raise ProcedureError("refusing to remove an unmarked state directory")
+
+
 def interop_close(arguments: argparse.Namespace) -> None:
     state = arguments.state_dir.resolve()
+    require_owned_state(state)
     state_record = read_json(state / "state.json")
     if state_record.get("session_id") != arguments.session_id:
         raise ProcedureError("local interop state does not match the session")
@@ -2855,13 +2876,7 @@ def validate_relay(arguments: argparse.Namespace) -> None:
 def cleanup(arguments: argparse.Namespace) -> None:
     path = arguments.state_dir.resolve()
     if path.exists():
-        marker = path / STATE_MARKER
-        if (
-            not marker.is_file()
-            or marker.is_symlink()
-            or marker.read_text(encoding="utf-8") != STATE_MARKER_CONTENT
-        ):
-            raise ProcedureError("refusing to remove an unmarked state directory")
+        require_owned_state(path)
         shutil.rmtree(path)
 
 
