@@ -1,0 +1,1384 @@
+#!/usr/bin/env python3
+"""Record observe-only memory telemetry for agent workloads.
+
+memory-telemetry samples the host-memory signals T1-T9 that
+nisavid/dotfiles#404 defined and keeps its own bounded record in
+$XDG_STATE_HOME/memory-telemetry. It reads /proc, /sys, the systemd-oomd
+configuration and the journal, and it writes only inside that directory. It
+never kills, signals, moves or reconfigures anything except its own journalctl
+child, which it stops on exit. It raises no alarms: it records the numbers that
+the threshold forms in #404 need, and the operator chooses the thresholds later.
+docs/MEMORY_TELEMETRY.md in the dotfiles repository describes the record.
+
+It never records a command line, argument or environment variable. Processes
+are named by the basename of their executable and a coarse role taken from the
+process tree, and journal entries keep only an allowlist of fields.
+
+  memory-telemetry run      sample until stopped; the systemd user service runs this
+  memory-telemetry sample   print one fast and one slow sample and write nothing
+  memory-telemetry report   summarize the record
+"""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import gzip
+import json
+import os
+import re
+import selectors
+import signal
+import subprocess
+import sys
+import time
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+SCHEMA = "memory-telemetry/v1"
+Record = dict[str, Any]
+
+# systemd-oomd (v262) kills in swap mode as soon as MemAvailable and SwapFree
+# are both below (1 - SwapUsedLimit) of their totals; it polls every 150 ms with
+# no duration. Among leaf cgroups under its monitored roots it ranks only those
+# holding more than 5% of swap (THRESHOLD_SWAP_USED_PERCENT, oomd-manager.h) and
+# picks the one holding the most. These mirror oomd's own rules; they are not
+# alarm thresholds.
+OOMD_DEFAULT_SWAP_USED_LIMIT = 0.90
+OOMD_SWAP_CANDIDATE_SHARE = 0.05
+OOMD_CONFIG_DIRS = ("etc/systemd", "run/systemd", "usr/local/lib/systemd", "usr/lib/systemd")
+
+# Journal sources of kill records (T7): systemd's messages that systemd-oomd
+# killed processes in a unit (SD_MESSAGE_UNIT_OOMD_KILL) and that the kernel OOM
+# killer killed a process of a unit (SD_MESSAGE_UNIT_OUT_OF_MEMORY), oomd's own
+# log, and the kernel's OOM report lines.
+MESSAGE_UNIT_OOMD_KILL = "d989611b15e44c9dbf31e3c81256e4ed"
+MESSAGE_UNIT_OOM = "fe6faa94e7774663a0da52717891d8ef"
+OOMD_UNIT = "systemd-oomd.service"
+JOURNAL_MATCHES = (
+    f"MESSAGE_ID={MESSAGE_UNIT_OOMD_KILL}", "+",
+    f"MESSAGE_ID={MESSAGE_UNIT_OOM}", "+",
+    f"_SYSTEMD_UNIT={OOMD_UNIT}", "+",
+    "_TRANSPORT=kernel",
+)
+OOMD_KILL_MESSAGE = re.compile(r"for killing|^Killed ")
+KERNEL_OOM_MESSAGE = re.compile(
+    r"invoked oom-killer|Out of memory|Memory cgroup out of memory|oom-kill:|oom_reaper:"
+)
+JOURNAL_FIELDS = (
+    ("MESSAGE_ID", "message_id"),
+    ("UNIT", "unit"),
+    ("USER_UNIT", "user_unit"),
+    ("_SYSTEMD_UNIT", "emitter"),
+    ("_BOOT_ID", "boot"),
+)
+
+DEFAULT_INTERVAL = 10.0
+DEFAULT_SLOW_EVERY = 6
+DEFAULT_WINDOW = 900.0
+DEFAULT_GRACE = 60.0
+DEFAULT_RETENTION_DAYS = 30
+DEFAULT_MAX_SAMPLE_BYTES = 512 * 1024 * 1024
+DEFAULT_MAX_INCIDENTS = 200
+DEFAULT_WATCH = ("app-com.anthropic.Claude*", "app-chatgpt@*", "app-org.chromium.Chromium-*")
+JOURNAL_RESTART_DELAY = 30.0
+TOP_ENTRIES = 20
+TOP_SWAP_HOLDERS = 10
+
+AGENT_EXES = frozenset({"claude", "codex"})
+SHELL_EXES = frozenset({"bash", "dash", "fish", "sh", "zsh"})
+SWAP_COUNTERS = (
+    "pswpin", "pswpout", "zswpin", "zswpout", "zswpwb", "workingset_refault_anon", "pgmajfault", "oom_kill",
+)
+CGROUP_STAT_KEYS = (
+    "anon", "file", "shmem", "zswap", "zswapped", "swapcached",
+    "pswpin", "pswpout", "zswpin", "zswpout", "zswpwb", "workingset_refault_anon", "pgmajfault",
+)
+MEMORY_EVENT_KEYS = ("low", "high", "max", "oom", "oom_kill", "oom_group_kill")
+PROCESS_FIELDS = frozenset({"PPid", "RssAnon", "RssFile", "RssShmem", "VmSwap"})
+FOOTPRINT_FIELDS = frozenset({"RssAnon", "RssFile", "VmHWM"})
+SEGMENT_FORMAT = "%Y%m%dT%H"
+
+
+# Reading sources ------------------------------------------------------------
+
+
+class Sources:
+    """Read-only views of /proc, /sys and the systemd configuration, rooted for tests."""
+
+    def __init__(self, proc: Path, sys_root: Path, config: Path, uid: int) -> None:
+        self.proc = proc
+        self.sys = sys_root
+        self.config = config
+        self.cgroup = sys_root / "fs/cgroup"
+        self.user_slice = self.cgroup / "user.slice" / f"user-{uid}.slice"
+        self.manager = self.user_slice / f"user@{uid}.service"
+        self.unavailable: dict[str, str] = {}
+
+    def label(self, path: Path) -> str:
+        for name, root in (("proc", self.proc), ("sys", self.sys), ("config", self.config)):
+            if path.is_relative_to(root):
+                return f"{name}:{path.relative_to(root)}"
+        return str(path)
+
+    def text(self, path: Path, required: bool = False) -> str | None:
+        """Return a file's text, or None. A required source that fails is listed as unavailable."""
+        try:
+            with open(path, "rb") as handle:
+                return handle.read().decode("utf-8", "replace")
+        except OSError as error:
+            if required:
+                self.unavailable[self.label(path)] = type(error).__name__
+            return None
+
+    def number(self, path: Path) -> int | None:
+        text = self.text(path)
+        try:
+            return int(text) if text is not None else None
+        except ValueError:
+            return None
+
+    def limit(self, path: Path) -> int | str | None:
+        text = self.text(path)
+        if text is not None and text.strip() == "max":
+            return "max"
+        return self.number(path)
+
+    def cgroup_name(self, path: Path) -> str:
+        return str(path.relative_to(self.cgroup)) if path.is_relative_to(self.cgroup) else str(path)
+
+
+def parse_meminfo(text: str | None) -> dict[str, int]:
+    values: dict[str, int] = {}
+    for line in (text or "").splitlines():
+        key, _, rest = line.partition(":")
+        fields = rest.split()
+        if fields and fields[0].isdigit():
+            values[key.strip()] = int(fields[0])
+    return values
+
+
+def parse_keyed(text: str | None) -> dict[str, int]:
+    """Parse "key value" lines, such as /proc/vmstat, memory.stat and memory.events."""
+    values: dict[str, int] = {}
+    for line in (text or "").splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1].lstrip("-").isdigit():
+            values[fields[0]] = int(fields[1])
+    return values
+
+
+def parse_psi(text: str | None) -> Record | None:
+    if text is None:
+        return None
+    pressure: Record = {}
+    for line in text.splitlines():
+        kind, *fields = line.split() or [""]
+        values = dict(field.split("=", 1) for field in fields if "=" in field)
+        try:
+            pressure[kind] = {
+                "avg10": float(values["avg10"]),
+                "avg60": float(values["avg60"]),
+                "avg300": float(values["avg300"]),
+                "total_us": int(values["total"]),
+            }
+        except (KeyError, ValueError):
+            continue
+    return pressure or None
+
+
+def parse_status(text: str | None, fields: frozenset[str]) -> dict[str, int]:
+    values: dict[str, int] = {}
+    for line in (text or "").splitlines():
+        key, _, rest = line.partition(":")
+        if key in fields:
+            parts = rest.split()
+            if parts and parts[0].isdigit():
+                values[key] = int(parts[0])
+    return values
+
+
+def parse_fraction(value: str) -> float | None:
+    """Parse a systemd percentage, permille or permyriad value into a fraction."""
+    for suffix, scale in (("%", 100), ("‰", 1000), ("‱", 10000)):
+        if value.endswith(suffix):
+            try:
+                fraction = float(value[: -len(suffix)]) / scale
+            except ValueError:
+                return None
+            return fraction if 0 <= fraction <= 1 else None
+    return None
+
+
+def oomd_swap_used_limit(config: Path) -> tuple[float, str]:
+    """Return oomd's SwapUsedLimit and the file that set it, read like systemd reads oomd.conf."""
+    files: list[Path] = []
+    for directory in OOMD_CONFIG_DIRS:
+        main = config / directory / "oomd.conf"
+        if main.is_file():
+            files.append(main)
+            break
+    dropins: dict[str, Path] = {}
+    for directory in reversed(OOMD_CONFIG_DIRS):
+        folder = config / directory / "oomd.conf.d"
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        for name in names:
+            if name.endswith(".conf"):
+                dropins[name] = folder / name
+    files.extend(dropins[name] for name in sorted(dropins))
+    limit, source = OOMD_DEFAULT_SWAP_USED_LIMIT, "default"
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        section = ""
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line[0] in "#;":
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1]
+                continue
+            key, separator, value = line.partition("=")
+            if separator and section == "OOM" and key.strip() == "SwapUsedLimit":
+                value = value.strip()
+                if not value:
+                    limit, source = OOMD_DEFAULT_SWAP_USED_LIMIT, "default"
+                elif (fraction := parse_fraction(value)) is not None:
+                    limit, source = fraction, str(path.relative_to(config))
+    return limit, source
+
+
+def boot_id(sources: Sources) -> str | None:
+    text = sources.text(sources.proc / "sys/kernel/random/boot_id")
+    return text.strip().replace("-", "") if text else None
+
+
+# Fast samples: T1, T2, T3, T4 and T8, the counters #403 shares -------------
+
+
+def available_ram(meminfo: dict[str, int], limit: float) -> Record | None:
+    """T1: MemAvailable and its headroom above oomd's line, (1 - limit) of MemTotal."""
+    total, available = meminfo.get("MemTotal"), meminfo.get("MemAvailable")
+    if total is None or available is None:
+        return None
+    line = round((1 - limit) * total)
+    return {
+        "mem_total_kib": total, "mem_available_kib": available, "oomd_line_kib": line, "headroom_kib": available - line,
+    }
+
+
+def pressure(sources: Sources, watched: dict[str, Path]) -> Record:
+    """T2: system memory and io PSI, and memory PSI of the user slice, app.slice and watched cgroups."""
+    cgroups: Record = {}
+    for name, path, required in (
+        (sources.user_slice.name, sources.user_slice, True),
+        ("app.slice", sources.manager / "app.slice", True),
+        *((name, path, False) for name, path in watched.items()),
+    ):
+        psi = parse_psi(sources.text(path / "memory.pressure", required=required))
+        if psi is not None:
+            cgroups[name] = psi
+    return {
+        "memory": parse_psi(sources.text(sources.proc / "pressure/memory", required=True)),
+        "io": parse_psi(sources.text(sources.proc / "pressure/io", required=True)),
+        "cgroups": cgroups,
+    }
+
+
+def swap_counters(vmstat: dict[str, int]) -> dict[str, int]:
+    """T3: monotonic swap and reclaim counters from /proc/vmstat."""
+    counters = {key: vmstat[key] for key in SWAP_COUNTERS if key in vmstat}
+    stalls = [value for key, value in vmstat.items() if key.startswith("allocstall_")]
+    if stalls:
+        counters["allocstall"] = sum(stalls)
+    return counters
+
+
+def swap_occupancy(meminfo: dict[str, int], limit: float) -> Record | None:
+    """T4: swap slot occupancy, the zswap share of it, and whether oomd's swap gate is armed."""
+    total, free = meminfo.get("SwapTotal"), meminfo.get("SwapFree")
+    if total is None or free is None:
+        return None
+    used = total - free
+    zswapped = meminfo.get("Zswapped")
+    return {
+        "swap_total_kib": total,
+        "swap_free_kib": free,
+        "swap_used_kib": used,
+        "swap_used_fraction": round(used / total, 4) if total else None,
+        "zswap_pool_kib": meminfo.get("Zswap"),
+        "zswapped_kib": zswapped,
+        "disk_resident_upper_kib": max(0, used - zswapped) if zswapped is not None else None,
+        "oomd_swap_gate_armed": total > 0 and free < (1 - limit) * total,
+    }
+
+
+def gpu_residency(sources: Sources, meminfo: dict[str, int]) -> Record:
+    """T8: amdgpu GTT and VRAM use, and the kernel's GPUActive/GPUReclaim counters."""
+    drm = sources.sys / "class/drm"
+    try:
+        names = sorted(os.listdir(drm))
+    except OSError as error:
+        sources.unavailable[sources.label(drm)] = type(error).__name__
+        names: list[str] = []
+    devices: list[Record] = []
+    seen: set[str] = set()
+    for name in names:
+        if not re.fullmatch(r"card\d+", name):
+            continue
+        device = drm / name / "device"
+        fields: Record = {}
+        for key in ("gtt_used", "gtt_total", "vram_used", "vram_total"):
+            value = sources.number(device / f"mem_info_{key}")
+            if value is not None:
+                fields[f"{key}_bytes"] = value
+        real = os.path.realpath(device)
+        if fields and real not in seen:
+            seen.add(real)
+            devices.append({"card": name, **fields})
+    gtt = [device["gtt_used_bytes"] for device in devices if "gtt_used_bytes" in device]
+    return {
+        "gtt_used_bytes": sum(gtt) if gtt else None,
+        "gpu_active_kib": meminfo.get("GPUActive"),
+        "gpu_reclaim_kib": meminfo.get("GPUReclaim"),
+        "devices": devices,
+    }
+
+
+def counter_rates(now: dict[str, int], before: dict[str, int], seconds: float) -> dict[str, float]:
+    """Per-second deltas; a counter that went down (reset) gets no rate."""
+    return {
+        key: round((value - before[key]) / seconds, 3)
+        for key, value in now.items()
+        if key in before and value >= before[key]
+    }
+
+
+def stall_fraction(now: Record | None, before: Record | None, seconds: float) -> dict[str, float] | None:
+    """Share of the interval stalled, from PSI totals; more precise than the kernel's averages."""
+    if not now or not before:
+        return None
+    fractions: dict[str, float] = {}
+    for kind in ("some", "full"):
+        if kind in now and kind in before and now[kind]["total_us"] >= before[kind]["total_us"]:
+            fractions[kind] = round((now[kind]["total_us"] - before[kind]["total_us"]) / (seconds * 1e6), 5)
+    return fractions or None
+
+
+def add_rates(sample: Record, previous: Record) -> None:
+    seconds = sample["t"] - previous["t"]
+    sample["interval_s"] = round(seconds, 3)
+    before3 = previous.get("t3") or {}
+    sample["t3"]["per_s"] = counter_rates(sample["t3"]["counters"], before3.get("counters", {}), seconds)
+    t2, before2 = sample["t2"], previous.get("t2") or {}
+    for resource in ("memory", "io"):
+        fraction = stall_fraction(t2[resource], before2.get(resource), seconds)
+        if fraction:
+            t2[resource]["stall_fraction"] = fraction
+    for name, psi in t2["cgroups"].items():
+        fraction = stall_fraction(psi, (before2.get("cgroups") or {}).get(name), seconds)
+        if fraction:
+            psi["stall_fraction"] = fraction
+
+
+def fast_sample(
+    sources: Sources, limit: float, watched: dict[str, Path], now: float, boot: str | None, previous: Record | None
+) -> Record:
+    sources.unavailable = {}
+    meminfo = parse_meminfo(sources.text(sources.proc / "meminfo", required=True))
+    vmstat = parse_keyed(sources.text(sources.proc / "vmstat", required=True))
+    sample: Record = {
+        "schema": SCHEMA,
+        "kind": "fast",
+        "t": round(now, 3),
+        "boot": boot,
+        "t1": available_ram(meminfo, limit),
+        "t2": pressure(sources, watched),
+        "t3": {"counters": swap_counters(vmstat)},
+        "t4": swap_occupancy(meminfo, limit),
+        "t8": gpu_residency(sources, meminfo),
+    }
+    if previous is not None and previous.get("boot") == boot and sample["t"] > previous["t"]:
+        add_rates(sample, previous)
+    if sources.unavailable:
+        sample["unavailable"] = dict(sorted(sources.unavailable.items()))
+    return sample
+
+
+# Slow samples: per-cgroup T3-T6 and the oomd view, plus T9 attribution ------
+
+
+def leaf_cgroups(sources: Sources, root: Path) -> list[Path]:
+    """Leaf cgroups under root, counting a memory.oom.group=1 cgroup as one unit, as oomd does."""
+    leaves: list[Path] = []
+    stack = [root]
+    while stack:
+        path = stack.pop()
+        try:
+            children = [Path(entry.path) for entry in os.scandir(path) if entry.is_dir(follow_symlinks=False)]
+        except OSError as error:
+            if path == root:
+                sources.unavailable[sources.label(root)] = type(error).__name__
+            continue
+        if not children or (sources.text(path / "memory.oom.group") or "").strip() == "1":
+            leaves.append(path)
+        else:
+            stack.extend(children)
+    return leaves
+
+
+def oomd_view(sources: Sources, roots: list[str], swap_total: int) -> tuple[Record, list[Path]]:
+    """T4 per cgroup: which leaves hold swap, and which one oomd's swap mode would pick now."""
+    usage: list[tuple[int, Path]] = []
+    for root in roots:
+        for path in leaf_cgroups(sources, sources.cgroup / root):
+            swap = sources.number(path / "memory.swap.current")
+            if swap is not None:
+                usage.append((swap, path))
+    usage.sort(key=lambda item: (-item[0], str(item[1])))
+    floor = OOMD_SWAP_CANDIDATE_SHARE * swap_total
+    candidates = [path for swap, path in usage if swap_total and swap > floor]
+    top = []
+    for swap, path in usage[:TOP_SWAP_HOLDERS]:
+        stat = parse_keyed(sources.text(path / "memory.stat"))
+        top.append({
+            "cgroup": sources.cgroup_name(path),
+            "swap_bytes": swap,
+            "swap_share": round(swap / swap_total, 4) if swap_total else None,
+            "zswapped_bytes": stat.get("zswapped"),
+            "memory_bytes": sources.number(path / "memory.current"),
+            "oomd_swap_candidate": path in candidates,
+        })
+    return {
+        "roots": roots,
+        "leaf_cgroups": len(usage),
+        "candidate_share": OOMD_SWAP_CANDIDATE_SHARE,
+        "candidates": len(candidates),
+        "swap_mode_choice": sources.cgroup_name(candidates[0]) if candidates else None,
+        "top_by_swap": top,
+    }, candidates
+
+
+def watched_cgroups(sources: Sources, patterns: list[str], candidates: list[Path]) -> dict[str, Path]:
+    """App scopes whose names match the watch patterns, plus this user's oomd swap candidates."""
+    watched: dict[str, Path] = {}
+    try:
+        entries = sorted(os.scandir(sources.manager / "app.slice"), key=lambda entry: entry.name)
+    except OSError:
+        entries: list[os.DirEntry[str]] = []
+    for entry in entries:
+        if entry.is_dir(follow_symlinks=False) and any(fnmatch.fnmatchcase(entry.name, p) for p in patterns):
+            watched[entry.name] = Path(entry.path)
+    for path in candidates:
+        if path.is_relative_to(sources.user_slice):
+            watched.setdefault(path.name, path)
+    return watched
+
+
+def cgroup_block(sources: Sources, path: Path) -> Record | None:
+    """T3-T6 for one cgroup: memory and swap use, memory.stat counters, events and thread counts."""
+    current = sources.number(path / "memory.current")
+    if current is None:
+        return None
+    stat = parse_keyed(sources.text(path / "memory.stat"))
+    events = parse_keyed(sources.text(path / "memory.events.local"))
+    return {
+        "path": sources.cgroup_name(path),
+        "memory_bytes": current,
+        "memory_peak_bytes": sources.number(path / "memory.peak"),
+        "swap_bytes": sources.number(path / "memory.swap.current"),
+        "swap_peak_bytes": sources.number(path / "memory.swap.peak"),
+        "stat": {key: stat[key] for key in CGROUP_STAT_KEYS if key in stat},
+        "memory_events_local": {key: events[key] for key in MEMORY_EVENT_KEYS if key in events},
+        "memory_swap_events": parse_keyed(sources.text(path / "memory.swap.events")),
+        "pids": {
+            "threads": sources.number(path / "pids.current"),
+            "threads_peak": sources.number(path / "pids.peak"),
+            "threads_max": sources.limit(path / "pids.max"),
+            "max_events": parse_keyed(sources.text(path / "pids.events")).get("max"),
+        },
+        "populated": parse_keyed(sources.text(path / "cgroup.events")).get("populated"),
+    }
+
+
+@dataclass
+class Process:
+    pid: int
+    ppid: int
+    exe: str  # basename, the only form recorded
+    path: str  # full executable path, compared in memory and never recorded
+    rss_anon: int
+    rss_file: int
+    rss_shmem: int
+    swap: int
+
+
+def exe_name(target: str) -> str:
+    """The basename of /proc/<pid>/exe. Never argv or comm, which a process can rewrite."""
+    if target.endswith(" (deleted)"):
+        target = target[: -len(" (deleted)")]
+    return target.rsplit("/", 1)[-1][:64] or "(unreadable)"
+
+
+def cgroup_processes(sources: Sources, path: Path) -> list[Process] | None:
+    pids: list[int] = []
+    stack = [path]
+    while stack:
+        current = stack.pop()
+        text = sources.text(current / "cgroup.procs")
+        if text is None:
+            if current == path:
+                return None
+            continue
+        pids.extend(int(token) for token in text.split() if token.isdigit())
+        try:
+            stack.extend(Path(entry.path) for entry in os.scandir(current) if entry.is_dir(follow_symlinks=False))
+        except OSError:
+            pass
+    processes = []
+    for pid in pids:
+        status = sources.text(sources.proc / str(pid) / "status")
+        if status is None:
+            continue  # exited since the listing
+        values = parse_status(status, PROCESS_FIELDS)
+        try:
+            target = os.readlink(sources.proc / str(pid) / "exe")
+        except OSError:
+            target = ""
+        processes.append(Process(
+            pid, values.get("PPid", 0), exe_name(target), target,
+            values.get("RssAnon", 0), values.get("RssFile", 0), values.get("RssShmem", 0), values.get("VmSwap", 0),
+        ))
+    return processes
+
+
+def usage_entry(values: list[int], **keys: Any) -> Record:
+    return {
+        **keys,
+        "processes": values[0],
+        "rss_anon_kib": values[1],
+        "swap_kib": values[2],
+        "rss_file_kib": values[3],
+        "rss_shmem_kib": values[4],
+    }
+
+
+def ranked(groups: dict[Any, list[int]], keys: Any) -> list[Record]:
+    """Groups ordered by anonymous plus swapped memory; the tail is folded into one "(rest)" entry."""
+    ordered = sorted(groups.items(), key=lambda item: (-(item[1][1] + item[1][2]), str(item[0])))
+    entries = [usage_entry(values, **keys(key)) for key, values in ordered[:TOP_ENTRIES]]
+    rest = ordered[TOP_ENTRIES:]
+    if rest:
+        summed = [sum(values[index] for _, values in rest) for index in range(5)]
+        entries.append(usage_entry(summed, **keys(None), groups=len(rest)))
+    return entries
+
+
+def attribute(processes: list[Process]) -> Record:
+    """T9: memory by command class (exe basename and role) and by agent process tree.
+
+    The app is the root process with the largest subtree. Roles: app (a process
+    running the app's own executable), agent (a claude or codex executable other
+    than the app's own; Claude Desktop's Electron binary is also named claude),
+    nested-agent (an agent under another agent), agent-shell and agent-child (an
+    agent's other descendants), app-child (the app's other descendants), and
+    detached (other roots, such as orphans reparented to the user manager). Each
+    process belongs to the tree of its nearest agent.
+    """
+    by_pid = {process.pid: process for process in processes}
+    children: dict[int, list[int]] = defaultdict(list)
+    roots: list[int] = []
+    for process in processes:
+        if process.ppid in by_pid and process.ppid != process.pid:
+            children[process.ppid].append(process.pid)
+        else:
+            roots.append(process.pid)
+    sizes: dict[int, int] = {}
+    counted: set[int] = set()
+    for root in roots:
+        pending, size = [root], 0
+        while pending:
+            pid = pending.pop()
+            if pid not in counted:
+                counted.add(pid)
+                size += 1
+                pending.extend(children[pid])
+        sizes[root] = size
+    main = max(roots, key=lambda root: (sizes[root], -root)) if roots else None
+    app_exe = by_pid[main].exe if main is not None else None
+    app_path = by_pid[main].path if main is not None else None
+
+    classes: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0] * 5)
+    trees: dict[str, list[int]] = defaultdict(lambda: [0] * 5)
+    totals = [0] * 5
+    visited: set[int] = set()
+    stack: list[tuple[int, int | None, bool]] = [(root, None, root == main) for root in roots]
+    # Processes in a parent cycle, possible only through PID reuse races, count as detached.
+    stack.extend((pid, None, False) for pid in by_pid if pid not in counted)
+    while stack:
+        pid, agent, in_main = stack.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        process = by_pid[pid]
+        if process.exe in AGENT_EXES and process.path != app_path:
+            role = "nested-agent" if agent is not None else "agent"
+            agent = pid
+        elif agent is not None:
+            role = "agent-shell" if process.exe in SHELL_EXES else "agent-child"
+        elif not in_main:
+            role = "detached"
+        elif process.path == app_path:
+            role = "app"
+        else:
+            role = "app-child"
+        tree = f"{by_pid[agent].exe}[{agent}]" if agent is not None else "(no agent)"
+        values = (1, process.rss_anon, process.swap, process.rss_file, process.rss_shmem)
+        for bucket in (classes[(process.exe, role)], trees[tree], totals):
+            for index, value in enumerate(values):
+                bucket[index] += value
+        stack.extend((child, agent, in_main) for child in children[pid])
+    return {
+        "processes": len(processes),
+        "app_exe": app_exe,
+        "totals": usage_entry(totals),
+        "classes": ranked(classes, lambda key: {"exe": key[0], "role": key[1]} if key
+                          else {"exe": "(rest)", "role": "(rest)"}),
+        "trees": ranked(trees, lambda key: {"tree": key if key else "(rest)"}),
+    }
+
+
+def slow_sample(
+    sources: Sources, patterns: list[str], roots: list[str], now: float, boot: str | None, previous: Record | None
+) -> tuple[Record, dict[str, Path]]:
+    sources.unavailable = {}
+    meminfo = parse_meminfo(sources.text(sources.proc / "meminfo", required=True))
+    view, candidates = oomd_view(sources, roots, meminfo.get("SwapTotal", 0) * 1024)
+    watched = watched_cgroups(sources, patterns, candidates)
+    fixed = {
+        sources.user_slice.name: sources.user_slice,
+        "app.slice": sources.manager / "app.slice",
+        "builds.slice": sources.manager / "builds.slice",
+    }
+    cgroups: Record = {}
+    for name, path in {**fixed, **watched}.items():
+        block = cgroup_block(sources, path)
+        if block is not None:
+            cgroups[name] = block
+    t9: Record = {}
+    for name, path in watched.items():
+        processes = cgroup_processes(sources, path)
+        if processes is not None:
+            t9[name] = attribute(processes)
+            if name in cgroups:
+                cgroups[name]["processes"] = len(processes)
+    sample: Record = {"schema": SCHEMA, "kind": "slow", "t": round(now, 3), "boot": boot,
+                      "swap_holders": view, "cgroups": cgroups, "t9": t9}
+    if previous is not None:
+        removed = {
+            name: {key: block.get(key) for key in ("path", "memory_events_local", "memory_swap_events", "pids")}
+            | {"last_seen": previous["t"]}
+            for name, block in (previous.get("cgroups") or {}).items()
+            if name not in cgroups
+        }
+        if removed:
+            sample["removed"] = removed
+    if sources.unavailable:
+        sample["unavailable"] = dict(sorted(sources.unavailable.items()))
+    return sample, {name: path for name, path in watched.items() if name in cgroups}
+
+
+def t9_growth(slow: list[Record]) -> Record:
+    """T9 top contributors: the latest attribution and the largest growth across the given samples."""
+    samples = [sample for sample in slow if isinstance(sample.get("t9"), dict)]
+    if not samples:
+        return {"from": None, "to": None, "latest": None, "growth": []}
+    first, last = samples[0], samples[-1]
+    growth = []
+    for cgroup, data in last["t9"].items():
+        before = first["t9"].get(cgroup) or {}
+        for section, fields in (("classes", ("exe", "role")), ("trees", ("tree",))):
+            old = {
+                tuple(entry.get(field) for field in fields): entry["rss_anon_kib"] + entry["swap_kib"]
+                for entry in before.get(section, [])
+            }
+            for entry in data.get(section, []):
+                key = tuple(entry.get(field) for field in fields)
+                if "(rest)" in key:
+                    continue
+                weight = entry["rss_anon_kib"] + entry["swap_kib"]
+                growth.append({
+                    "cgroup": cgroup, "section": section, **{field: entry.get(field) for field in fields},
+                    "anon_swap_kib": weight, "growth_kib": weight - old.get(key, 0), "new": key not in old,
+                })
+    growth.sort(key=lambda item: -item["growth_kib"])
+    return {"from": first["t"], "to": last["t"], "latest": last["t9"], "growth": growth[:TOP_ENTRIES]}
+
+
+# The durable record ----------------------------------------------------------
+
+
+def write_json_atomic(path: Path, data: Record, durable: bool = False) -> int:
+    text = json.dumps(data, separators=(",", ":")) + "\n"
+    temporary = path.with_name(f".{path.name}.tmp")
+    with open(temporary, "w", encoding="utf-8") as handle:
+        handle.write(text)
+        if durable:
+            handle.flush()
+            os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    return len(text)
+
+
+def load_json(path: Path) -> Record | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def segment_start(name: str) -> float | None:
+    try:
+        return datetime.strptime(name.split(".", 1)[0], SEGMENT_FORMAT).replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def segments(directory: Path) -> list[tuple[float, Path]]:
+    """Hourly sample segments, oldest first: <UTC hour>.jsonl while open, .jsonl.gz once closed."""
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return []
+    found = []
+    for entry in entries:
+        if entry.name.endswith((".jsonl", ".jsonl.gz")) and (start := segment_start(entry.name)) is not None:
+            found.append((start, Path(entry.path)))
+    return sorted(found, key=lambda item: (item[0], item[1].name))
+
+
+def read_samples(directory: Path, start: float, end: float) -> list[Record]:
+    records = []
+    for hour, path in segments(directory):
+        if hour > end or hour + 3600 < start:
+            continue
+        try:
+            with (gzip.open(path, "rt", encoding="utf-8", errors="replace") if path.name.endswith(".gz")
+                  else open(path, encoding="utf-8", errors="replace")) as handle:
+                for line in handle:
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        continue  # a line cut short by a crash
+                    if (isinstance(record, dict) and isinstance(record.get("t"), (int, float))
+                            and start <= record["t"] <= end):
+                        records.append(record)
+        except (OSError, EOFError):
+            continue
+    records.sort(key=lambda record: record["t"])
+    return records
+
+
+def compress_segment(path: Path) -> None:
+    target = path.with_name(path.name + ".gz")
+    try:
+        data = path.read_bytes()
+        if target.exists():
+            with gzip.open(target, "ab") as handle:  # a second gzip member; readers see both
+                handle.write(data)
+        else:
+            temporary = path.with_name(f".{target.name}.tmp")
+            with gzip.open(temporary, "wb") as handle:
+                handle.write(data)
+            os.replace(temporary, target)
+        path.unlink()
+    except OSError:
+        pass
+
+
+class SampleStore:
+    """Append-only JSON Lines in hourly segments, bounded by age and total size."""
+
+    def __init__(self, directory: Path, retention_seconds: float, max_bytes: int) -> None:
+        self.directory = directory
+        self.retention_seconds = retention_seconds
+        self.max_bytes = max_bytes
+        self.current: str | None = None
+        self.handle: Any = None
+        self.bytes_written = 0
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def append(self, record: Record) -> None:
+        name = datetime.fromtimestamp(record["t"], timezone.utc).strftime(SEGMENT_FORMAT)
+        if name != self.current or self.handle is None:
+            self.rotate(name, record["t"])
+        line = json.dumps(record, separators=(",", ":")) + "\n"
+        self.handle.write(line)
+        self.handle.flush()
+        self.bytes_written += len(line)
+
+    def rotate(self, name: str, now: float) -> None:
+        self.close()
+        for _, path in segments(self.directory):
+            if path.name.endswith(".jsonl") and path.name != f"{name}.jsonl":
+                compress_segment(path)
+        path = self.directory / f"{name}.jsonl"
+        needs_newline = False
+        try:
+            with open(path, "rb") as existing:
+                existing.seek(-1, os.SEEK_END)
+                needs_newline = existing.read(1) != b"\n"
+        except OSError:
+            pass  # missing or empty
+        self.handle = open(path, "a", encoding="utf-8")
+        if needs_newline:
+            self.handle.write("\n")
+        self.current = name
+        self.prune(now)
+
+    def prune(self, now: float) -> None:
+        found = []
+        for hour, path in segments(self.directory):
+            try:
+                found.append((hour, path, path.stat().st_size))
+            except OSError:
+                continue
+        total = sum(size for _, _, size in found)
+        for hour, path, size in found:
+            if self.current and path.name.startswith(f"{self.current}."):
+                continue
+            if hour + 3600 < now - self.retention_seconds or total > self.max_bytes:
+                try:
+                    path.unlink()
+                    total -= size
+                except OSError:
+                    pass
+
+    def close(self) -> None:
+        if self.handle is not None:
+            self.handle.close()
+            self.handle = None
+
+
+def journal_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(item, int) for item in value):
+        return bytes(value).decode("utf-8", "replace")  # journalctl's JSON form of a non-UTF-8 field
+    return ""
+
+
+def redact_kernel(message: str) -> str | None:
+    """Keep a kernel OOM report line without the task name, which a process can set to arbitrary text."""
+    if not KERNEL_OOM_MESSAGE.search(message):
+        return None
+    message = re.sub(r"^.*? invoked oom-killer", "(task) invoked oom-killer", message)
+    message = re.sub(r"(process \d+) \(.*\)(,? )", r"\1 (task)\2", message)
+    return re.sub(r",task=.*,pid=", ",task=(task),pid=", message)
+
+
+def journal_event(entry: Record) -> tuple[Record, bool] | None:
+    """Classify a journal entry as a kill-record event; the flag says whether it opens an incident."""
+    message = journal_text(entry.get("MESSAGE"))
+    message_id = entry.get("MESSAGE_ID")
+    transport = entry.get("_TRANSPORT")
+    if message_id == MESSAGE_UNIT_OOMD_KILL:
+        kind, opener = "unit-oomd-kill", True
+    elif message_id == MESSAGE_UNIT_OOM:
+        kind, opener = "unit-oom-kill", True
+    elif transport == "kernel":
+        redacted = redact_kernel(message)
+        if redacted is None:
+            return None
+        message, kind, opener = redacted, "kernel-oom", "oom_reaper:" not in redacted
+    elif entry.get("_SYSTEMD_UNIT") == OOMD_UNIT:
+        opener = bool(OOMD_KILL_MESSAGE.search(message))
+        kind = "oomd-kill" if opener else "oomd"
+    else:
+        return None
+    try:
+        seconds = int(entry["__REALTIME_TIMESTAMP"]) / 1e6
+    except (KeyError, TypeError, ValueError):
+        return None
+    event: Record = {"t": round(seconds, 6), "kind": kind, "message": message[:2000]}
+    for field, name in JOURNAL_FIELDS:
+        if isinstance(entry.get(field), str):
+            event[name] = entry[field]
+    return event, opener
+
+
+class Incidents:
+    """T7 kill records. Each one keeps its journal events, the preceding window of
+    samples, the T9 top contributors, and the fast samples of the grace period
+    after it opened. Events within the grace period join the open record."""
+
+    def __init__(self, directory: Path, samples: Path, window: float, grace: float, max_files: int) -> None:
+        self.directory = directory
+        self.samples = samples
+        self.window = window
+        self.grace = grace
+        self.max_files = max_files
+        self.current: Record | None = None
+        self.path: Path | None = None
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def handle(self, entry: Record) -> None:
+        classified = journal_event(entry)
+        if classified is None:
+            return
+        event, opener = classified
+        current = self.current
+        if current is not None and abs(event["t"] - current["opened"]) <= self.grace:
+            self.add(event)
+        elif opener:
+            self.finalize()
+            self.open(event)
+
+    def open(self, event: Record) -> None:
+        opened = event["t"]
+        stamp = datetime.fromtimestamp(opened, timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        identifier = f"{stamp}-{event['kind']}"
+        self.path = self.directory / f"{identifier}.json"
+        existing = load_json(self.path)
+        if existing is not None and isinstance(existing.get("events"), list):
+            self.current = existing  # replayed from the journal after a restart
+            self.add(event)
+            return
+        samples = read_samples(self.samples, opened - self.window, opened)
+        slow = [sample for sample in samples if sample.get("kind") == "slow"]
+        self.current = {
+            "schema": f"{SCHEMA}/incident",
+            "id": identifier,
+            "opened": opened,
+            "finalized": False,
+            "events": [event],
+            "window": {
+                "start": round(opened - self.window, 3),
+                "end": opened,
+                "fast": [sample for sample in samples if sample.get("kind") == "fast"],
+                "slow": slow,
+            },
+            "t9": t9_growth(slow),
+            "following": None,
+        }
+        self.write()
+
+    def add(self, event: Record) -> None:
+        assert self.current is not None
+        events = self.current["events"]
+        if all((known["t"], known["kind"], known["message"]) != (event["t"], event["kind"], event["message"])
+               for known in events):
+            events.append(event)
+            events.sort(key=lambda known: known["t"])
+            self.write()
+
+    def finalize_due(self, now: float) -> None:
+        if self.current is not None and now - self.current["opened"] > self.grace:
+            self.finalize()
+
+    def finalize(self) -> None:
+        if self.current is None:
+            return
+        opened = self.current["opened"]
+        following = read_samples(self.samples, opened + 1e-6, opened + self.grace)
+        self.current["following"] = {"fast": [sample for sample in following if sample.get("kind") == "fast"]}
+        self.current["finalized"] = True
+        self.write()
+        self.current = self.path = None
+        self.prune()
+
+    def write(self) -> None:
+        if self.current is not None and self.path is not None:
+            write_json_atomic(self.path, self.current, durable=True)
+
+    def prune(self) -> None:
+        records = sorted(path for path in self.directory.glob("*.json") if path != self.path)
+        for path in records[: max(0, len(records) - self.max_files)]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+class Journal:
+    """A `journalctl --follow` child that delivers kill-record candidates as JSON."""
+
+    def __init__(self, command: str, cursor_path: Path) -> None:
+        self.command = command
+        self.cursor_path = cursor_path
+        try:
+            saved = cursor_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            saved = ""
+        self.cursor: str | None = saved or None
+        self.saved_cursor = self.cursor
+        self.process: subprocess.Popen[bytes] | None = None
+        self.selector = selectors.DefaultSelector()
+        self.buffer = b""
+        self.state = "starting"
+        self.started = 0.0
+        self.started_with_cursor = False
+        self.received = False
+        self.restart_at = 0.0
+
+    def start(self) -> None:
+        position = ["--after-cursor", self.cursor] if self.cursor else ["--lines=0"]
+        try:
+            self.process = subprocess.Popen(
+                [self.command, "--follow", "--output=json", "--no-pager", "--quiet", *position, *JOURNAL_MATCHES],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+        except OSError as error:
+            self.state = f"unavailable: {type(error).__name__}"
+            self.restart_at = time.monotonic() + JOURNAL_RESTART_DELAY
+            return
+        assert self.process.stdout is not None
+        self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        self.started = time.monotonic()
+        self.started_with_cursor = self.cursor is not None
+        self.received = False
+        self.state = "following"
+
+    def poll(self, timeout: float) -> list[Record]:
+        if self.process is None:
+            if time.monotonic() >= self.restart_at:
+                self.start()
+            if self.process is None:
+                time.sleep(timeout)
+                return []
+        if not self.selector.select(timeout):
+            return []
+        assert self.process.stdout is not None
+        chunk = os.read(self.process.stdout.fileno(), 65536)
+        if not chunk:
+            self.stopped()
+            return []
+        self.received = True
+        self.buffer += chunk
+        *lines, self.buffer = self.buffer.split(b"\n")
+        if len(self.buffer) > 4 * 1024 * 1024:
+            self.buffer = b""
+        entries = []
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry, dict):
+                if isinstance(entry.get("__CURSOR"), str):
+                    self.cursor = entry["__CURSOR"]
+                entries.append(entry)
+        return entries
+
+    def stopped(self) -> None:
+        assert self.process is not None and self.process.stdout is not None
+        self.selector.unregister(self.process.stdout)
+        self.process.stdout.close()
+        status = self.end_child()
+        if self.started_with_cursor and not self.received and time.monotonic() - self.started < 10:
+            self.cursor = None  # a quick silent exit: the journal may have dropped the saved position
+        self.state = f"exited: {status}"
+        self.restart_at = time.monotonic() + JOURNAL_RESTART_DELAY
+
+    def end_child(self) -> int | None:
+        """Stop and reap this collector's own journalctl child; no other process is touched."""
+        process, self.process = self.process, None
+        if process is None:
+            return None
+        if process.poll() is None:
+            process.terminate()
+        try:
+            return process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return process.wait()
+
+    def save_cursor(self) -> None:
+        if self.cursor and self.cursor != self.saved_cursor:
+            temporary = self.cursor_path.with_name(f".{self.cursor_path.name}.tmp")
+            temporary.write_text(self.cursor + "\n", encoding="utf-8")
+            os.replace(temporary, self.cursor_path)
+            self.saved_cursor = self.cursor
+
+    def usage(self) -> Record:
+        if self.process is None:
+            return {}
+        try:
+            stat = Path(f"/proc/{self.process.pid}/stat").read_text().rsplit(")", 1)[1].split()
+            status = parse_status(Path(f"/proc/{self.process.pid}/status").read_text(), FOOTPRINT_FIELDS)
+        except (OSError, IndexError):
+            return {}
+        ticks = os.sysconf("SC_CLK_TCK")
+        return {
+            "journal_cpu_s": round((int(stat[11]) + int(stat[12])) / ticks, 2),
+            "journal_rss_anon_kib": status.get("RssAnon"),
+            "journal_rss_file_kib": status.get("RssFile"),
+        }
+
+    def close(self) -> None:
+        self.save_cursor()
+        if self.process is not None:
+            if self.process.stdout is not None:
+                self.selector.unregister(self.process.stdout)
+                self.process.stdout.close()
+            self.end_child()
+
+
+# Commands --------------------------------------------------------------------
+
+
+def state_directory(value: str | None) -> Path:
+    if value:
+        return Path(value)
+    if configured := os.environ.get("STATE_DIRECTORY"):  # set by StateDirectory= in the unit
+        return Path(configured.split(":", 1)[0])
+    base = os.environ.get("XDG_STATE_HOME", "")
+    return (Path(base) if os.path.isabs(base) else Path.home() / ".local/state") / "memory-telemetry"
+
+
+def make_sources(options: argparse.Namespace) -> Sources:
+    return Sources(Path(options.proc_root), Path(options.sys_root), Path(options.config_root), os.getuid())
+
+
+class Collector:
+    def __init__(self, options: argparse.Namespace, sources: Sources, state: Path, journal: Journal | None) -> None:
+        self.options = options
+        self.sources = sources
+        self.state = state
+        self.journal = journal
+        self.store = SampleStore(state / "samples", options.retention_days * 86400, options.max_sample_bytes)
+        self.incidents = Incidents(state / "incidents", self.store.directory, options.window, options.grace,
+                                   options.max_incidents)
+        self.boot = boot_id(sources)
+        self.limit, self.limit_source = OOMD_DEFAULT_SWAP_USED_LIMIT, "default"
+        self.watched: dict[str, Path] = {}
+        self.previous_fast: Record | None = None
+        self.previous_slow: Record | None = None
+        self.ticks = 0
+
+    def tick(self, lag: float) -> None:
+        now = time.time()
+        if self.ticks % self.options.slow_every == 0:
+            self.limit, self.limit_source = oomd_swap_used_limit(self.sources.config)
+            slow, self.watched = slow_sample(self.sources, self.options.watch, self.options.oomd_root, now, self.boot,
+                                             self.previous_slow)
+            slow["collector"] = self.own_cgroup()
+            self.store.append(slow)
+            self.previous_slow = slow
+        fast = fast_sample(self.sources, self.limit, self.watched, now, self.boot, self.previous_fast)
+        fast["oomd"] = {"swap_used_limit": self.limit, "source": self.limit_source}
+        fast["collector"] = self.footprint(lag)
+        self.store.append(fast)
+        self.store.bytes_written += write_json_atomic(self.state / "latest.json", fast)
+        self.previous_fast = fast
+        self.incidents.finalize_due(now)
+        if self.journal is not None:
+            self.journal.save_cursor()
+        self.ticks += 1
+
+    def footprint(self, lag: float) -> Record:
+        """The collector's own cost: cumulative CPU, memory and bytes written."""
+        try:
+            status = parse_status(Path("/proc/self/status").read_text(), FOOTPRINT_FIELDS)
+        except OSError:
+            status: dict[str, int] = {}
+        block: Record = {
+            "cpu_s": round(time.process_time(), 3),
+            "rss_anon_kib": status.get("RssAnon"),
+            "rss_file_kib": status.get("RssFile"),
+            "hwm_kib": status.get("VmHWM"),
+            "bytes_written": self.store.bytes_written,
+            "lag_ms": round(lag * 1000, 1),
+        }
+        if self.journal is not None:
+            block["journal"] = self.journal.state
+            block.update(self.journal.usage())
+        return block
+
+    def own_cgroup(self) -> Record | None:
+        """Memory charged to the collector's cgroup, including journalctl and page cache.
+
+        Under the unit that is the service's own cgroup; run by hand, it is the caller's."""
+        try:
+            line = Path("/proc/self/cgroup").read_text().splitlines()[0]
+        except (OSError, IndexError):
+            return None
+        path = self.sources.cgroup / line.partition("::")[2].lstrip("/")
+        current = self.sources.number(path / "memory.current")
+        if current is None:
+            return None
+        return {"cgroup": self.sources.cgroup_name(path), "cgroup_memory_bytes": current,
+                "cgroup_memory_peak_bytes": self.sources.number(path / "memory.peak")}
+
+
+def run(options: argparse.Namespace) -> int:
+    os.umask(0o077)  # the record names this user's processes and units
+    state = state_directory(options.state_dir)
+    state.mkdir(mode=0o700, parents=True, exist_ok=True)
+    journal = Journal(options.journalctl, state / "journal.cursor") if options.journalctl else None
+    collector = Collector(options, make_sources(options), state, journal)
+    stopping = False
+
+    def request_stop(_signal: int, _frame: Any) -> None:
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+    deadline = time.monotonic() + options.duration if options.duration else None
+    next_tick = time.monotonic()
+    try:
+        while not stopping:
+            collector.tick(max(0.0, time.monotonic() - next_tick))
+            next_tick = max(next_tick + options.interval, time.monotonic())  # skip ticks missed by a stall
+            while not stopping:
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
+                    stopping = True
+                    break
+                if now >= next_tick:
+                    break
+                wait = min(next_tick - now, 1.0, (deadline - now) if deadline is not None else 1.0)
+                if journal is None:
+                    time.sleep(wait)
+                    continue
+                for entry in journal.poll(wait):
+                    collector.incidents.handle(entry)
+    finally:
+        if journal is not None:
+            journal.close()
+        collector.store.close()
+    return 0
+
+
+def sample_once(options: argparse.Namespace) -> int:
+    sources = make_sources(options)
+    limit, source = oomd_swap_used_limit(sources.config)
+    boot = boot_id(sources)
+    now = time.time()
+    slow, watched = slow_sample(sources, options.watch, options.oomd_root, now, boot, None)
+    fast = fast_sample(sources, limit, watched, now, boot, None)
+    fast["oomd"] = {"swap_used_limit": limit, "source": source}
+    json.dump({"fast": fast, "slow": slow}, sys.stdout, indent=1)
+    sys.stdout.write("\n")
+    return 0
+
+
+def gib(kib: float | None) -> str:
+    return "?" if kib is None else f"{kib / 1048576:.1f} GiB"
+
+
+def report(options: argparse.Namespace) -> int:
+    state = state_directory(options.state_dir)
+    latest = load_json(state / "latest.json")
+    if latest is None:
+        print(f"memory-telemetry: no samples in {state}", file=sys.stderr)
+        return 1
+    now = time.time()
+    lines = [f"memory-telemetry: latest sample {now - latest['t']:.0f} s ago in {state}"]
+    t1, t4, t2 = latest.get("t1") or {}, latest.get("t4") or {}, latest.get("t2") or {}
+    if t1:
+        lines.append(f"T1 available {gib(t1['mem_available_kib'])}, oomd line {gib(t1['oomd_line_kib'])}, "
+                     f"headroom {gib(t1['headroom_kib'])}")
+    if t4:
+        armed = "armed" if t4["oomd_swap_gate_armed"] else "not armed"
+        lines.append(f"T4 swap {gib(t4['swap_used_kib'])} of {gib(t4['swap_total_kib'])} used, "
+                     f"{gib(t4['zswapped_kib'])} of it in zswap; oomd swap gate {armed}")
+    for resource in ("memory", "io"):
+        psi = t2.get(resource) or {}
+        if psi:
+            fraction = psi.get("stall_fraction", {})
+            lines.append(f"T2 {resource} PSI avg60 some {psi.get('some', {}).get('avg60')} "
+                         f"full {psi.get('full', {}).get('avg60')}; "
+                         f"last interval stalled some {fraction.get('some')} full {fraction.get('full')}")
+    rates = (latest.get("t3") or {}).get("per_s", {})
+    if rates:
+        lines.append("T3 pages/s " + ", ".join(f"{key} {rates[key]}" for key in SWAP_COUNTERS[:5] if key in rates))
+    t8 = latest.get("t8") or {}
+    if t8.get("gtt_used_bytes") is not None:
+        lines.append(f"T8 GTT used {gib(t8['gtt_used_bytes'] / 1024)}")
+    samples = read_samples(state / "samples", now - options.window, now)
+    slow = [sample for sample in samples if sample.get("kind") == "slow"]
+    if slow:
+        choice = (slow[-1].get("swap_holders") or {}).get("swap_mode_choice")
+        lines.append(f"oomd swap-mode choice now: {choice or 'none'}")
+        growth = t9_growth(slow)
+        lines.append(f"T9 growth of anonymous plus swapped memory over {growth['to'] - growth['from']:.0f} s:")
+        for item in growth["growth"][:10]:
+            name = item.get("tree") or f"{item.get('exe')} ({item.get('role')})"
+            lines.append(f"  {item['growth_kib'] / 1024:+10.0f} MiB  {item['cgroup']}  {name}")
+    incidents = sorted((state / "incidents").glob("*.json"))
+    lines.append(f"T7 kill records: {len(incidents)}" + (f", latest {incidents[-1].stem}" if incidents else ""))
+    print("\n".join(lines))
+    return 0
+
+
+def positive(kind: type) -> Any:
+    def parse(value: str) -> Any:
+        number = kind(value)
+        if number <= 0:
+            raise argparse.ArgumentTypeError("must be positive")
+        return number
+    return parse
+
+
+def parse_arguments(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="memory-telemetry", description=__doc__.splitlines()[0])
+    commands = parser.add_subparsers(dest="command", required=True)
+    run_parser = commands.add_parser("run", help="sample until stopped")
+    sample_parser = commands.add_parser("sample", help="print one fast and one slow sample; write nothing")
+    report_parser = commands.add_parser("report", help="summarize the record")
+    for command in (run_parser, sample_parser):
+        command.add_argument("--watch", action="append", metavar="GLOB",
+                             help="app.slice cgroup name pattern for T9 (repeatable; default: the agent apps)")
+        command.add_argument("--oomd-root", action="append", metavar="CGROUP",
+                             help="cgroup under which oomd ranks swap "
+                                  "(repeatable; default: system.slice and the user slice)")
+        command.add_argument("--proc-root", default="/proc", help=argparse.SUPPRESS)
+        command.add_argument("--sys-root", default="/sys", help=argparse.SUPPRESS)
+        command.add_argument("--config-root", default="/", help=argparse.SUPPRESS)
+    for command in (run_parser, report_parser):
+        command.add_argument("--state-dir", help="default: $STATE_DIRECTORY or $XDG_STATE_HOME/memory-telemetry")
+    run_parser.add_argument("--interval", type=positive(float), default=DEFAULT_INTERVAL,
+                            help="seconds between fast samples")
+    run_parser.add_argument("--slow-every", type=positive(int), default=DEFAULT_SLOW_EVERY,
+                            help="take a slow sample every this many fast samples")
+    run_parser.add_argument("--window", type=positive(float), default=DEFAULT_WINDOW,
+                            help="seconds of samples a kill record keeps from before the kill")
+    run_parser.add_argument("--grace", type=positive(float), default=DEFAULT_GRACE,
+                            help="seconds during which further kill messages join the same record")
+    run_parser.add_argument("--retention-days", type=positive(float), default=DEFAULT_RETENTION_DAYS)
+    run_parser.add_argument("--max-sample-bytes", type=positive(int), default=DEFAULT_MAX_SAMPLE_BYTES)
+    run_parser.add_argument("--max-incidents", type=positive(int), default=DEFAULT_MAX_INCIDENTS)
+    run_parser.add_argument("--journalctl", default="journalctl",
+                            help="journalctl command; empty disables kill records")
+    run_parser.add_argument("--duration", type=positive(float), help="stop after this many seconds")
+    report_parser.add_argument("--window", type=positive(float), default=DEFAULT_WINDOW,
+                               help="seconds of growth to show")
+    options = parser.parse_args(argv)
+    if options.command in ("run", "sample"):
+        options.watch = options.watch or list(DEFAULT_WATCH)
+        options.oomd_root = options.oomd_root or ["system.slice", f"user.slice/user-{os.getuid()}.slice"]
+    return options
+
+
+def main(argv: list[str] | None = None) -> int:
+    options = parse_arguments(sys.argv[1:] if argv is None else argv)
+    if options.command == "run":
+        return run(options)
+    if options.command == "sample":
+        return sample_once(options)
+    return report(options)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

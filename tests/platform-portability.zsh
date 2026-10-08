@@ -506,6 +506,7 @@ typeset -a darwin_only_patterns=(
   '.config/systemd'
   '.local/bin/cmake'
   '.local/bin/makepkg'
+  '.local/bin/memory-telemetry'
   '.local/bin/ninja'
   '.local/bin/proton-drive-desktop'
   '.local/lib/builds-slice'
@@ -560,6 +561,8 @@ expected_linux_source_inventory=$(
     'dot_config/systemd/user/app-com.anthropic.Claude-.scope.d/50-oom-continue.conf' \
     'dot_config/systemd/user/builds.slice' \
     'dot_config/systemd/user/codex-usage-safeguard.service.tmpl' \
+    'dot_config/systemd/user/default.target.wants/symlink_memory-telemetry.service' \
+    'dot_config/systemd/user/memory-telemetry.service' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
     'dot_config/systemd/user/proton-drive-desktop.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
