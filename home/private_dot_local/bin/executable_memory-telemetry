@@ -32,6 +32,7 @@ import signal
 import subprocess
 import sys
 import time
+import zlib
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -65,9 +66,30 @@ JOURNAL_MATCHES = (
     "_TRANSPORT=kernel",
 )
 OOMD_KILL_MESSAGE = re.compile(r"for killing|^Killed ")
-KERNEL_OOM_MESSAGE = re.compile(
-    r"invoked oom-killer|Out of memory|Memory cgroup out of memory|oom-kill:|oom_reaper:"
+# The kernel OOM report lines from mm/oom_kill.c, each matched whole and rebuilt
+# without the task name, which a process can set to arbitrary text. The first
+# three open a kill record; the reaper lines only join one. Any other kernel line
+# with these words keeps no text and only joins an open record, so driver
+# messages such as "Out of memory during recovery" and forged task names in
+# other kernel lines never open one.
+KERNEL_OOM_FORMATS = (
+    (re.compile(r"(?s).* invoked oom-killer: "
+                r"(?P<rest>gfp_mask=0x[0-9a-f]+\([^()]*\), order=-?\d+, oom_score_adj=-?\d+)"),
+     "(task) invoked oom-killer: {rest}", True),
+    (re.compile(r"(?s)oom-kill:(?P<head>constraint=.*?),task=.*,pid=(?P<pid>\d+),uid=(?P<uid>\d+)"),
+     "oom-kill:{head},task=(task),pid={pid},uid={uid}", True),
+    (re.compile(r"(?s)(?P<head>Out of memory|Out of memory \(oom_kill_allocating_task\)|Memory cgroup out of memory): "
+                r"Killed process (?P<pid>\d+) \(.*\) (?P<rest>total-vm:\d+kB[^()]*)"),
+     "{head}: Killed process {pid} (task) {rest}", True),
+    (re.compile(r"(?s)oom_reaper: reaped process (?P<pid>\d+) \(.*\), now (?P<rest>anon-rss:\d+kB[^()]*)"),
+     "oom_reaper: reaped process {pid} (task), now {rest}", False),
+    (re.compile(r"(?s)oom_reaper: unable to reap pid:(?P<pid>\d+) \(.*\)"),
+     "oom_reaper: unable to reap pid:{pid} (task)", False),
 )
+KERNEL_OOM_WORDS = re.compile(r"oom-kill|oom_reaper|[Oo]ut of memory")
+KERNEL_OOM_UNRECOGNIZED = "(kernel OOM line in an unrecognized format)"
+CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+NATIVE_CLAUDE = re.compile(r"/claude/versions/[^/]+$")  # Claude Code's native installer: the basename is a version
 JOURNAL_FIELDS = (
     ("MESSAGE_ID", "message_id"),
     ("UNIT", "unit"),
@@ -148,7 +170,7 @@ class Sources:
         return self.number(path)
 
     def cgroup_name(self, path: Path) -> str:
-        return str(path.relative_to(self.cgroup)) if path.is_relative_to(self.cgroup) else str(path)
+        return clean_text(str(path.relative_to(self.cgroup) if path.is_relative_to(self.cgroup) else path))
 
 
 def parse_meminfo(text: str | None) -> dict[str, int]:
@@ -213,8 +235,10 @@ def parse_fraction(value: str) -> float | None:
     return None
 
 
-def oomd_swap_used_limit(config: Path) -> tuple[float, str]:
-    """Return oomd's SwapUsedLimit and the file that set it, read like systemd reads oomd.conf."""
+def oomd_swap_used_limit(config: Path) -> tuple[float, str, dict[str, str]]:
+    """Return oomd's SwapUsedLimit, the file that set it, and the files that could not be read.
+
+    The files are read like systemd reads oomd.conf and its drop-ins."""
     files: list[Path] = []
     for directory in OOMD_CONFIG_DIRS:
         main = config / directory / "oomd.conf"
@@ -233,10 +257,12 @@ def oomd_swap_used_limit(config: Path) -> tuple[float, str]:
                 dropins[name] = folder / name
     files.extend(dropins[name] for name in sorted(dropins))
     limit, source = OOMD_DEFAULT_SWAP_USED_LIMIT, "default"
+    errors: dict[str, str] = {}
     for path in files:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        except OSError as error:
+            errors[f"config:{path.relative_to(config)}"] = type(error).__name__
             continue
         section = ""
         for raw in text.splitlines():
@@ -253,12 +279,20 @@ def oomd_swap_used_limit(config: Path) -> tuple[float, str]:
                     limit, source = OOMD_DEFAULT_SWAP_USED_LIMIT, "default"
                 elif (fraction := parse_fraction(value)) is not None:
                     limit, source = fraction, str(path.relative_to(config))
-    return limit, source
+    if errors and source == "default":
+        source = "default (configuration unreadable)"
+    return limit, source, errors
 
 
 def boot_id(sources: Sources) -> str | None:
     text = sources.text(sources.proc / "sys/kernel/random/boot_id")
     return text.strip().replace("-", "") if text else None
+
+
+def clean_text(text: str) -> str:
+    """Make a name chosen by another process safe to record and print: valid UTF-8, no control characters."""
+    text = text.encode("utf-8", "backslashreplace").decode("utf-8")
+    return CONTROL_CHARACTERS.sub(lambda match: f"\\x{ord(match.group()):02x}", text)
 
 
 # Fast samples: T1, T2, T3, T4 and T8, the counters #403 shares -------------
@@ -476,10 +510,10 @@ def watched_cgroups(sources: Sources, patterns: list[str], candidates: list[Path
         entries: list[os.DirEntry[str]] = []
     for entry in entries:
         if entry.is_dir(follow_symlinks=False) and any(fnmatch.fnmatchcase(entry.name, p) for p in patterns):
-            watched[entry.name] = Path(entry.path)
+            watched[clean_text(entry.name)] = Path(entry.path)
     for path in candidates:
         if path.is_relative_to(sources.user_slice):
-            watched.setdefault(path.name, path)
+            watched.setdefault(clean_text(path.name), path)
     return watched
 
 
@@ -490,6 +524,7 @@ def cgroup_block(sources: Sources, path: Path) -> Record | None:
         return None
     stat = parse_keyed(sources.text(path / "memory.stat"))
     events = parse_keyed(sources.text(path / "memory.events.local"))
+    tree_events = parse_keyed(sources.text(path / "memory.events"))
     return {
         "path": sources.cgroup_name(path),
         "memory_bytes": current,
@@ -498,6 +533,8 @@ def cgroup_block(sources: Sources, path: Path) -> Record | None:
         "swap_peak_bytes": sources.number(path / "memory.swap.peak"),
         "stat": {key: stat[key] for key in CGROUP_STAT_KEYS if key in stat},
         "memory_events_local": {key: events[key] for key in MEMORY_EVENT_KEYS if key in events},
+        # Hierarchical counts include descendants, removed ones too; a parent slice's .local counts stay 0.
+        "memory_events": {key: tree_events[key] for key in MEMORY_EVENT_KEYS if key in tree_events},
         "memory_swap_events": parse_keyed(sources.text(path / "memory.swap.events")),
         "pids": {
             "threads": sources.number(path / "pids.current"),
@@ -525,7 +562,9 @@ def exe_name(target: str) -> str:
     """The basename of /proc/<pid>/exe. Never argv or comm, which a process can rewrite."""
     if target.endswith(" (deleted)"):
         target = target[: -len(" (deleted)")]
-    return target.rsplit("/", 1)[-1][:64] or "(unreadable)"
+    if NATIVE_CLAUDE.search(target):
+        return "claude"
+    return clean_text(target.rsplit("/", 1)[-1][:64]) or "(unreadable)"
 
 
 def cgroup_processes(sources: Sources, path: Path) -> list[Process] | None:
@@ -687,7 +726,7 @@ def slow_sample(
             name: {key: block.get(key) for key in ("path", "memory_events_local", "memory_swap_events", "pids")}
             | {"last_seen": previous["t"]}
             for name, block in (previous.get("cgroups") or {}).items()
-            if name not in cgroups
+            if name not in cgroups and not (sources.cgroup / str(block.get("path"))).exists()
         }
         if removed:
             sample["removed"] = removed
@@ -697,30 +736,44 @@ def slow_sample(
 
 
 def t9_growth(slow: list[Record]) -> Record:
-    """T9 top contributors: the latest attribution and the largest growth across the given samples."""
+    """T9 top contributors: the latest attribution and the largest growth across the given samples.
+
+    Growth is computed only where the earlier size is known. An entry missing from an
+    earlier list that folded its tail into "(rest)" may have been there, so it goes
+    into `entered` with its current size instead of a made-up delta. An entry missing
+    from a complete earlier list is new, and all of it is growth."""
     samples = [sample for sample in slow if isinstance(sample.get("t9"), dict)]
     if not samples:
-        return {"from": None, "to": None, "latest": None, "growth": []}
+        return {"from": None, "to": None, "latest": None, "growth": [], "entered": []}
     first, last = samples[0], samples[-1]
-    growth = []
+    growth: list[Record] = []
+    entered: list[Record] = []
     for cgroup, data in last["t9"].items():
-        before = first["t9"].get(cgroup) or {}
+        before = first["t9"].get(cgroup)
         for section, fields in (("classes", ("exe", "role")), ("trees", ("tree",))):
+            earlier = (before or {}).get(section, [])
             old = {
                 tuple(entry.get(field) for field in fields): entry["rss_anon_kib"] + entry["swap_kib"]
-                for entry in before.get(section, [])
+                for entry in earlier
             }
+            folded = any("(rest)" in key for key in old)
             for entry in data.get(section, []):
                 key = tuple(entry.get(field) for field in fields)
                 if "(rest)" in key:
                     continue
                 weight = entry["rss_anon_kib"] + entry["swap_kib"]
-                growth.append({
-                    "cgroup": cgroup, "section": section, **{field: entry.get(field) for field in fields},
-                    "anon_swap_kib": weight, "growth_kib": weight - old.get(key, 0), "new": key not in old,
-                })
+                item = {"cgroup": cgroup, "section": section, **{field: entry.get(field) for field in fields},
+                        "anon_swap_kib": weight}
+                if key in old:
+                    growth.append(item | {"growth_kib": weight - old[key], "new": False})
+                elif before is not None and folded:
+                    entered.append(item)
+                else:
+                    growth.append(item | {"growth_kib": weight, "new": True})
     growth.sort(key=lambda item: -item["growth_kib"])
-    return {"from": first["t"], "to": last["t"], "latest": last["t9"], "growth": growth[:TOP_ENTRIES]}
+    entered.sort(key=lambda item: -item["anon_swap_kib"])
+    return {"from": first["t"], "to": last["t"], "latest": last["t9"], "growth": growth[:TOP_ENTRIES],
+            "entered": entered[:TOP_ENTRIES]}
 
 
 # The durable record ----------------------------------------------------------
@@ -782,8 +835,8 @@ def read_samples(directory: Path, start: float, end: float) -> list[Record]:
                     if (isinstance(record, dict) and isinstance(record.get("t"), (int, float))
                             and start <= record["t"] <= end):
                         records.append(record)
-        except (OSError, EOFError):
-            continue
+        except (OSError, EOFError, zlib.error):
+            continue  # a damaged segment keeps the lines read before the damage
     records.sort(key=lambda record: record["t"])
     return records
 
@@ -869,6 +922,18 @@ class SampleStore:
             self.handle = None
 
 
+RECORD_STAMP = "%Y%m%dT%H%M%S.%fZ"
+
+
+def record_opened(name: str) -> float | None:
+    """The first-event time encoded in a kill record's file name."""
+    try:
+        return datetime.strptime(name[: len("20261008T155523.333881Z")], RECORD_STAMP).replace(
+            tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
 def journal_text(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -877,13 +942,16 @@ def journal_text(value: Any) -> str:
     return ""
 
 
-def redact_kernel(message: str) -> str | None:
-    """Keep a kernel OOM report line without the task name, which a process can set to arbitrary text."""
-    if not KERNEL_OOM_MESSAGE.search(message):
-        return None
-    message = re.sub(r"^.*? invoked oom-killer", "(task) invoked oom-killer", message)
-    message = re.sub(r"(process \d+) \(.*\)(,? )", r"\1 (task)\2", message)
-    return re.sub(r",task=.*,pid=", ",task=(task),pid=", message)
+def kernel_oom_line(message: str) -> tuple[str, bool] | None:
+    """A kernel OOM report line without its task name, and whether it opens a kill record.
+
+    Fails closed: a line with OOM words in no known format keeps no text and opens nothing."""
+    for pattern, template, opens in KERNEL_OOM_FORMATS:
+        if match := pattern.fullmatch(message):
+            return template.format(**match.groupdict()), opens
+    if KERNEL_OOM_WORDS.search(message):
+        return KERNEL_OOM_UNRECOGNIZED, False
+    return None
 
 
 def journal_event(entry: Record) -> tuple[Record, bool] | None:
@@ -896,10 +964,10 @@ def journal_event(entry: Record) -> tuple[Record, bool] | None:
     elif message_id == MESSAGE_UNIT_OOM:
         kind, opener = "unit-oom-kill", True
     elif transport == "kernel":
-        redacted = redact_kernel(message)
-        if redacted is None:
+        parsed = kernel_oom_line(message)
+        if parsed is None:
             return None
-        message, kind, opener = redacted, "kernel-oom", "oom_reaper:" not in redacted
+        (message, opener), kind = parsed, "kernel-oom"
     elif entry.get("_SYSTEMD_UNIT") == OOMD_UNIT:
         opener = bool(OOMD_KILL_MESSAGE.search(message))
         kind = "oomd-kill" if opener else "oomd"
@@ -909,17 +977,20 @@ def journal_event(entry: Record) -> tuple[Record, bool] | None:
         seconds = int(entry["__REALTIME_TIMESTAMP"]) / 1e6
     except (KeyError, TypeError, ValueError):
         return None
-    event: Record = {"t": round(seconds, 6), "kind": kind, "message": message[:2000]}
+    event: Record = {"t": round(seconds, 6), "kind": kind, "message": clean_text(message[:2000])}
     for field, name in JOURNAL_FIELDS:
         if isinstance(entry.get(field), str):
-            event[name] = entry[field]
+            event[name] = clean_text(entry[field])
     return event, opener
 
 
 class Incidents:
     """T7 kill records. Each one keeps its journal events, the preceding window of
     samples, the T9 top contributors, and the fast samples of the grace period
-    after it opened. Events within the grace period join the open record."""
+    after it opened. Events within the grace period of a record's first event join
+    that record, even when it was closed on an earlier tick or by an earlier
+    collector process, so a kill read in pieces or replayed after a restart still
+    makes one record."""
 
     def __init__(self, directory: Path, samples: Path, window: float, grace: float, max_files: int) -> None:
         self.directory = directory
@@ -929,6 +1000,7 @@ class Incidents:
         self.max_files = max_files
         self.current: Record | None = None
         self.path: Path | None = None
+        self.bytes_written = 0
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     def handle(self, entry: Record) -> None:
@@ -936,25 +1008,53 @@ class Incidents:
         if classified is None:
             return
         event, opener = classified
-        current = self.current
-        if current is not None and abs(event["t"] - current["opened"]) <= self.grace:
-            self.add(event)
+        if self.current is not None and abs(event["t"] - self.current["opened"]) <= self.grace:
+            self.add(self.current, self.path, event)
+            return
+        recent = self.recent(event["t"])
+        if recent is not None:
+            path, record = recent
+            if record.get("finalized"):
+                self.add(record, path, event)
+            else:  # left open by an earlier collector process
+                self.finalize()
+                self.current, self.path = record, path
+                self.add(record, path, event)
         elif opener:
             self.finalize()
             self.open(event)
 
+    def recent(self, t: float) -> tuple[Path, Record] | None:
+        """The newest stored record whose first event is within the grace period of t."""
+        best: tuple[float, Path] | None = None
+        for path in self.directory.glob("*.json"):
+            opened = record_opened(path.name)
+            if opened is not None and abs(t - opened) <= self.grace and (best is None or opened > best[0]):
+                best = (opened, path)
+        if best is None or best[1] == self.path:
+            return None
+        record = load_json(best[1])
+        return (best[1], record) if record is not None and isinstance(record.get("events"), list) else None
+
+    def recover(self, now: float) -> None:
+        """Finalize records an earlier collector process left open; resume the newest still in its grace period."""
+        for path in sorted(self.directory.glob("*.json")):
+            record = load_json(path)
+            if record is None or record.get("finalized") or not isinstance(record.get("opened"), (int, float)):
+                continue
+            if now - record["opened"] > self.grace:
+                self.finish(record, path)
+            else:
+                self.finalize()
+                self.current, self.path = record, path
+
     def open(self, event: Record) -> None:
         opened = event["t"]
-        stamp = datetime.fromtimestamp(opened, timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        stamp = datetime.fromtimestamp(opened, timezone.utc).strftime(RECORD_STAMP)
         identifier = f"{stamp}-{event['kind']}"
-        self.path = self.directory / f"{identifier}.json"
-        existing = load_json(self.path)
-        if existing is not None and isinstance(existing.get("events"), list):
-            self.current = existing  # replayed from the journal after a restart
-            self.add(event)
-            return
         samples = read_samples(self.samples, opened - self.window, opened)
         slow = [sample for sample in samples if sample.get("kind") == "slow"]
+        self.path = self.directory / f"{identifier}.json"
         self.current = {
             "schema": f"{SCHEMA}/incident",
             "id": identifier,
@@ -970,35 +1070,36 @@ class Incidents:
             "t9": t9_growth(slow),
             "following": None,
         }
-        self.write()
+        self.write(self.current, self.path)
 
-    def add(self, event: Record) -> None:
-        assert self.current is not None
-        events = self.current["events"]
+    def add(self, record: Record, path: Path | None, event: Record) -> None:
+        events = record["events"]
         if all((known["t"], known["kind"], known["message"]) != (event["t"], event["kind"], event["message"])
                for known in events):
             events.append(event)
             events.sort(key=lambda known: known["t"])
-            self.write()
+            self.write(record, path)
 
     def finalize_due(self, now: float) -> None:
         if self.current is not None and now - self.current["opened"] > self.grace:
             self.finalize()
 
     def finalize(self) -> None:
-        if self.current is None:
-            return
-        opened = self.current["opened"]
-        following = read_samples(self.samples, opened + 1e-6, opened + self.grace)
-        self.current["following"] = {"fast": [sample for sample in following if sample.get("kind") == "fast"]}
-        self.current["finalized"] = True
-        self.write()
+        if self.current is not None and self.path is not None:
+            self.finish(self.current, self.path)
         self.current = self.path = None
         self.prune()
 
-    def write(self) -> None:
-        if self.current is not None and self.path is not None:
-            write_json_atomic(self.path, self.current, durable=True)
+    def finish(self, record: Record, path: Path) -> None:
+        opened = record["opened"]
+        following = read_samples(self.samples, opened + 1e-6, opened + self.grace)
+        record["following"] = {"fast": [sample for sample in following if sample.get("kind") == "fast"]}
+        record["finalized"] = True
+        self.write(record, path)
+
+    def write(self, record: Record, path: Path | None) -> None:
+        if path is not None:
+            self.bytes_written += write_json_atomic(path, record, durable=True)
 
     def prune(self) -> None:
         records = sorted(path for path in self.directory.glob("*.json") if path != self.path)
@@ -1021,6 +1122,7 @@ class Journal:
             saved = ""
         self.cursor: str | None = saved or None
         self.saved_cursor = self.cursor
+        self.bytes_written = 0
         self.process: subprocess.Popen[bytes] | None = None
         self.selector = selectors.DefaultSelector()
         self.buffer = b""
@@ -1084,8 +1186,10 @@ class Journal:
         self.selector.unregister(self.process.stdout)
         self.process.stdout.close()
         status = self.end_child()
+        # journalctl rejects a malformed cursor by exiting at once without output; start again from the
+        # end. A well-formed cursor older than the journal's retention replays from the oldest entry.
         if self.started_with_cursor and not self.received and time.monotonic() - self.started < 10:
-            self.cursor = None  # a quick silent exit: the journal may have dropped the saved position
+            self.cursor = None
         self.state = f"exited: {status}"
         self.restart_at = time.monotonic() + JOURNAL_RESTART_DELAY
 
@@ -1105,7 +1209,7 @@ class Journal:
     def save_cursor(self) -> None:
         if self.cursor and self.cursor != self.saved_cursor:
             temporary = self.cursor_path.with_name(f".{self.cursor_path.name}.tmp")
-            temporary.write_text(self.cursor + "\n", encoding="utf-8")
+            self.bytes_written += temporary.write_text(self.cursor + "\n", encoding="utf-8")
             os.replace(temporary, self.cursor_path)
             self.saved_cursor = self.cursor
 
@@ -1136,6 +1240,11 @@ class Journal:
 # Commands --------------------------------------------------------------------
 
 
+def add_unavailable(sample: Record, errors: dict[str, str]) -> None:
+    if errors:
+        sample["unavailable"] = dict(sorted({**sample.get("unavailable", {}), **errors}.items()))
+
+
 def state_directory(value: str | None) -> Path:
     if value:
         return Path(value)
@@ -1158,8 +1267,10 @@ class Collector:
         self.store = SampleStore(state / "samples", options.retention_days * 86400, options.max_sample_bytes)
         self.incidents = Incidents(state / "incidents", self.store.directory, options.window, options.grace,
                                    options.max_incidents)
+        self.incidents.recover(time.time())
         self.boot = boot_id(sources)
         self.limit, self.limit_source = OOMD_DEFAULT_SWAP_USED_LIMIT, "default"
+        self.limit_errors: dict[str, str] = {}
         self.watched: dict[str, Path] = {}
         self.previous_fast: Record | None = None
         self.previous_slow: Record | None = None
@@ -1168,14 +1279,15 @@ class Collector:
     def tick(self, lag: float) -> None:
         now = time.time()
         if self.ticks % self.options.slow_every == 0:
-            self.limit, self.limit_source = oomd_swap_used_limit(self.sources.config)
+            self.limit, self.limit_source, self.limit_errors = oomd_swap_used_limit(self.sources.config)
             slow, self.watched = slow_sample(self.sources, self.options.watch, self.options.oomd_root, now, self.boot,
                                              self.previous_slow)
-            slow["collector"] = self.own_cgroup()
+            slow["collector_cgroup"] = self.own_cgroup()
             self.store.append(slow)
             self.previous_slow = slow
         fast = fast_sample(self.sources, self.limit, self.watched, now, self.boot, self.previous_fast)
         fast["oomd"] = {"swap_used_limit": self.limit, "source": self.limit_source}
+        add_unavailable(fast, self.limit_errors)
         fast["collector"] = self.footprint(lag)
         self.store.append(fast)
         self.store.bytes_written += write_json_atomic(self.state / "latest.json", fast)
@@ -1196,7 +1308,8 @@ class Collector:
             "rss_anon_kib": status.get("RssAnon"),
             "rss_file_kib": status.get("RssFile"),
             "hwm_kib": status.get("VmHWM"),
-            "bytes_written": self.store.bytes_written,
+            "bytes_written": self.store.bytes_written + self.incidents.bytes_written
+            + (self.journal.bytes_written if self.journal is not None else 0),
             "lag_ms": round(lag * 1000, 1),
         }
         if self.journal is not None:
@@ -1262,12 +1375,13 @@ def run(options: argparse.Namespace) -> int:
 
 def sample_once(options: argparse.Namespace) -> int:
     sources = make_sources(options)
-    limit, source = oomd_swap_used_limit(sources.config)
+    limit, source, errors = oomd_swap_used_limit(sources.config)
     boot = boot_id(sources)
     now = time.time()
     slow, watched = slow_sample(sources, options.watch, options.oomd_root, now, boot, None)
     fast = fast_sample(sources, limit, watched, now, boot, None)
     fast["oomd"] = {"swap_used_limit": limit, "source": source}
+    add_unavailable(fast, errors)
     json.dump({"fast": fast, "slow": slow}, sys.stdout, indent=1)
     sys.stdout.write("\n")
     return 0

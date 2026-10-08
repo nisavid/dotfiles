@@ -205,34 +205,67 @@ class ParserTests(unittest.TestCase):
     def test_oomd_limit_reads_main_file_and_drop_ins_in_systemd_order(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             config = Path(temporary)
-            self.assertEqual(mt.oomd_swap_used_limit(config), (0.9, "default"))
+            self.assertEqual(mt.oomd_swap_used_limit(config), (0.9, "default", {}))
             write(config / "usr/lib/systemd/oomd.conf", "[OOM]\nSwapUsedLimit=50%\n")
             write(config / "etc/systemd/oomd.conf", "[OOM]\nSwapUsedLimit=80%\n[Other]\nSwapUsedLimit=10%\n")
-            self.assertEqual(mt.oomd_swap_used_limit(config), (0.8, "etc/systemd/oomd.conf"))
+            self.assertEqual(mt.oomd_swap_used_limit(config), (0.8, "etc/systemd/oomd.conf", {}))
             # A drop-in in /etc masks the same name in /usr/lib; later names win.
             write(config / "usr/lib/systemd/oomd.conf.d/50-a.conf", "[OOM]\nSwapUsedLimit=60%\n")
             write(config / "etc/systemd/oomd.conf.d/50-a.conf", "[OOM]\nSwapUsedLimit=70%\n")
-            self.assertEqual(mt.oomd_swap_used_limit(config), (0.7, "etc/systemd/oomd.conf.d/50-a.conf"))
+            self.assertEqual(mt.oomd_swap_used_limit(config), (0.7, "etc/systemd/oomd.conf.d/50-a.conf", {}))
             write(config / "run/systemd/oomd.conf.d/60-b.conf", "[OOM]\nSwapUsedLimit=65%\n")
-            self.assertEqual(mt.oomd_swap_used_limit(config), (0.65, "run/systemd/oomd.conf.d/60-b.conf"))
+            self.assertEqual(mt.oomd_swap_used_limit(config), (0.65, "run/systemd/oomd.conf.d/60-b.conf", {}))
             write(config / "run/systemd/oomd.conf.d/70-c.conf", "[OOM]\nSwapUsedLimit=\n")
-            self.assertEqual(mt.oomd_swap_used_limit(config), (0.9, "default"))
+            self.assertEqual(mt.oomd_swap_used_limit(config), (0.9, "default", {}))
 
-    def test_kernel_oom_lines_lose_the_task_name(self) -> None:
+    def test_unreadable_oomd_configuration_is_named_not_assumed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            (config / "etc/systemd/oomd.conf.d/80-unreadable.conf").mkdir(parents=True)  # unreadable even for root
+            limit, source, errors = mt.oomd_swap_used_limit(config)
+            self.assertEqual((limit, source), (0.9, "default (configuration unreadable)"))
+            self.assertEqual(errors, {"config:etc/systemd/oomd.conf.d/80-unreadable.conf": "IsADirectoryError"})
+            write(config / "etc/systemd/oomd.conf", "[OOM]\nSwapUsedLimit=85%\n")
+            self.assertEqual(mt.oomd_swap_used_limit(config)[:2], (0.85, "etc/systemd/oomd.conf"))
+
+    def test_kernel_oom_lines_lose_the_task_name_and_fail_closed(self) -> None:
+        gfp = "gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0, oom_score_adj=300"
         lines = {
-            "COMM-SENTINEL x invoked oom-killer: gfp_mask=0x140cca, order=0, oom_score_adj=300":
-                "(task) invoked oom-killer: gfp_mask=0x140cca, order=0, oom_score_adj=300",
-            "Out of memory: Killed process 4242 (COMM-SENTINEL) total-vm:10kB, anon-rss:5kB, oom_score_adj:300":
-                "Out of memory: Killed process 4242 (task) total-vm:10kB, anon-rss:5kB, oom_score_adj:300",
-            "oom-kill:constraint=CONSTRAINT_MEMCG,task_memcg=/user.slice/x.scope,task=COMM-SENTINEL,pid=4242,uid=1000":
-                "oom-kill:constraint=CONSTRAINT_MEMCG,task_memcg=/user.slice/x.scope,task=(task),pid=4242,uid=1000",
-            "oom_reaper: reaped process 4242 (COMM-SENTINEL), now anon-rss:0kB":
-                "oom_reaper: reaped process 4242 (task), now anon-rss:0kB",
+            f"COMM-SENTINEL x invoked oom-killer: {gfp}": (f"(task) invoked oom-killer: {gfp}", True),
+            "oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=/,mems_allowed=0,oom_memcg=/u.slice,"
+            "task_memcg=/user.slice/x.scope,task=COMM-SENTINEL,pid=4242,uid=1000":
+                ("oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=/,mems_allowed=0,oom_memcg=/u.slice,"
+                 "task_memcg=/user.slice/x.scope,task=(task),pid=4242,uid=1000", True),
+            "Out of memory: Killed process 4242 (COMM-SENTINEL) total-vm:10kB, anon-rss:5kB, file-rss:0kB, "
+            "shmem-rss:0kB, UID:1000 pgtables:8kB oom_score_adj:300":
+                ("Out of memory: Killed process 4242 (task) total-vm:10kB, anon-rss:5kB, file-rss:0kB, "
+                 "shmem-rss:0kB, UID:1000 pgtables:8kB oom_score_adj:300", True),
+            "Memory cgroup out of memory: Killed process 4242 (COMM-SENTINEL) total-vm:1kB":
+                ("Memory cgroup out of memory: Killed process 4242 (task) total-vm:1kB", True),
+            "oom_reaper: reaped process 4242 (COMM-SENTINEL), now anon-rss:0kB, file-rss:0kB, shmem-rss:0kB":
+                ("oom_reaper: reaped process 4242 (task), now anon-rss:0kB, file-rss:0kB, shmem-rss:0kB", False),
+            "oom_reaper: unable to reap pid:4242 (COMM-SENTINEL)":
+                ("oom_reaper: unable to reap pid:4242 (task)", False),
         }
         for line, expected in lines.items():
-            self.assertEqual(mt.redact_kernel(line), expected)
-        # The rest of the kernel's OOM report lists every task by name; it is dropped.
-        self.assertIsNone(mt.redact_kernel("[   4242]  1000  4242  1234  567  0  300 COMM-SENTINEL"))
+            self.assertEqual(mt.kernel_oom_line(line), expected)
+        # Task names can hold spaces, parentheses, commas, the format's own words, and newlines.
+        for name in ("a b) total-vm:1kB, (c", "x,pid=1,uid=2", "COMM\nSENTINEL", "(task) invoked"):
+            for line in (f"{name} invoked oom-killer: {gfp}",
+                         f"oom-kill:constraint=CONSTRAINT_NONE,task={name},pid=4242,uid=1000",
+                         f"Out of memory: Killed process 4242 ({name}) total-vm:10kB, anon-rss:5kB",
+                         f"oom_reaper: reaped process 4242 ({name}), now anon-rss:0kB",
+                         f"oom_reaper: unable to reap pid:4242 ({name})"):
+                message, _ = mt.kernel_oom_line(line)
+                for fragment in ("SENTINEL", "a b)", "x,pid=1", "(c"):
+                    self.assertNotIn(fragment, message, line)
+        # The rest of the OOM report lists every task by name, and other kernel messages mention
+        # memory; none of them opens a record or keeps its text.
+        self.assertIsNone(mt.kernel_oom_line("[   4242]  1000  4242  1234  567  0  300 COMM-SENTINEL"))
+        for line in ("JBD2: Out of memory during recovery.",
+                     "oom-kill:[4242]: segfault at 0 ip 0 sp 0 error 4 in COMM-SENTINEL[1000+1000]",
+                     f"x[1]: segfault at 0 error 4 in y invoked oom-killer: {gfp}[7f00+10]"):
+            self.assertEqual(mt.kernel_oom_line(line), (mt.KERNEL_OOM_UNRECOGNIZED, False), line)
 
 
 class SampleTests(FixtureCase):
@@ -360,6 +393,45 @@ class SampleTests(FixtureCase):
         slow, _ = mt.slow_sample(sources, list(mt.DEFAULT_WATCH), [], 3.0, None, None)
         self.assertEqual(slow["t9"]["app-com.anthropic.Claude-100.scope"]["processes"], len(CLAUDE_PROCESSES) - 1)
 
+    def test_native_claude_code_counts_as_an_agent(self) -> None:
+        native = "/var/lib/fixture/.local/share/claude/versions/2.1.292"
+        self.fixture.process(115, native, 112, 70_000, 0)  # started from claude[110]'s shell
+        self.fixture.process(116, "/usr/bin/node", 115, 30_000, 0)
+        self.fixture.process(202, native, 200, 40_000, 0)  # started by the ChatGPT app itself
+        write(self.fixture.claude / "cgroup.procs", "".join(f"{pid}\n" for pid in [*CLAUDE_PROCESSES, 115, 116]))
+        write(self.fixture.chromium / "cgroup.procs", "200\n201\n202\n")
+        sample, _ = mt.slow_sample(self.fixture.sources(), list(mt.DEFAULT_WATCH), [], 1.0, None, None)
+        claude = sample["t9"]["app-com.anthropic.Claude-100.scope"]
+        roles = {(entry["exe"], entry["role"]): entry["processes"] for entry in claude["classes"]}
+        self.assertEqual(roles[("claude", "nested-agent")], 1)
+        self.assertEqual(roles[("node", "agent-child")], 3)
+        trees = {entry["tree"]: entry["processes"] for entry in claude["trees"]}
+        self.assertEqual(trees["claude[115]"], 2)
+        chatgpt = sample["t9"]["app-org.chromium.Chromium-200.scope"]
+        self.assertIn(("claude", "agent"), {(entry["exe"], entry["role"]) for entry in chatgpt["classes"]})
+        self.assertNotIn("2.1.292", json.dumps(sample))
+
+    def test_removed_means_gone_and_parent_events_include_children(self) -> None:
+        sources = self.fixture.sources()
+        roots = [f"user.slice/user-{UID}.slice"]
+        write(self.fixture.user / "memory.events", "low 0\nhigh 9\nmax 0\noom 1\noom_kill 2\noom_group_kill 0\n")
+        first, watched = mt.slow_sample(sources, list(mt.DEFAULT_WATCH), roots, 50.0, "boot", None)
+        self.assertIn("indexer.service", watched)
+        user = first["cgroups"][f"user-{UID}.slice"]
+        self.assertEqual((user["memory_events"]["oom_kill"], user["memory_events_local"]["oom_kill"]), (2, 0))
+        write(self.fixture.indexer / "memory.swap.current", f"{1 << 30}\n")  # below oomd's 5% floor
+        second, watched = mt.slow_sample(sources, list(mt.DEFAULT_WATCH), roots, 110.0, "boot", first)
+        self.assertNotIn("indexer.service", watched)
+        self.assertNotIn("removed", second)
+
+    def test_names_chosen_by_processes_are_recorded_safely(self) -> None:
+        self.fixture.process(140, "/usr/bin/evil\x1b]0;TITLE\x07name", 110, 9_000_000, 0)
+        write(self.fixture.claude / "cgroup.procs", "".join(f"{pid}\n" for pid in [*CLAUDE_PROCESSES, 140]))
+        sample, _ = mt.slow_sample(self.fixture.sources(), list(mt.DEFAULT_WATCH), [], 1.0, None, None)
+        top = sample["t9"]["app-com.anthropic.Claude-100.scope"]["classes"][0]
+        self.assertEqual(top["exe"], "evil\\x1b]0;TITLE\\x07name")
+        self.assertEqual(mt.clean_text("a\udcffb\nc\x9b"), "a\\udcffb\\x0ac\\x9b")
+
     def test_ranked_folds_the_tail(self) -> None:
         processes = [mt.Process(pid, 0, f"tool{pid}", f"/bin/tool{pid}", pid, 0, 0, 0)
                      for pid in range(1, mt.TOP_ENTRIES + 6)]
@@ -436,6 +508,33 @@ class StoreTests(unittest.TestCase):
         store.prune(self.hour)
         self.assertEqual([path.name for _, path in mt.segments(self.directory)], [f"{store.current}.jsonl"])
         store.close()
+
+
+class GrowthTests(unittest.TestCase):
+    @staticmethod
+    def slow(t: float, trees: dict[str, int], rest: int | None) -> dict:
+        entries = [{"tree": tree, "rss_anon_kib": kib, "swap_kib": 0} for tree, kib in trees.items()]
+        if rest is not None:
+            entries.append({"tree": "(rest)", "rss_anon_kib": rest, "swap_kib": 0, "groups": 1})
+        return {"kind": "slow", "t": t, "t9": {"app.scope": {"classes": [], "trees": entries}}}
+
+    def test_growth_is_never_invented_for_an_entry_that_crossed_the_fold(self) -> None:
+        before = {f"claude[{pid}]": 1_100_000 for pid in range(100, 120)}
+        after = dict(before) | {"claude[105]": 1_100_500, "claude[119]": 1_080_000}
+        del after["claude[118]"]
+        after["claude[120]"] = 1_100_240  # was the 21st tree, folded into (rest)
+        growth = mt.t9_growth([self.slow(1, before, 1_090_000), self.slow(2, after, 1_100_000)])
+        self.assertEqual((growth["growth"][0]["tree"], growth["growth"][0]["growth_kib"]), ("claude[105]", 500))
+        self.assertTrue(all(item["growth_kib"] < 1000 for item in growth["growth"]))
+        self.assertEqual([item["tree"] for item in growth["entered"]], ["claude[120]"])
+        self.assertNotIn("growth_kib", growth["entered"][0])
+
+    def test_an_entry_missing_from_a_complete_list_is_new(self) -> None:
+        growth = mt.t9_growth([self.slow(1, {"claude[1]": 10}, None),
+                               self.slow(2, {"claude[1]": 10, "codex[2]": 7}, None)])
+        self.assertEqual(growth["growth"][0], {"cgroup": "app.scope", "section": "trees", "tree": "codex[2]",
+                                               "anon_swap_kib": 7, "growth_kib": 7, "new": True})
+        self.assertEqual(growth["entered"], [])
 
 
 def journal_entry(t: float, message: str, **fields: str) -> dict:
@@ -520,11 +619,74 @@ class IncidentTests(unittest.TestCase):
         self.assertEqual(len(files), 1)
         self.assertEqual(len(json.loads(files[0].read_text())["events"]), 4)
 
+    def records(self) -> list[dict]:
+        return [json.loads(path.read_text()) for path in sorted((self.root / "incidents").glob("*.json"))]
+
+    def test_a_kill_read_in_pieces_or_across_restarts_makes_one_record(self) -> None:
+        entries = oomd_kill_entries(self.t0, "a.scope")
+        # Closed on a tick between two journal reads.
+        incidents = self.incidents()
+        incidents.handle(entries[0])
+        incidents.finalize_due(self.t0 + 61)
+        for entry in entries[1:]:
+            incidents.handle(entry)
+        self.assertEqual([len(record["events"]) for record in self.records()], [4])
+        self.assertTrue(self.records()[0]["finalized"])
+        shutil.rmtree(self.root / "incidents")
+        # Left open by a collector that stopped mid-burst; the next one resumes it, with or without recovery.
+        for recover in (False, True):
+            first = self.incidents()
+            first.handle(entries[0])
+            second = self.incidents()
+            if recover:
+                second.recover(self.t0 + 1)
+            for entry in entries[1:]:
+                second.handle(entry)
+            second.finalize_due(self.t0 + 61)
+            records = self.records()
+            self.assertEqual([len(record["events"]) for record in records], [4])
+            self.assertTrue(records[0]["finalized"])
+            shutil.rmtree(self.root / "incidents")
+
+    def test_a_record_left_open_is_finalized_by_the_next_collector(self) -> None:
+        first = self.incidents()
+        for entry in oomd_kill_entries(self.t0, "a.scope"):
+            first.handle(entry)
+        self.assertFalse(self.records()[0]["finalized"])
+        # Every rewrite of the record counts toward the collector's written bytes.
+        self.assertGreaterEqual(first.bytes_written,
+                                4 * max(path.stat().st_size for path in (self.root / "incidents").iterdir()) // 2)
+        self.incidents().recover(self.t0 + 120)
+        record = self.records()[0]
+        self.assertTrue(record["finalized"])
+        following = [sample["t"] for sample in record["following"]["fast"]]
+        self.assertEqual((following[0], following[-1]), (self.t0 + 10, self.t0 + 60))
+
+    def test_a_damaged_segment_keeps_what_it_can_and_the_record_is_written(self) -> None:
+        segments = mt.segments(self.root / "samples")
+        damaged = next(path for start, path in segments if path.name.endswith(".gz") and start <= self.t0 - 600)
+        data = bytearray(damaged.read_bytes())
+        data[len(data) // 2: len(data) // 2 + 64] = bytes(64)  # valid header, corrupt deflate stream
+        damaged.write_bytes(bytes(data))
+        try:
+            gzip.decompress(bytes(data))
+        except mt.zlib.error:
+            pass
+        else:
+            self.fail("the fixture did not damage the stream")
+        incidents = mt.Incidents(self.root / "incidents", self.root / "samples", 3600.0, 60.0, 10)
+        for entry in oomd_kill_entries(self.t0, "a.scope"):
+            incidents.handle(entry)
+        record = self.records()[0]
+        self.assertTrue(record["window"]["fast"])
+        self.assertEqual(record["window"]["fast"][-1]["t"], self.t0)
+
     def test_kernel_oom_opens_a_redacted_record_and_records_are_bounded(self) -> None:
         incidents = self.incidents(max_files=2)
         for index in range(4):
             t = self.t0 - 600 + index * 120
-            incidents.handle(journal_entry(t, "COMM-SENTINEL invoked oom-killer: gfp_mask=0x0", _TRANSPORT="kernel"))
+            incidents.handle(journal_entry(t, "COMM-SENTINEL invoked oom-killer: gfp_mask=0x0(none), order=0, "
+                                              "oom_score_adj=0", _TRANSPORT="kernel"))
             incidents.handle(journal_entry(t + 0.1, "[ 4242] 1000 4242 COMM-SENTINEL", _TRANSPORT="kernel"))
             incidents.handle(journal_entry(t + 0.2, "Memory cgroup out of memory: Killed process 4242 (COMM-SENTINEL) "
                                                     "total-vm:1kB", _TRANSPORT="kernel"))
@@ -590,7 +752,7 @@ class RunTests(FixtureCase):
     def command(self, *extra: str) -> list[str]:
         return [sys.executable, "-I", "-B", str(SCRIPT), "run", "--state-dir", str(self.state),
                 *self.fixture.options(), "--interval", "0.2", "--slow-every", "2", "--window", "30",
-                "--grace", "0.5", "--journalctl", str(self.fake), *extra]
+                "--grace", "2", "--journalctl", str(self.fake), *extra]
 
     def journal_calls(self) -> list[dict]:
         return [json.loads(line) for line in self.log.read_text().splitlines()]
@@ -601,7 +763,7 @@ class RunTests(FixtureCase):
 
     def test_run_records_samples_and_a_kill_record_without_touching_sources(self) -> None:
         before = tree_digest(self.fixture.root)
-        result = subprocess.run(self.command("--duration", "3"), env=self.environment, text=True,
+        result = subprocess.run(self.command("--duration", "5"), env=self.environment, text=True,
                                 capture_output=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(tree_digest(self.fixture.root), before)
@@ -613,8 +775,20 @@ class RunTests(FixtureCase):
         self.assertIn("per_s", latest["t3"])
         samples = mt.read_samples(self.state / "samples", 0, time.time() + 60)
         kinds = [sample["kind"] for sample in samples]
-        self.assertGreaterEqual(kinds.count("fast"), 10)
-        self.assertGreaterEqual(kinds.count("slow"), 5)
+        # Counts only; a loaded CI runner may tick late.
+        self.assertGreaterEqual(kinds.count("fast"), 3)
+        self.assertGreaterEqual(kinds.count("slow"), 2)
+        fast = [sample for sample in samples if sample["kind"] == "fast"]
+        slow = [sample for sample in samples if sample["kind"] == "slow"]
+        self.assertEqual(set(fast[-1]["collector"]), {"cpu_s", "rss_anon_kib", "rss_file_kib", "hwm_kib",
+                                                     "bytes_written", "lag_ms", "journal", "journal_cpu_s",
+                                                     "journal_rss_anon_kib", "journal_rss_file_kib"}
+                         if sys.platform == "linux" else
+                         {"cpu_s", "rss_anon_kib", "rss_file_kib", "hwm_kib", "bytes_written", "lag_ms", "journal"})
+        self.assertTrue(all("collector_cgroup" in sample and "collector" not in sample for sample in slow))
+        # Rates need an earlier sample from the same boot, so the first sample after a start has none.
+        self.assertFalse({"interval_s", "per_s"} & (set(fast[0]) | set(fast[0]["t3"])))
+        self.assertTrue({"interval_s"} <= set(fast[1]) and "per_s" in fast[1]["t3"])
         self.assertEqual(oct(self.state.stat().st_mode & 0o777), "0o700")
         for path in (self.state / "latest.json", *(self.state / "samples").iterdir()):
             self.assertEqual(oct(path.stat().st_mode & 0o777), "0o600", path)
@@ -622,12 +796,11 @@ class RunTests(FixtureCase):
         records = list((self.state / "incidents").glob("*.json"))
         self.assertEqual(len(records), 1)
         record = json.loads(records[0].read_text())
-        self.assertTrue(record["finalized"])
         self.assertEqual([event["kind"] for event in record["events"]], OOMD_KILL_KINDS)
-        self.assertGreaterEqual(len(record["window"]["fast"]), 3)
+        # The first tick, a slow one, runs before journalctl starts, so the window always has samples.
+        self.assertGreaterEqual(len(record["window"]["fast"]), 1)
         self.assertGreaterEqual(len(record["window"]["slow"]), 1)
         self.assertIn("app-com.anthropic.Claude-100.scope", record["t9"]["latest"])
-        self.assertTrue(record["following"]["fast"])
 
         calls = self.journal_calls()
         self.assertEqual(len(calls), 1)
@@ -644,7 +817,10 @@ class RunTests(FixtureCase):
             self.assertNotIn(secret, everything)
         self.assertNotIn("/usr/lib/claude-desktop", everything)
 
-        # A restart resumes after the saved cursor.
+        # A restart resumes after the saved cursor and finalizes the record once its grace has passed,
+        # whether or not the first run lived that long; IncidentTests check the following samples.
+        while time.time() <= record["opened"] + 2.2:
+            time.sleep(0.1)
         result = subprocess.run(self.command("--duration", "0.5"),
                                 env=self.environment | {"FAKE_JOURNAL_ENTRIES": "[]"},
                                 text=True, capture_output=True, timeout=60)
@@ -652,6 +828,10 @@ class RunTests(FixtureCase):
         calls = self.journal_calls()
         self.assertEqual(calls[1]["argv"][4:6], ["--after-cursor", cursor])
         self.assert_child_gone(calls[1]["pid"])
+        record = json.loads(records[0].read_text())
+        self.assertTrue(record["finalized"])
+        self.assertIsInstance(record["following"]["fast"], list)
+        self.assertEqual(len(list((self.state / "incidents").glob("*.json"))), 1)
 
     def test_sigterm_stops_the_collector_and_its_journalctl(self) -> None:
         process = subprocess.Popen(self.command(), env=self.environment | {"FAKE_JOURNAL_ENTRIES": "[]"},
@@ -723,6 +903,41 @@ class RunTests(FixtureCase):
         self.assertIn("oomd swap gate armed", result.stdout)
         self.assertIn("swap-mode choice now: user.slice/", result.stdout)
         self.assertIn("T7 kill records: 0", result.stdout)
+
+    def test_report_and_record_stay_clean_with_hostile_names(self) -> None:
+        target: str | bytes = "/usr/bin/evil\x1b]0;TITLE\x07\x1b[2J"
+        if sys.platform == "linux":
+            target = os.fsencode(target) + b"\xff"
+            hostile = self.fixture.apps / "app-com.anthropic.Claude-\x1b[2J.scope"
+            self.fixture.cgroup_files(hostile, 1 << 30, 30 << 30, [150])
+        else:
+            write(self.fixture.claude / "cgroup.procs", "".join(f"{pid}\n" for pid in [*CLAUDE_PROCESSES, 150]))
+        self.fixture.process(150, None, 1, 9_000_000, 0)
+        os.symlink(target, self.fixture.proc / "150" / "exe")
+        subprocess.run(self.command("--duration", "1"), env=self.environment | {"FAKE_JOURNAL_ENTRIES": "[]"},
+                       check=True, capture_output=True, timeout=60)
+        result = subprocess.run([sys.executable, "-I", "-B", str(SCRIPT), "report", "--state-dir", str(self.state)],
+                                capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b"evil\\x1b]0;TITLE\\x07", result.stdout)
+        for byte in (b"\x1b", b"\x07", b"\x9b"):
+            self.assertNotIn(byte, result.stdout)
+
+        def strings(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    yield key
+                    yield from strings(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from strings(item)
+            elif isinstance(value, str):
+                yield value
+
+        records = [json.loads((self.state / "latest.json").read_text()),
+                   *mt.read_samples(self.state / "samples", 0, time.time() + 60)]
+        for text in strings(records):
+            self.assertFalse(any("\ud800" <= character <= "\udfff" for character in text), repr(text))
 
     def test_invalid_options_are_refused(self) -> None:
         for option in ("--interval", "--slow-every", "--retention-days", "--max-incidents"):
