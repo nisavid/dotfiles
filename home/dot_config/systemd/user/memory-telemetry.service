@@ -14,8 +14,10 @@
 # Summary:   memory-telemetry report
 #
 # chezmoi manages this unit, the default.target.wants symlink that enables it,
-# and ~/.local/bin/memory-telemetry. It does not reload, start or restart the
-# unit; after an apply that changes it, run:
+# and ~/.local/bin/memory-telemetry. It does not start or restart the unit. An
+# existing run_after script (run_after_activate-proton-pass-provider-ready)
+# reloads the user manager on every Linux apply, so the unit is then loaded and
+# starts at the next login. To start it now, or after an apply that changes it:
 #   systemctl --user daemon-reload && systemctl --user restart memory-telemetry.service
 # To turn it off for good, delete its chezmoi source files or ignore their
 # targets in home/.chezmoiignore, then delete the live files and run:

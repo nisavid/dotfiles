@@ -6,7 +6,7 @@ nisavid/dotfiles#404 defined and keeps its own bounded record in
 $XDG_STATE_HOME/memory-telemetry. It reads /proc, /sys, the systemd-oomd
 configuration and the journal, and it writes only inside that directory. It
 never kills, signals, moves or reconfigures anything except its own journalctl
-child, which it stops on exit. It raises no alarms: it records the numbers that
+children, which it stops on exit. It raises no alarms: it records the numbers that
 the threshold forms in #404 need, and the operator chooses the thresholds later.
 docs/MEMORY_TELEMETRY.md in the dotfiles repository describes the record.
 
@@ -22,6 +22,7 @@ process tree, and journal entries keep only an allowlist of fields.
 from __future__ import annotations
 
 import argparse
+import errno
 import fnmatch
 import gzip
 import json
@@ -37,6 +38,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from stat import S_ISREG
 from typing import Any
 
 SCHEMA = "memory-telemetry/v1"
@@ -89,6 +91,7 @@ KERNEL_OOM_FORMATS = (
 KERNEL_OOM_WORDS = re.compile(r"oom-kill|oom_reaper|[Oo]ut of memory")
 KERNEL_OOM_UNRECOGNIZED = "(kernel OOM line in an unrecognized format)"
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+DECIMAL = re.compile(r"[0-9]+")
 NATIVE_CLAUDE = re.compile(r"/claude/versions/[^/]+$")  # Claude Code's native installer: the basename is a version
 JOURNAL_FIELDS = (
     ("MESSAGE_ID", "message_id"),
@@ -111,6 +114,10 @@ TOP_ENTRIES = 20
 TOP_SWAP_HOLDERS = 10
 
 AGENT_EXES = frozenset({"claude", "codex"})
+# The Codex app-server runs the tools and MCP servers of all its threads as its own children, so #404
+# attributes it per child: under these agents each direct child's subtree is a T9 tree of its own. A
+# Claude Code session stays one tree.
+SPLIT_AGENT_EXES = frozenset({"codex"})
 SHELL_EXES = frozenset({"bash", "dash", "fish", "sh", "zsh"})
 SWAP_COUNTERS = (
     "pswpin", "pswpout", "zswpin", "zswpout", "zswpwb", "workingset_refault_anon", "pgmajfault", "oom_kill",
@@ -213,12 +220,15 @@ def parse_psi(text: str | None) -> Record | None:
 
 
 def parse_status(text: str | None, fields: frozenset[str]) -> dict[str, int]:
+    # The Name: line holds the task name, which any process sets, and the kernel escapes only "\n" and "\\"
+    # in it. Splitting on "\n" alone and taking only ASCII decimals keeps another line break or digit in a
+    # name from passing for a field.
     values: dict[str, int] = {}
-    for line in (text or "").splitlines():
+    for line in (text or "").split("\n"):
         key, _, rest = line.partition(":")
         if key in fields:
             parts = rest.split()
-            if parts and parts[0].isdigit():
+            if parts and DECIMAL.fullmatch(parts[0]):
                 values[key] = int(parts[0])
     return values
 
@@ -236,13 +246,26 @@ def parse_fraction(value: str) -> float | None:
 
 
 def oomd_swap_used_limit(config: Path) -> tuple[float, str, dict[str, str]]:
-    """Return oomd's SwapUsedLimit, the file that set it, and the files that could not be read.
+    """Return oomd's SwapUsedLimit, the file that set it, and the paths that could not be read.
 
-    The files are read like systemd reads oomd.conf and its drop-ins."""
+    The files are read like systemd reads oomd.conf and its drop-ins. A path that cannot be looked up or
+    listed for any reason but its absence is named in the errors and never raised. Path.is_file raises
+    some of these errors on Python 3.12 and hides them on 3.14, so this uses os.stat and os.listdir."""
+    errors: dict[str, str] = {}
+
+    def failed(path: Path, error: OSError) -> None:
+        if error.errno not in (errno.ENOENT, errno.ENOTDIR):
+            errors[f"config:{path.relative_to(config)}"] = type(error).__name__
+
     files: list[Path] = []
     for directory in OOMD_CONFIG_DIRS:
         main = config / directory / "oomd.conf"
-        if main.is_file():
+        try:
+            regular = S_ISREG(os.stat(main).st_mode)
+        except OSError as error:
+            failed(main, error)
+            continue
+        if regular:
             files.append(main)
             break
     dropins: dict[str, Path] = {}
@@ -250,14 +273,14 @@ def oomd_swap_used_limit(config: Path) -> tuple[float, str, dict[str, str]]:
         folder = config / directory / "oomd.conf.d"
         try:
             names = os.listdir(folder)
-        except OSError:
+        except OSError as error:
+            failed(folder, error)
             continue
         for name in names:
             if name.endswith(".conf"):
                 dropins[name] = folder / name
     files.extend(dropins[name] for name in sorted(dropins))
     limit, source = OOMD_DEFAULT_SWAP_USED_LIMIT, "default"
-    errors: dict[str, str] = {}
     for path in files:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
@@ -310,11 +333,15 @@ def available_ram(meminfo: dict[str, int], limit: float) -> Record | None:
 
 
 def pressure(sources: Sources, watched: dict[str, Path]) -> Record:
-    """T2: system memory and io PSI, and memory PSI of the user slice, app.slice and watched cgroups."""
+    """T2: system memory and io PSI, and memory PSI of the user slice, app.slice, builds.slice and watched cgroups.
+
+    builds.slice holds the #366 build jobs, so its PSI is the job PSI that #404's T6 form pairs with event
+    rates. It is optional, like the slice."""
     cgroups: Record = {}
     for name, path, required in (
         (sources.user_slice.name, sources.user_slice, True),
         ("app.slice", sources.manager / "app.slice", True),
+        ("builds.slice", sources.manager / "builds.slice", False),
         *((name, path, False) for name, path in watched.items()),
     ):
         psi = parse_psi(sources.text(path / "memory.pressure", required=required))
@@ -588,12 +615,14 @@ def cgroup_processes(sources: Sources, path: Path) -> list[Process] | None:
         if status is None:
             continue  # exited since the listing
         values = parse_status(status, PROCESS_FIELDS)
+        if "PPid" not in values:
+            continue  # a status that does not parse cannot place the process in a tree
         try:
             target = os.readlink(sources.proc / str(pid) / "exe")
         except OSError:
             target = ""
         processes.append(Process(
-            pid, values.get("PPid", 0), exe_name(target), target,
+            pid, values["PPid"], exe_name(target), target,
             values.get("RssAnon", 0), values.get("RssFile", 0), values.get("RssShmem", 0), values.get("VmSwap", 0),
         ))
     return processes
@@ -630,7 +659,9 @@ def attribute(processes: list[Process]) -> Record:
     nested-agent (an agent under another agent), agent-shell and agent-child (an
     agent's other descendants), app-child (the app's other descendants), and
     detached (other roots, such as orphans reparented to the user manager). Each
-    process belongs to the tree of its nearest agent.
+    process belongs to the tree of its nearest agent, named like claude[41872];
+    under a codex agent, each direct child's subtree is a tree of its own, named
+    like codex[3301]/node[3410].
     """
     by_pid = {process.pid: process for process in processes}
     children: dict[int, list[int]] = defaultdict(list)
@@ -659,32 +690,33 @@ def attribute(processes: list[Process]) -> Record:
     trees: dict[str, list[int]] = defaultdict(lambda: [0] * 5)
     totals = [0] * 5
     visited: set[int] = set()
-    stack: list[tuple[int, int | None, bool]] = [(root, None, root == main) for root in roots]
+    stack: list[tuple[int, int | None, bool, str]] = [(root, None, root == main, "(no agent)") for root in roots]
     # Processes in a parent cycle, possible only through PID reuse races, count as detached.
-    stack.extend((pid, None, False) for pid in by_pid if pid not in counted)
+    stack.extend((pid, None, False, "(no agent)") for pid in by_pid if pid not in counted)
     while stack:
-        pid, agent, in_main = stack.pop()
+        pid, agent, in_main, tree = stack.pop()
         if pid in visited:
             continue
         visited.add(pid)
         process = by_pid[pid]
         if process.exe in AGENT_EXES and process.path != app_path:
             role = "nested-agent" if agent is not None else "agent"
-            agent = pid
+            agent, tree = pid, f"{process.exe}[{pid}]"
         elif agent is not None:
             role = "agent-shell" if process.exe in SHELL_EXES else "agent-child"
+            if process.ppid == agent and by_pid[agent].exe in SPLIT_AGENT_EXES:
+                tree = f"{tree}/{process.exe}[{pid}]"
         elif not in_main:
             role = "detached"
         elif process.path == app_path:
             role = "app"
         else:
             role = "app-child"
-        tree = f"{by_pid[agent].exe}[{agent}]" if agent is not None else "(no agent)"
         values = (1, process.rss_anon, process.swap, process.rss_file, process.rss_shmem)
         for bucket in (classes[(process.exe, role)], trees[tree], totals):
             for index, value in enumerate(values):
                 bucket[index] += value
-        stack.extend((child, agent, in_main) for child in children[pid])
+        stack.extend((child, agent, in_main, tree) for child in children[pid])
     return {
         "processes": len(processes),
         "app_exe": app_exe,
@@ -696,8 +728,11 @@ def attribute(processes: list[Process]) -> Record:
 
 
 def slow_sample(
-    sources: Sources, patterns: list[str], roots: list[str], now: float, boot: str | None, previous: Record | None
-) -> tuple[Record, dict[str, Path]]:
+    sources: Sources, patterns: list[str], roots: list[str], now: float, boot: str | None, previous: Record | None,
+    previous_paths: dict[str, Path] | None = None,
+) -> tuple[Record, dict[str, Path], dict[str, Path]]:
+    """Return a slow sample, the watched cgroups it sampled (for the fast samples' PSI), and the path of each
+    cgroup it sampled, which the next call takes as previous_paths."""
     sources.unavailable = {}
     meminfo = parse_meminfo(sources.text(sources.proc / "meminfo", required=True))
     view, candidates = oomd_view(sources, roots, meminfo.get("SwapTotal", 0) * 1024)
@@ -708,10 +743,12 @@ def slow_sample(
         "builds.slice": sources.manager / "builds.slice",
     }
     cgroups: Record = {}
+    sampled: dict[str, Path] = {}
     for name, path in {**fixed, **watched}.items():
         block = cgroup_block(sources, path)
         if block is not None:
             cgroups[name] = block
+            sampled[name] = path
     t9: Record = {}
     for name, path in watched.items():
         processes = cgroup_processes(sources, path)
@@ -722,26 +759,33 @@ def slow_sample(
     sample: Record = {"schema": SCHEMA, "kind": "slow", "t": round(now, 3), "boot": boot,
                       "swap_holders": view, "cgroups": cgroups, "t9": t9}
     if previous is not None:
+        # A recorded name or path is escaped and may name no real directory, so removal is decided on the
+        # real path the previous call sampled. Callers without one fall back to the recorded path.
+        # os.path.exists never raises; Path.exists raises ENAMETOOLONG and EACCES on Python 3.12.
+        paths = previous_paths or {}
         removed = {
             name: {key: block.get(key) for key in ("path", "memory_events_local", "memory_swap_events", "pids")}
             | {"last_seen": previous["t"]}
             for name, block in (previous.get("cgroups") or {}).items()
-            if name not in cgroups and not (sources.cgroup / str(block.get("path"))).exists()
+            if name not in cgroups and not os.path.exists(paths.get(name) or sources.cgroup / str(block.get("path")))
         }
         if removed:
             sample["removed"] = removed
     if sources.unavailable:
         sample["unavailable"] = dict(sorted(sources.unavailable.items()))
-    return sample, {name: path for name, path in watched.items() if name in cgroups}
+    return sample, {name: path for name, path in watched.items() if name in cgroups}, sampled
 
 
 def t9_growth(slow: list[Record]) -> Record:
     """T9 top contributors: the latest attribution and the largest growth across the given samples.
 
-    Growth is computed only where the earlier size is known. An entry missing from an
-    earlier list that folded its tail into "(rest)" may have been there, so it goes
-    into `entered` with its current size instead of a made-up delta. An entry missing
-    from a complete earlier list is new, and all of it is growth."""
+    Each entry of the latest sample is measured from the earliest earlier sample that
+    knows its size: one that lists it, or one whose list for its cgroup is complete
+    (no "(rest)"), where it had nothing. A sample that lacks the cgroup (not yet
+    watched, or its processes unreadable) or folded the entry into "(rest)" does not
+    know its size. Each growth item carries `since`, that sample's time, and `new`,
+    true when the entry had nothing then. An entry whose size only the latest sample
+    knows goes into `entered` with its current size and no growth figure."""
     samples = [sample for sample in slow if isinstance(sample.get("t9"), dict)]
     if not samples:
         return {"from": None, "to": None, "latest": None, "growth": [], "entered": []}
@@ -749,14 +793,16 @@ def t9_growth(slow: list[Record]) -> Record:
     growth: list[Record] = []
     entered: list[Record] = []
     for cgroup, data in last["t9"].items():
-        before = first["t9"].get(cgroup)
         for section, fields in (("classes", ("exe", "role")), ("trees", ("tree",))):
-            earlier = (before or {}).get(section, [])
-            old = {
-                tuple(entry.get(field) for field in fields): entry["rss_anon_kib"] + entry["swap_kib"]
-                for entry in earlier
-            }
-            folded = any("(rest)" in key for key in old)
+            earlier: list[tuple[float, dict[tuple[Any, ...], int], bool]] = []
+            for sample in samples[:-1]:
+                block = sample["t9"].get(cgroup)
+                if isinstance(block, dict):
+                    sizes = {
+                        tuple(entry.get(field) for field in fields): entry["rss_anon_kib"] + entry["swap_kib"]
+                        for entry in block.get(section, [])
+                    }
+                    earlier.append((sample["t"], sizes, not any("(rest)" in key for key in sizes)))
             for entry in data.get(section, []):
                 key = tuple(entry.get(field) for field in fields)
                 if "(rest)" in key:
@@ -764,12 +810,13 @@ def t9_growth(slow: list[Record]) -> Record:
                 weight = entry["rss_anon_kib"] + entry["swap_kib"]
                 item = {"cgroup": cgroup, "section": section, **{field: entry.get(field) for field in fields},
                         "anon_swap_kib": weight}
-                if key in old:
-                    growth.append(item | {"growth_kib": weight - old[key], "new": False})
-                elif before is not None and folded:
-                    entered.append(item)
+                for since, sizes, complete in earlier:
+                    if key in sizes or complete:
+                        growth.append(item | {"growth_kib": weight - sizes.get(key, 0), "since": since,
+                                              "new": key not in sizes})
+                        break
                 else:
-                    growth.append(item | {"growth_kib": weight, "new": True})
+                    entered.append(item)
     growth.sort(key=lambda item: -item["growth_kib"])
     entered.sort(key=lambda item: -item["anon_swap_kib"])
     return {"from": first["t"], "to": last["t"], "latest": last["t9"], "growth": growth[:TOP_ENTRIES],
@@ -1111,7 +1158,12 @@ class Incidents:
 
 
 class Journal:
-    """A `journalctl --follow` child that delivers kill-record candidates as JSON."""
+    """journalctl children that deliver kill-record candidates as JSON.
+
+    With a saved position, a catch-up child first reads every entry after it without
+    --follow, which covers every boot on every systemd version (with --follow, systemd
+    262 shows only the current boot), and a --follow child then continues after the
+    newest entry read. Without a saved position it follows from the journal's end."""
 
     def __init__(self, command: str, cursor_path: Path) -> None:
         self.command = command
@@ -1128,15 +1180,20 @@ class Journal:
         self.buffer = b""
         self.state = "starting"
         self.started = 0.0
-        self.started_with_cursor = False
+        self.catching_up = False
+        self.caught_up = False
         self.received = False
         self.restart_at = 0.0
 
     def start(self) -> None:
+        # A line cut short when the previous child died would otherwise swallow this child's first entry.
+        self.buffer = b""
+        self.catching_up = self.cursor is not None and not self.caught_up
         position = ["--after-cursor", self.cursor] if self.cursor else ["--lines=0"]
+        follow = [] if self.catching_up else ["--follow"]
         try:
             self.process = subprocess.Popen(
-                [self.command, "--follow", "--output=json", "--no-pager", "--quiet", *position, *JOURNAL_MATCHES],
+                [self.command, *follow, "--output=json", "--no-pager", "--quiet", *position, *JOURNAL_MATCHES],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             )
         except OSError as error:
@@ -1146,9 +1203,8 @@ class Journal:
         assert self.process.stdout is not None
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
         self.started = time.monotonic()
-        self.started_with_cursor = self.cursor is not None
         self.received = False
-        self.state = "following"
+        self.state = "catching up" if self.catching_up else "following"
 
     def poll(self, timeout: float) -> list[Record]:
         if self.process is None:
@@ -1185,19 +1241,35 @@ class Journal:
         assert self.process is not None and self.process.stdout is not None
         self.selector.unregister(self.process.stdout)
         self.process.stdout.close()
-        status = self.end_child()
-        # journalctl rejects a malformed cursor by exiting at once without output; start again from the
-        # end. A well-formed cursor older than the journal's retention replays from the oldest entry.
-        if self.started_with_cursor and not self.received and time.monotonic() - self.started < 10:
-            self.cursor = None
+        status = self.end_child(exiting=True)
+        self.buffer = b""
+        if self.catching_up:
+            if status == 0:  # read everything after the saved position; follow from here at once
+                self.caught_up = True
+                self.restart_at = time.monotonic()
+                return
+            # journalctl rejects a malformed cursor by exiting at once with an error and no output; start
+            # again from the end. A well-formed cursor older than the journal's retention replays from the
+            # oldest entry.
+            if not self.received and time.monotonic() - self.started < 10:
+                self.cursor = None
+        self.caught_up = False  # the next start catches up from the cursor again
         self.state = f"exited: {status}"
         self.restart_at = time.monotonic() + JOURNAL_RESTART_DELAY
 
-    def end_child(self) -> int | None:
-        """Stop and reap this collector's own journalctl child; no other process is touched."""
+    def end_child(self, exiting: bool = False) -> int | None:
+        """Stop and reap this collector's own journalctl child; no other process is touched.
+
+        A child that closed its output is exiting by itself; it gets 5 s to do so, because a catch-up
+        child's own exit status says whether it read everything."""
         process, self.process = self.process, None
         if process is None:
             return None
+        if exiting:
+            try:
+                return process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
         if process.poll() is None:
             process.terminate()
         try:
@@ -1272,6 +1344,7 @@ class Collector:
         self.limit, self.limit_source = OOMD_DEFAULT_SWAP_USED_LIMIT, "default"
         self.limit_errors: dict[str, str] = {}
         self.watched: dict[str, Path] = {}
+        self.sampled: dict[str, Path] = {}
         self.previous_fast: Record | None = None
         self.previous_slow: Record | None = None
         self.ticks = 0
@@ -1280,8 +1353,9 @@ class Collector:
         now = time.time()
         if self.ticks % self.options.slow_every == 0:
             self.limit, self.limit_source, self.limit_errors = oomd_swap_used_limit(self.sources.config)
-            slow, self.watched = slow_sample(self.sources, self.options.watch, self.options.oomd_root, now, self.boot,
-                                             self.previous_slow)
+            slow, self.watched, self.sampled = slow_sample(
+                self.sources, self.options.watch, self.options.oomd_root, now, self.boot, self.previous_slow,
+                self.sampled)
             slow["collector_cgroup"] = self.own_cgroup()
             self.store.append(slow)
             self.previous_slow = slow
@@ -1378,7 +1452,7 @@ def sample_once(options: argparse.Namespace) -> int:
     limit, source, errors = oomd_swap_used_limit(sources.config)
     boot = boot_id(sources)
     now = time.time()
-    slow, watched = slow_sample(sources, options.watch, options.oomd_root, now, boot, None)
+    slow, watched, _ = slow_sample(sources, options.watch, options.oomd_root, now, boot, None)
     fast = fast_sample(sources, limit, watched, now, boot, None)
     fast["oomd"] = {"swap_used_limit": limit, "source": source}
     add_unavailable(fast, errors)
@@ -1389,6 +1463,10 @@ def sample_once(options: argparse.Namespace) -> int:
 
 def gib(kib: float | None) -> str:
     return "?" if kib is None else f"{kib / 1048576:.1f} GiB"
+
+
+def t9_label(item: Record) -> str:
+    return item.get("tree") or f"{item.get('exe')} ({item.get('role')})"
 
 
 def report(options: argparse.Namespace) -> int:
@@ -1426,10 +1504,14 @@ def report(options: argparse.Namespace) -> int:
         choice = (slow[-1].get("swap_holders") or {}).get("swap_mode_choice")
         lines.append(f"oomd swap-mode choice now: {choice or 'none'}")
         growth = t9_growth(slow)
-        lines.append(f"T9 growth of anonymous plus swapped memory over {growth['to'] - growth['from']:.0f} s:")
+        lines.append(f"T9 growth of anonymous plus swapped memory in the last {growth['to'] - growth['from']:.0f} s:")
         for item in growth["growth"][:10]:
-            name = item.get("tree") or f"{item.get('exe')} ({item.get('role')})"
-            lines.append(f"  {item['growth_kib'] / 1024:+10.0f} MiB  {item['cgroup']}  {name}")
+            span = f"over {growth['to'] - item['since']:.0f} s" + (", new" if item["new"] else "")
+            lines.append(f"  {item['growth_kib'] / 1024:+10.0f} MiB {span}  {item['cgroup']}  {t9_label(item)}")
+        if growth["entered"]:
+            lines.append("T9 entered with an unknown earlier size:")
+            for item in growth["entered"][:10]:
+                lines.append(f"  {item['anon_swap_kib'] / 1024:10.0f} MiB now  {item['cgroup']}  {t9_label(item)}")
     incidents = sorted((state / "incidents").glob("*.json"))
     lines.append(f"T7 kill records: {len(incidents)}" + (f", latest {incidents[-1].stem}" if incidents else ""))
     print("\n".join(lines))
