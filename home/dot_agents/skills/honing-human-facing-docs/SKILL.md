@@ -9,7 +9,7 @@ description: Use when refreshing, refocusing, streamlining, polishing, or reorga
 
 Human-facing docs should help each reader decide, act, or understand without absorbing maintainer-only machinery first.
 
-**Required background:** Use `applying-diataxis` to classify human-facing material by reader, immediate need, artifact boundary, and Diataxis shape. Use `writing-clearly-and-concisely` for all prose. For durable docs that also steer agents, use `honing-agent-facing-docs` alongside this skill, treat the agent-policy surface as reference, and use `writing-skills`.
+**Required background:** Use `applying-diataxis` to classify human-facing material by reader, immediate need, artifact boundary, and Diataxis shape. Use `writing-clearly-and-concisely` for all prose. For durable docs that also steer agents, use `honing-agent-facing-docs` alongside this skill, treat the agent-policy surface as reference, and use `writing-for-agents`.
 
 ## When To Use
 
