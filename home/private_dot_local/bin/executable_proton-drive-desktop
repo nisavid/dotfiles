@@ -76,13 +76,13 @@ def paths():
     }
 
 
-def service_state():
+def service_properties(required):
     try:
         completed = subprocess.run(
             [
                 "/usr/bin/systemctl", "--user", "show",
-                "proton-drive-desktop.service", "--property=ActiveState",
-                "--property=SubState", "--property=Result",
+                "proton-drive-desktop.service",
+                *(f"--property={key}" for key in required),
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -93,7 +93,6 @@ def service_state():
         return None
     if completed.returncode != 0:
         return None
-    required = {"ActiveState", "SubState", "Result"}
     observed = {}
     for line in completed.stdout.splitlines():
         if line.count("=") != 1:
@@ -102,7 +101,20 @@ def service_state():
         if key not in required or key in observed or not value:
             return None
         observed[key] = value
-    if set(observed) != required:
+    if set(observed) != set(required):
+        return None
+    return observed
+
+
+def service_state():
+    return service_properties(("ActiveState", "SubState", "Result"))
+
+
+def recovery_service_state():
+    observed = service_properties(
+        ("ActiveState", "SubState", "Result", "MainPID")
+    )
+    if observed is None or not observed["MainPID"].isdigit():
         return None
     return observed
 
@@ -583,6 +595,85 @@ def predecessor_mount_tag(ownership, nonce):
     return f"proton-drive-desktop-{commitment}"
 
 
+def recovered_marker(phase):
+    return {
+        key: phase[key]
+        for key in ("mount", "device", "inode", "created", "nonce", "mount_tag")
+    }
+
+
+def recovery_marker_matches(phase, ownership):
+    if ownership is None:
+        return True
+    expected = recovered_marker(phase)
+    if phase["phase"] == "prepare-publish":
+        return ownership == expected or secrets.compare_digest(
+            predecessor_mount_tag(ownership, phase["nonce"]),
+            phase["mount_tag"],
+        )
+    if phase["phase"] == "cleanup-retained":
+        return all(ownership.get(key) == value for key, value in expected.items())
+    return False
+
+
+def evaluate_recovery_evidence(resolved, phase, descriptor):
+    if phase["mount"] != str(resolved["mount"]):
+        raise OperationError(
+            "phase names a different mountpoint; preserve everything"
+        )
+    if phase["phase"] == "prepare-create":
+        if descriptor is not None:
+            raise OperationError(
+                "prepare-create cannot authorize an existing leaf; "
+                "preserve everything"
+            )
+        ownership = read_marker(
+            resolved,
+            missing_ok=True,
+            error_message="marker does not match phase; preserve everything",
+            nofollow=True,
+        )
+        if ownership is not None and (
+            ownership["mount"] != phase["mount"]
+            or ownership.get("mount_tag") is None
+            or not secrets.compare_digest(
+                predecessor_mount_tag(ownership, phase["nonce"]),
+                phase["mount_tag"],
+            )
+        ):
+            raise OperationError(
+                "marker does not match phase; preserve everything"
+            )
+        return ownership, None
+    if descriptor is None:
+        raise OperationError(
+            "recorded mountpoint is missing; preserving recovery evidence"
+        )
+    information = os.fstat(descriptor)
+    if information.st_uid != os.getuid() or information.st_mode & 0o022:
+        raise OperationError("unsafe mountpoint; preserve everything")
+    if (
+        phase.get("device") != information.st_dev
+        or phase.get("inode") != information.st_ino
+    ):
+        raise OperationError("directory identity mismatch; preserve everything")
+    with os.scandir(descriptor) as entries:
+        if next(entries, None) is not None:
+            raise OperationError("mountpoint is not empty; preserve everything")
+    ownership = read_marker(
+        resolved,
+        missing_ok=True,
+        error_message="marker does not match phase; preserve everything",
+        nofollow=True,
+    )
+    if not recovery_marker_matches(phase, ownership):
+        raise OperationError("marker does not match phase; preserve everything")
+    nonce = read_directory_nonce(descriptor)
+    if nonce not in {None, phase["nonce"]}:
+        raise OperationError("directory identity mismatch; preserve everything")
+    return ownership, nonce
+
+
 def require_unmounted_target(resolved):
     if mount_state(resolved["mount"]) != "absent":
         raise OperationError("mountpoint is already mounted; preserving it")
@@ -838,65 +929,33 @@ def prepare_mountpoint(resolved):
         try:
             phase = read_phase(resolved)
             if phase is not None:
-                if phase["mount"] != str(mountpoint):
-                    raise OperationError("mountpoint identity operation is invalid")
                 if phase["phase"] == "prepare-create":
-                    if descriptor is None:
-                        remove_phase(resolved)
-                    else:
-                        raise OperationError(INTERRUPTED_CREATION)
+                    try:
+                        evaluate_recovery_evidence(resolved, phase, descriptor)
+                    except OperationError:
+                        raise OperationError(INTERRUPTED_CREATION) from None
+                    remove_phase(resolved)
                 elif phase["phase"] == "prepare-publish":
                     if descriptor is None:
                         raise OperationError(INTERRUPTED_PUBLICATION)
-                    information = os.fstat(descriptor)
-                    if (
-                        information.st_uid != os.getuid()
-                        or information.st_mode & 0o022
-                    ):
-                        raise OperationError("unsafe mountpoint")
-                    with os.scandir(descriptor) as entries:
-                        if next(entries, None) is not None:
+                    try:
+                        retained_marker, nonce = evaluate_recovery_evidence(
+                            resolved, phase, descriptor
+                        )
+                    except OperationError as error:
+                        if str(error).startswith("unsafe mountpoint"):
+                            raise OperationError("unsafe mountpoint") from None
+                        if str(error).startswith("mountpoint is not empty"):
                             raise OperationError(
                                 "mountpoint contains unexpected local contents"
-                            )
-                    if (
-                        information.st_dev != phase["device"]
-                        or information.st_ino != phase["inode"]
-                    ):
-                        raise OperationError(INTERRUPTED_PUBLICATION)
-                    recovered_marker = {
-                        "mount": phase["mount"],
-                        "device": phase["device"],
-                        "inode": phase["inode"],
-                        "created": phase["created"],
-                        "nonce": phase["nonce"],
-                        "mount_tag": phase["mount_tag"],
-                    }
-                    retained_marker = read_marker(
-                        resolved,
-                        missing_ok=True,
-                        error_message=INTERRUPTED_PUBLICATION,
-                        nofollow=True,
-                    )
-                    if (
-                        retained_marker is not None
-                        and retained_marker != recovered_marker
-                        and not secrets.compare_digest(
-                            predecessor_mount_tag(
-                                retained_marker, phase["nonce"]
-                            ),
-                            phase["mount_tag"],
-                        )
-                    ):
-                        raise OperationError(INTERRUPTED_PUBLICATION)
-                    nonce = read_directory_nonce(descriptor)
+                            ) from None
+                        raise OperationError(INTERRUPTED_PUBLICATION) from None
+                    expected_marker = recovered_marker(phase)
                     if nonce is None:
                         set_directory_nonce(descriptor, phase["nonce"])
-                    elif nonce != phase["nonce"]:
-                        raise OperationError(INTERRUPTED_PUBLICATION)
-                    if retained_marker != recovered_marker:
+                    if retained_marker != expected_marker:
                         try:
-                            write_marker(resolved, recovered_marker)
+                            write_marker(resolved, expected_marker)
                         except OSError:
                             raise OperationError(
                                 "mountpoint ownership record is unavailable"
@@ -1400,36 +1459,29 @@ def cleanup_mountpoint(resolved):
     if phase is not None:
         if phase["phase"] != "cleanup-retained":
             raise OperationError(phase_error(phase))
-        ownership = read_marker(resolved, missing_ok=True)
-        mountpoint = resolved["mount"]
-        if phase["mount"] != str(mountpoint):
-            raise OperationError("mountpoint identity operation is invalid")
-        if ownership is not None and any(
-            ownership.get(key) != phase[key]
-            for key in (
-                "mount", "device", "inode", "created", "nonce", "mount_tag",
-            )
-        ):
-            raise OperationError("mountpoint identity operation is invalid")
         with open_unmounted_mountpoint(resolved, missing_ok=True) as descriptor:
             if descriptor is None:
                 raise OperationError("mountpoint was replaced; preserving it")
-            information = os.fstat(descriptor)
-            if (
-                information.st_uid != os.getuid()
-                or information.st_mode & 0o022
-                or information.st_dev != phase["device"]
-                or information.st_ino != phase["inode"]
-            ):
-                raise OperationError(INTERRUPTED_CLEANUP)
-            with os.scandir(descriptor) as entries:
-                if next(entries, None) is not None:
-                    raise OperationError("mountpoint is not empty; preserving it")
-            nonce = read_directory_nonce(descriptor)
+            try:
+                ownership, nonce = evaluate_recovery_evidence(
+                    resolved, phase, descriptor
+                )
+            except OperationError as error:
+                message = str(error)
+                if (
+                    message.startswith("marker does not match phase")
+                    or message.startswith("phase names a different mountpoint")
+                ):
+                    raise OperationError(
+                        "mountpoint identity operation is invalid"
+                    ) from None
+                if message.startswith("mountpoint is not empty"):
+                    raise OperationError(
+                        "mountpoint is not empty; preserving it"
+                    ) from None
+                raise OperationError(INTERRUPTED_CLEANUP) from None
             if nonce == phase["nonce"]:
                 remove_directory_nonce(descriptor)
-            elif nonce is not None:
-                raise OperationError(INTERRUPTED_CLEANUP)
             require_cleanup_commit_state(resolved, phase, descriptor)
             if ownership is not None:
                 marker_path(resolved).unlink()
@@ -1673,18 +1725,54 @@ def service_post_stop(resolved):
     return 0
 
 
+def inspect_recovery(resolved):
+    service = recovery_service_state()
+    if service is None:
+        raise OperationError(
+            "service state is unknown; preserving recovery evidence"
+        )
+    if service["ActiveState"] not in {"inactive", "failed"}:
+        raise OperationError(
+            "service is not stopped; preserving recovery evidence"
+        )
+    if service["MainPID"] != "0":
+        raise OperationError(
+            "service still has a process; preserving recovery evidence"
+        )
+    if mount_state(resolved["mount"]) != "absent":
+        raise OperationError(
+            "recovery target is mounted or foreign; preserving recovery evidence"
+        )
+    phase = read_phase(resolved)
+    if phase is None:
+        raise OperationError("no interrupted recovery operation found")
+    with open_unmounted_mountpoint(resolved, missing_ok=True) as descriptor:
+        evaluate_recovery_evidence(resolved, phase, descriptor)
+    print(f"recovery eligible: {phase['phase']}")
+    action = "stop" if phase["phase"] == "cleanup-retained" else "start"
+    print(f"next action: proton-drive-desktop {action}")
+    return 0
+
+
 def main(argv):
     if argv and argv[0] == "_credential":
         resolved = authoritative_paths(paths())
         launch_tag = argv[1] if len(argv) == 2 else None
         return credential(resolved, launch_tag)
     if len(argv) != 1 or argv[0] not in {
-        "start", "open", "status", "stop", "_prepare", "_mount",
+        "start", "open", "status", "stop", "inspect-recovery",
+        "_prepare", "_mount",
         "_verify-mount", "_post-stop",
     }:
-        print("usage: proton-drive-desktop {start|open|status|stop}", file=sys.stderr)
+        print(
+            "usage: proton-drive-desktop "
+            "{start|open|status|stop|inspect-recovery}",
+            file=sys.stderr,
+        )
         return 2
     resolved = authoritative_paths(paths())
+    if argv[0] == "inspect-recovery":
+        return inspect_recovery(resolved)
     if argv[0] == "status":
         message, result = public_status(resolved)
         if message == "stopped" and (

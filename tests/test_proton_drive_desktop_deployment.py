@@ -1,7 +1,9 @@
 """Render desktop bindings in a disposable home without account or service access."""
 from pathlib import Path
+import io
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -9,6 +11,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,21 +85,6 @@ class DesktopDeploymentTests(unittest.TestCase):
 
     def documented_baloo_setup(self):
         return self.documented_sh_block("# proton-drive-baloo: setup")
-
-    def documented_recovery_evidence_inspector(self):
-        guide = (ROOT / "docs/PROTON_DRIVE.md").read_text()
-        marker = "# proton-drive-recovery-evidence: inspect"
-        lines = guide.splitlines()
-        marker_index = next(
-            index for index, line in enumerate(lines) if line.strip() == marker
-        )
-        self.assertIn("<<'PY'", lines[marker_index + 1])
-        start = marker_index + 2
-        end = next(
-            index for index in range(start, len(lines))
-            if lines[index].strip() == "PY"
-        )
-        return textwrap.dedent("\n".join(lines[start:end])) + "\n"
 
     def run_wiring(self, action, environment):
         return subprocess.run(
@@ -537,125 +525,116 @@ class DesktopDeploymentTests(unittest.TestCase):
                         self.assertFalse(destination.exists() or destination.is_symlink())
 
     @unittest.skipUnless(os.uname().sysname == "Linux", "Linux xattr recovery")
-    def test_documented_recovery_inspector_covers_every_phase_branch(self):
-        inspector = self.documented_recovery_evidence_inspector()
-        identity_name = "user.proton-drive-desktop.identity"
-        unknown_name = "user.proton-drive-desktop.keep"
-        nonce = "12" * 32
-        mount_tag = "proton-drive-desktop-" + "34" * 32
+    def test_applied_command_inspects_recovery_without_mutating_evidence(self):
+        self.platform("linux")
+        applied = self.chezmoi("apply", "--force")
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        installed = self.home / ".local/bin/proton-drive-desktop"
+        support = runpy.run_path(
+            str(ROOT / "tests/test_proton_drive_desktop.py")
+        )
+        invoke = support["invoke"]
+        real_fstat = support["REAL_FSTAT"]
+        with_mode = support["with_mode"]
 
-        for phase_name, identity, marker_present, expected_code in (
-            ("prepare-create", None, False, 1),
-            ("prepare-publish", None, False, 0),
-            ("prepare-publish", nonce, True, 0),
-            ("cleanup-retained", nonce, True, 0),
-            ("cleanup-retained", None, False, 0),
-        ):
-            with self.subTest(
-                phase=phase_name,
-                identity=identity,
-                marker_present=marker_present,
-            ), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                mount = root / "files"
-                mount.mkdir(mode=0o700)
-                os.setxattr(mount, unknown_name, b"preserve-unknown")
-                information = mount.stat()
-                common = {
-                    "mount": str(mount),
-                    "created": True,
-                    "nonce": nonce,
-                    "mount_tag": mount_tag,
-                }
-                phase = {"phase": phase_name, **common}
-                if phase_name != "prepare-create":
-                    phase.update(
-                        device=information.st_dev, inode=information.st_ino
-                    )
-                phase_path = root / "mountpoint-phase.json"
-                marker_path = root / "mountpoint.json"
-                phase_path.write_text(json.dumps(phase, separators=(",", ":")))
-                if marker_present:
-                    marker_path.write_text(json.dumps({
-                        **common,
-                        "device": information.st_dev,
-                        "inode": information.st_ino,
-                    }, separators=(",", ":")))
-                if identity is not None:
-                    os.setxattr(mount, identity_name, identity.encode("ascii"))
-                phase_before = phase_path.read_bytes()
-                marker_before = (
-                    marker_path.read_bytes() if marker_path.exists() else None
-                )
-
-                result = subprocess.run(
-                    [
-                        "/usr/bin/python3", "-", str(phase_path),
-                        str(marker_path), str(mount),
-                    ],
-                    input=inspector,
-                    text=True,
-                    capture_output=True,
-                )
-
-                self.assertEqual(expected_code, result.returncode, result.stderr)
-                if phase_name == "prepare-create":
-                    self.assertIn("cannot authorize", result.stderr)
-                else:
-                    self.assertIn(
-                        f"evidence matched: {phase_name}", result.stdout
-                    )
-                self.assertEqual(phase_before, phase_path.read_bytes())
-                if marker_before is None:
-                    self.assertFalse(marker_path.exists())
-                else:
-                    self.assertEqual(marker_before, marker_path.read_bytes())
-                self.assertEqual(
-                    b"preserve-unknown", os.getxattr(mount, unknown_name)
-                )
+        def synthetic_ancestor_fstat(descriptor):
+            information = real_fstat(descriptor)
+            try:
+                path = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+            except OSError:
+                return information
+            if path == Path(tempfile.gettempdir()).resolve():
+                return with_mode(information, 0o755)
+            return information
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            mount = root / "files"
-            replacement = root / "replacement"
-            mount.mkdir(mode=0o700)
-            replacement.mkdir(mode=0o700)
+            mount = root / "data/proton-drive-desktop/files"
+            runtime = root / "run/proton-drive-desktop"
+            mount.mkdir(parents=True, mode=0o750)
+            mount.chmod(0o750)
+            runtime.mkdir(parents=True, mode=0o700)
             information = mount.stat()
+            nonce = "12" * 32
             common = {
                 "mount": str(mount), "device": information.st_dev,
                 "inode": information.st_ino, "created": True,
-                "nonce": nonce, "mount_tag": mount_tag,
+                "nonce": nonce,
+                "mount_tag": "proton-drive-desktop-" + "34" * 32,
             }
-            phase_path = root / "mountpoint-phase.json"
-            marker_path = root / "mountpoint.json"
-            phase_path.write_text(json.dumps({
+            phase = runtime / "mountpoint-phase.json"
+            marker = runtime / "mountpoint.json"
+            phase.write_text(json.dumps({
                 "phase": "cleanup-retained", **common,
             }, separators=(",", ":")))
-            marker_path.write_text(json.dumps(common, separators=(",", ":")))
-            mount.rmdir()
-            replacement.rename(mount)
-            os.setxattr(mount, unknown_name, b"preserve-replacement")
-            phase_before = phase_path.read_bytes()
-            marker_before = marker_path.read_bytes()
-
-            result = subprocess.run(
-                [
-                    "/usr/bin/python3", "-", str(phase_path),
-                    str(marker_path), str(mount),
-                ],
-                input=inspector,
-                text=True,
-                capture_output=True,
+            marker.write_text(json.dumps({
+                **common, "mount_id": "91",
+            }, separators=(",", ":")))
+            os.setxattr(
+                mount, "user.proton-drive-desktop.identity",
+                nonce.encode("ascii"),
             )
+            os.setxattr(mount, "user.keep", b"preserve-unknown")
+            (runtime / "binding.json").write_text(json.dumps({
+                "config": str(root / "config/rclone/proton-drive.conf"),
+                "mount": str(mount),
+            }, separators=(",", ":")))
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(root / "data"),
+                "XDG_RUNTIME_DIR": str(root / "run"),
+            }
+            phase_before = phase.read_bytes()
+            marker_before = marker.read_bytes()
+            mode_before = mount.stat().st_mode
+            calls = []
 
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn("directory identity mismatch", result.stderr)
-            self.assertEqual(phase_before, phase_path.read_bytes())
-            self.assertEqual(marker_before, marker_path.read_bytes())
+            def external(arguments, **kwargs):
+                calls.append(arguments)
+                return subprocess.CompletedProcess(
+                    arguments, 0,
+                    stdout=(
+                        "ActiveState=inactive\nSubState=dead\n"
+                        "Result=success\nMainPID=0\n"
+                    ),
+                )
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            with mock.patch(
+                "os.fstat", side_effect=synthetic_ancestor_fstat
+            ):
+                result = invoke(
+                    ["inspect-recovery"], environment, run=external,
+                    opened=opened, program=installed,
+                )
+
             self.assertEqual(
-                b"preserve-replacement", os.getxattr(mount, unknown_name)
+                (
+                    0,
+                    "recovery eligible: cleanup-retained\n"
+                    "next action: proton-drive-desktop stop\n",
+                    "",
+                ),
+                result,
             )
+            self.assertEqual(phase_before, phase.read_bytes())
+            self.assertEqual(marker_before, marker.read_bytes())
+            self.assertEqual(mode_before, mount.stat().st_mode)
+            self.assertEqual([], list(mount.iterdir()))
+            self.assertEqual(
+                nonce.encode("ascii"),
+                os.getxattr(mount, "user.proton-drive-desktop.identity"),
+            )
+            self.assertEqual(b"preserve-unknown", os.getxattr(mount, "user.keep"))
+            self.assertEqual(1, len(calls))
+            self.assertEqual("show", calls[0][2])
 
+    def test_documented_root_selection_normalizes_root(self):
         for action in ("setup", "remove"):
             for selected_root in ("/", "////"):
                 with self.subTest(action=action, selected_root=selected_root):

@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import re
+import resource
 import runpy
 import shutil
 import signal
@@ -28,6 +29,24 @@ REAL_FSTAT = os.fstat
 REAL_POPEN = subprocess.Popen
 RCLONE_VERSION_COMMAND = ["/usr/bin/rclone", "version"]
 RCLONE_VERSION_OUTPUT = b"rclone v1.75.1\n- os/version: synthetic\n"
+PRIVATE_BUS_SANDBOX_MESSAGES = {
+    "Failed to turn off SO_PASSRIGHTS on user lookup socket, ignoring: "
+    "Operation not permitted",
+    "Failed to enable SO_PASSCRED on handoff timestamp socket: "
+    "Operation not permitted",
+}
+PRIVATE_BUS_FD_LIMIT_WARNING = re.compile(
+    r"dbus-daemon\[[1-9][0-9]*\]: Failed to set fd limit to 65536: "
+    r"Operation not permitted"
+)
+
+
+def private_bus_diagnostics(output):
+    return [
+        line for line in output.splitlines()
+        if line not in PRIVATE_BUS_SANDBOX_MESSAGES
+        and PRIVATE_BUS_FD_LIMIT_WARNING.fullmatch(line) is None
+    ]
 
 
 def with_mode(information, mode):
@@ -386,6 +405,17 @@ class ServiceContractTests(unittest.TestCase):
                 (wants / "proton-drive-desktop.service").symlink_to(
                     unit_dir / "proton-drive-desktop.service"
                 )
+                def constrain_open_files():
+                    _, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+                    low_limit = (
+                        1024
+                        if hard_limit == resource.RLIM_INFINITY
+                        else min(hard_limit, 1024)
+                    )
+                    resource.setrlimit(
+                        resource.RLIMIT_NOFILE, (low_limit, low_limit)
+                    )
+
                 return subprocess.run(
                     [
                         bus_runner, "--", "/bin/sh", "-c",
@@ -405,23 +435,33 @@ class ServiceContractTests(unittest.TestCase):
                     },
                     text=True,
                     capture_output=True,
+                    preexec_fn=constrain_open_files,
                 )
 
         clean = verify(source_unit)
-        sandbox_messages = {
-            "Failed to turn off SO_PASSRIGHTS on user lookup socket, ignoring: "
-            "Operation not permitted",
-            "Failed to enable SO_PASSCRED on handoff timestamp socket: "
-            "Operation not permitted",
-        }
-        clean_diagnostics = [
-            line for line in (clean.stdout + clean.stderr).splitlines()
-            if line not in sandbox_messages
-        ]
-        if clean.returncode == 1 and not clean_diagnostics:
-            self.skipTest("systemd-analyze verify is blocked by sandbox socket policy")
+        clean_diagnostics = private_bus_diagnostics(clean.stdout + clean.stderr)
         self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
         self.assertEqual([], clean_diagnostics)
+
+    def test_private_bus_diagnostic_filter_is_exact(self):
+        warning = (
+            "dbus-daemon[4172]: Failed to set fd limit to 65536: "
+            "Operation not permitted"
+        )
+        self.assertEqual([], private_bus_diagnostics(warning))
+
+        for diagnostic in (
+            "dbus-daemon: Failed to set fd limit to 65536: Operation not permitted",
+            "dbus-daemon[0]: Failed to set fd limit to 65536: Operation not permitted",
+            "dbus-daemon[4172]: Failed to set fd limit to 65535: Operation not permitted",
+            "dbus-daemon[4172]: Failed to set fd limit to 65536: Permission denied",
+            warning + ": verifier failed",
+            "proton-drive-desktop.service: Failed to verify unit",
+        ):
+            with self.subTest(diagnostic=diagnostic):
+                self.assertEqual(
+                    [diagnostic], private_bus_diagnostics(diagnostic)
+                )
 
     def test_lifecycle_dependency_contract_detects_removed_target_ordering(self):
         source_unit = (
@@ -670,6 +710,208 @@ class PublicCommandTests(unittest.TestCase):
                 "os.removexattr", side_effect=xattrs.remove, create=True
             ))
 
+    @contextlib.contextmanager
+    def retained_recovery_fixture(
+        self, phase_name, marker_kind="absent", mode=0o700,
+        identity="matching",
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_parent = root / "config/rclone"
+            data_home = root / "data"
+            runtime_base = root / "run"
+            runtime = runtime_base / "proton-drive-desktop"
+            config_parent.mkdir(parents=True, mode=0o700)
+            data_home.mkdir(mode=0o700)
+            runtime.mkdir(parents=True, mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+            mount = data_home / "proton-drive-desktop/files"
+            mount.mkdir(parents=True, mode=mode)
+            mount.chmod(mode)
+            information = mount.stat()
+            nonce = "12" * 32
+            common = {
+                "mount": str(mount),
+                "device": information.st_dev,
+                "inode": information.st_ino,
+                "created": True,
+                "nonce": nonce,
+                "mount_tag": "proton-drive-desktop-" + "34" * 32,
+            }
+            marker_record = None
+            if marker_kind == "predecessor":
+                marker_record = {
+                    **common,
+                    "created": False,
+                    "nonce": "56" * 32,
+                    "mount_tag": "proton-drive-desktop-" + "78" * 32,
+                    "mount_id": "90",
+                }
+                encoded = json.dumps(
+                    marker_record, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+                commitment = hashlib.sha256(
+                    b"proton-drive-desktop predecessor\0"
+                    + nonce.encode("ascii")
+                    + b"\0"
+                    + encoded
+                ).hexdigest()
+                common["mount_tag"] = f"proton-drive-desktop-{commitment}"
+            elif marker_kind == "prepared":
+                marker_record = dict(common)
+            elif marker_kind == "verified":
+                marker_record = {**common, "mount_id": "91"}
+            elif marker_kind != "absent":
+                raise AssertionError(f"unknown marker fixture: {marker_kind}")
+            phase = runtime / "mountpoint-phase.json"
+            marker = runtime / "mountpoint.json"
+            phase.write_text(json.dumps({
+                "phase": phase_name, **common,
+            }, separators=(",", ":")))
+            if marker_record is not None:
+                marker.write_text(json.dumps(
+                    marker_record, separators=(",", ":")
+                ))
+            if identity == "matching":
+                os.setxattr(
+                    mount,
+                    "user.proton-drive-desktop.identity",
+                    nonce.encode("ascii"),
+                )
+            elif identity == "wrong":
+                os.setxattr(
+                    mount,
+                    "user.proton-drive-desktop.identity",
+                    b"9a" * 32,
+                )
+            elif identity != "absent":
+                raise AssertionError(f"unknown identity fixture: {identity}")
+            os.setxattr(mount, "user.keep", b"preserve this xattr")
+            binding = runtime / "binding.json"
+            binding.write_text(json.dumps({
+                "config": str(config), "mount": str(mount),
+            }, separators=(",", ":")))
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(data_home),
+                "XDG_RUNTIME_DIR": str(runtime_base),
+            }
+            external_calls = []
+
+            def external(arguments, **kwargs):
+                external_calls.append(arguments)
+                if arguments[0] == "/usr/bin/systemctl" and arguments[2] == "show":
+                    main_pid = (
+                        "MainPID=0\n"
+                        if "--property=MainPID" in arguments else ""
+                    )
+                    return subprocess.CompletedProcess(
+                        arguments,
+                        0,
+                        stdout=(
+                            "ActiveState=inactive\nSubState=dead\n"
+                            f"Result=success\n{main_pid}"
+                        ),
+                    )
+                return subprocess.CompletedProcess(arguments, 0)
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            yield {
+                "root": root,
+                "mount": mount,
+                "runtime": runtime,
+                "phase": phase,
+                "marker": marker,
+                "environment": environment,
+                "external": external,
+                "external_calls": external_calls,
+                "opened": opened,
+            }
+
+    @contextlib.contextmanager
+    def prepare_create_recovery_fixture(self, predecessor=True):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config_parent = root / "config/rclone"
+            data_home = root / "data"
+            runtime_base = root / "run"
+            config_parent.mkdir(parents=True, mode=0o700)
+            data_home.mkdir(mode=0o700)
+            runtime_base.mkdir(mode=0o700)
+            config = config_parent / "proton-drive.conf"
+            config.write_text("encrypted-placeholder")
+            config.chmod(0o600)
+            mount = data_home / "proton-drive-desktop/files"
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(data_home),
+                "XDG_RUNTIME_DIR": str(runtime_base),
+            }
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            if predecessor:
+                self.assertEqual(
+                    (0, "", ""),
+                    invoke(["_prepare"], environment, opened=opened),
+                )
+                mount.rmdir()
+
+            real_mkdir = os.mkdir
+
+            def interrupt_leaf_creation(path, mode=0o777, *args, **kwargs):
+                descriptor = kwargs.get("dir_fd")
+                if descriptor is not None:
+                    parent = pathlib.Path(
+                        os.readlink(f"/proc/self/fd/{descriptor}")
+                    )
+                    if parent / path == mount:
+                        raise SystemExit(95)
+                return real_mkdir(path, mode, *args, **kwargs)
+
+            with mock.patch("os.mkdir", side_effect=interrupt_leaf_creation):
+                self.assertEqual(
+                    95,
+                    invoke(["_prepare"], environment, opened=opened)[0],
+                )
+
+            runtime = runtime_base / "proton-drive-desktop"
+            phase = runtime / "mountpoint-phase.json"
+            marker = runtime / "mountpoint.json"
+            self.assertFalse(mount.exists())
+            self.assertTrue(phase.is_file())
+            self.assertEqual(predecessor, marker.is_file())
+
+            def external(arguments, **kwargs):
+                return subprocess.CompletedProcess(
+                    arguments,
+                    0,
+                    stdout=(
+                        "ActiveState=inactive\nSubState=dead\n"
+                        "Result=success\nMainPID=0\n"
+                    ),
+                )
+
+            yield {
+                "mount": mount,
+                "phase": phase,
+                "marker": marker,
+                "environment": environment,
+                "external": external,
+                "opened": opened,
+            }
+
     def assert_interrupted_publication_rejected(
         self, mount, marker, phase, environment, opened, expected_error,
         fstat=None,
@@ -701,6 +943,817 @@ class PublicCommandTests(unittest.TestCase):
         self.assertEqual(
             before, retained_publication_snapshot(mount, marker, phase)
         )
+
+    def test_inspect_recovery_accepts_admitted_prepare_publication_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            mount = root / "data/proton-drive-desktop/files"
+            runtime = root / "run/proton-drive-desktop"
+            mount.mkdir(parents=True, mode=0o755)
+            mount.chmod(0o755)
+            runtime.mkdir(parents=True, mode=0o700)
+            information = mount.stat()
+            nonce = "12" * 32
+            phase = runtime / "mountpoint-phase.json"
+            phase.write_text(json.dumps({
+                "phase": "prepare-publish",
+                "mount": str(mount),
+                "device": information.st_dev,
+                "inode": information.st_ino,
+                "created": True,
+                "nonce": nonce,
+                "mount_tag": "proton-drive-desktop-" + "34" * 32,
+            }, separators=(",", ":")))
+            os.setxattr(mount, "user.keep", b"preserve this xattr")
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(root / "data"),
+                "XDG_RUNTIME_DIR": str(root / "run"),
+            }
+            before = retained_publication_snapshot(
+                mount, runtime / "mountpoint.json", phase
+            )
+            external_calls = []
+
+            def external(arguments, **kwargs):
+                external_calls.append(arguments)
+                return subprocess.CompletedProcess(
+                    arguments,
+                    0,
+                    stdout=(
+                        "ActiveState=inactive\nSubState=dead\n"
+                        "Result=success\nMainPID=0\n"
+                    ),
+                )
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            result = invoke(
+                ["inspect-recovery"], environment,
+                run=external, opened=opened,
+            )
+
+            self.assertEqual(
+                (
+                    0,
+                    "recovery eligible: prepare-publish\n"
+                    "next action: proton-drive-desktop start\n",
+                    "",
+                ),
+                result,
+            )
+            self.assertEqual(
+                before,
+                retained_publication_snapshot(
+                    mount, runtime / "mountpoint.json", phase
+                ),
+            )
+            self.assertEqual(0o755, stat.S_IMODE(mount.stat().st_mode))
+            self.assertEqual(
+                [[
+                    "/usr/bin/systemctl", "--user", "show",
+                    "proton-drive-desktop.service", "--property=ActiveState",
+                    "--property=SubState", "--property=Result",
+                    "--property=MainPID",
+                ]],
+                external_calls,
+            )
+
+    def test_inspect_recovery_accepts_verified_cleanup_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            mount = root / "data/proton-drive-desktop/files"
+            runtime = root / "run/proton-drive-desktop"
+            mount.mkdir(parents=True, mode=0o750)
+            mount.chmod(0o750)
+            runtime.mkdir(parents=True, mode=0o700)
+            information = mount.stat()
+            nonce = "56" * 32
+            mount_tag = "proton-drive-desktop-" + "78" * 32
+            common = {
+                "mount": str(mount),
+                "device": information.st_dev,
+                "inode": information.st_ino,
+                "created": False,
+                "nonce": nonce,
+                "mount_tag": mount_tag,
+            }
+            phase = runtime / "mountpoint-phase.json"
+            marker = runtime / "mountpoint.json"
+            phase.write_text(json.dumps({
+                "phase": "cleanup-retained", **common,
+            }, separators=(",", ":")))
+            marker.write_text(json.dumps({
+                **common, "mount_id": "91",
+            }, separators=(",", ":")))
+            os.setxattr(
+                mount,
+                "user.proton-drive-desktop.identity",
+                nonce.encode("ascii"),
+            )
+            os.setxattr(mount, "user.keep", b"preserve this xattr")
+            environment = {
+                "HOME": temporary,
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_DATA_HOME": str(root / "data"),
+                "XDG_RUNTIME_DIR": str(root / "run"),
+            }
+            before = retained_publication_snapshot(mount, marker, phase)
+            external_calls = []
+
+            def external(arguments, **kwargs):
+                external_calls.append(arguments)
+                return subprocess.CompletedProcess(
+                    arguments,
+                    0,
+                    stdout=(
+                        "ActiveState=inactive\nSubState=dead\n"
+                        "Result=success\nMainPID=0\n"
+                    ),
+                )
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO("")
+                return io.open(name, *args, **kwargs)
+
+            inspected = invoke(
+                ["inspect-recovery"], environment,
+                run=external, opened=opened,
+            )
+
+            self.assertEqual(
+                (
+                    0,
+                    "recovery eligible: cleanup-retained\n"
+                    "next action: proton-drive-desktop stop\n",
+                    "",
+                ),
+                inspected,
+            )
+            self.assertEqual(
+                before, retained_publication_snapshot(mount, marker, phase)
+            )
+            self.assertEqual(0o750, stat.S_IMODE(mount.stat().st_mode))
+            self.assertEqual(1, len(external_calls))
+
+            self.assertEqual(
+                (0, "", ""),
+                invoke(["_post-stop"], environment, opened=opened),
+            )
+            self.assertFalse(marker.exists())
+            self.assertFalse(phase.exists())
+            self.assertEqual(0o750, stat.S_IMODE(mount.stat().st_mode))
+            self.assertEqual(b"preserve this xattr", os.getxattr(mount, "user.keep"))
+
+    def test_inspect_recovery_accepts_only_absent_prepare_create_leaf(self):
+        for leaf_exists in (False, True):
+            with self.subTest(leaf_exists=leaf_exists), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                config_parent = root / "config/rclone"
+                data_home = root / "data"
+                runtime = root / "run/proton-drive-desktop"
+                config_parent.mkdir(parents=True, mode=0o700)
+                data_home.mkdir(mode=0o700)
+                runtime.mkdir(parents=True, mode=0o700)
+                config = config_parent / "proton-drive.conf"
+                config.write_text("encrypted-placeholder")
+                config.chmod(0o600)
+                mount = data_home / "proton-drive-desktop/files"
+                mount.parent.mkdir(mode=0o700)
+                if leaf_exists:
+                    mount.mkdir(mode=0o755)
+                    os.setxattr(mount, "user.keep", b"preserve this xattr")
+                phase = runtime / "mountpoint-phase.json"
+                phase.write_text(json.dumps({
+                    "phase": "prepare-create",
+                    "mount": str(mount),
+                    "created": True,
+                    "nonce": "9a" * 32,
+                    "mount_tag": "proton-drive-desktop-" + "bc" * 32,
+                }, separators=(",", ":")))
+                (runtime / "binding.json").write_text(json.dumps({
+                    "config": str(config), "mount": str(mount),
+                }, separators=(",", ":")))
+                environment = {
+                    "HOME": temporary,
+                    "XDG_CONFIG_HOME": str(root / "config"),
+                    "XDG_DATA_HOME": str(data_home),
+                    "XDG_RUNTIME_DIR": str(root / "run"),
+                }
+                phase_before = phase.read_bytes()
+                leaf_before = (
+                    retained_publication_snapshot(
+                        mount, runtime / "mountpoint.json", phase
+                    )
+                    if leaf_exists else None
+                )
+
+                def external(arguments, **kwargs):
+                    return subprocess.CompletedProcess(
+                        arguments,
+                        0,
+                        stdout=(
+                            "ActiveState=inactive\nSubState=dead\n"
+                            "Result=success\nMainPID=0\n"
+                        ),
+                    )
+
+                def opened(name, *args, **kwargs):
+                    if name == "/proc/self/mountinfo":
+                        return io.StringIO("")
+                    return io.open(name, *args, **kwargs)
+
+                inspected = invoke(
+                    ["inspect-recovery"], environment,
+                    run=external, opened=opened,
+                )
+
+                if leaf_exists:
+                    self.assertEqual(
+                        (
+                            1,
+                            "",
+                            "prepare-create cannot authorize an existing leaf; "
+                            "preserve everything\n",
+                        ),
+                        inspected,
+                    )
+                    self.assertEqual(
+                        leaf_before,
+                        retained_publication_snapshot(
+                            mount, runtime / "mountpoint.json", phase
+                        ),
+                    )
+                    self.assertEqual(
+                        (
+                            1,
+                            "",
+                            "interrupted mountpoint creation requires stopped "
+                            "recovery\n",
+                        ),
+                        invoke(["_prepare"], environment, opened=opened),
+                    )
+                else:
+                    self.assertEqual(
+                        (
+                            0,
+                            "recovery eligible: prepare-create\n"
+                            "next action: proton-drive-desktop start\n",
+                            "",
+                        ),
+                        inspected,
+                    )
+                    self.assertFalse(mount.exists())
+                    self.assertEqual(phase_before, phase.read_bytes())
+                    self.assertEqual(
+                        (0, "", ""),
+                        invoke(["_prepare"], environment, opened=opened),
+                    )
+                    self.assertTrue(mount.is_dir())
+                    self.assertFalse(phase.exists())
+
+    def test_prepare_create_accepts_absence_and_committed_predecessor(self):
+        for predecessor in (False, True):
+            with self.subTest(
+                predecessor=predecessor
+            ), self.prepare_create_recovery_fixture(predecessor) as fixture:
+                phase_before = fixture["phase"].read_bytes()
+                marker_before = (
+                    fixture["marker"].read_bytes() if predecessor else None
+                )
+
+                inspected = invoke(
+                    ["inspect-recovery"], fixture["environment"],
+                    run=fixture["external"], opened=fixture["opened"],
+                )
+
+                self.assertEqual(
+                    (
+                        0,
+                        "recovery eligible: prepare-create\n"
+                        "next action: proton-drive-desktop start\n",
+                        "",
+                    ),
+                    inspected,
+                )
+                self.assertEqual(phase_before, fixture["phase"].read_bytes())
+                if predecessor:
+                    self.assertEqual(
+                        marker_before, fixture["marker"].read_bytes()
+                    )
+                else:
+                    self.assertFalse(fixture["marker"].exists())
+                self.assertFalse(fixture["mount"].exists())
+
+                self.assertEqual(
+                    (0, "", ""),
+                    invoke(
+                        ["_prepare"], fixture["environment"],
+                        opened=fixture["opened"],
+                    ),
+                )
+                self.assertTrue(fixture["mount"].is_dir())
+                self.assertTrue(fixture["marker"].is_file())
+                self.assertFalse(fixture["phase"].exists())
+
+    def test_prepare_create_rejects_invalid_markers_without_losing_evidence(self):
+        cases = (
+            "null",
+            "scalar",
+            "array",
+            "malformed",
+            "extra-field",
+            "wrong-path",
+            "wrong-tag",
+            "unrelated-valid",
+        )
+        for marker_case in cases:
+            with self.subTest(
+                marker=marker_case
+            ), self.prepare_create_recovery_fixture() as fixture:
+                if marker_case == "null":
+                    marker_bytes = b"null"
+                elif marker_case == "scalar":
+                    marker_bytes = b'"marker"'
+                elif marker_case == "array":
+                    marker_bytes = b"[]"
+                elif marker_case == "malformed":
+                    marker_bytes = b'{"mount":'
+                else:
+                    ownership = json.loads(fixture["marker"].read_bytes())
+                    if marker_case == "extra-field":
+                        ownership["version"] = 2
+                    elif marker_case == "wrong-path":
+                        ownership["mount"] += "-other"
+                    elif marker_case == "wrong-tag":
+                        ownership["mount_tag"] = (
+                            "proton-drive-desktop-" + "cd" * 32
+                        )
+                    elif marker_case == "unrelated-valid":
+                        ownership["device"] += 1
+                        ownership["inode"] += 1
+                        ownership["nonce"] = "ef" * 32
+                    else:
+                        raise AssertionError(marker_case)
+                    marker_bytes = json.dumps(
+                        ownership, separators=(",", ":")
+                    ).encode()
+                fixture["marker"].write_bytes(marker_bytes)
+                marker_before = fixture["marker"].read_bytes()
+                phase_before = fixture["phase"].read_bytes()
+
+                inspected = invoke(
+                    ["inspect-recovery"], fixture["environment"],
+                    run=fixture["external"], opened=fixture["opened"],
+                )
+
+                self.assertEqual(
+                    (
+                        1,
+                        "",
+                        "marker does not match phase; preserve everything\n",
+                    ),
+                    inspected,
+                )
+                self.assertEqual(
+                    marker_before, fixture["marker"].read_bytes()
+                )
+                self.assertTrue(fixture["phase"].is_file())
+                self.assertEqual(phase_before, fixture["phase"].read_bytes())
+                self.assertFalse(fixture["mount"].exists())
+
+                recovered = invoke(
+                    ["_prepare"], fixture["environment"],
+                    opened=fixture["opened"],
+                )
+
+                self.assertEqual(
+                    (
+                        1,
+                        "",
+                        "interrupted mountpoint creation requires stopped "
+                        "recovery\n",
+                    ),
+                    recovered,
+                )
+                self.assertEqual(
+                    marker_before, fixture["marker"].read_bytes()
+                )
+                self.assertTrue(fixture["phase"].is_file())
+                self.assertEqual(phase_before, fixture["phase"].read_bytes())
+                self.assertFalse(fixture["mount"].exists())
+
+    def test_inspection_and_recovery_share_phase_specific_marker_rules(self):
+        cases = (
+            ("prepare-publish", "absent", "absent"),
+            ("prepare-publish", "prepared", "matching"),
+            ("prepare-publish", "predecessor", "absent"),
+            ("cleanup-retained", "absent", "absent"),
+            ("cleanup-retained", "prepared", "matching"),
+            ("cleanup-retained", "verified", "matching"),
+        )
+        for phase_name, marker_kind, identity in cases:
+            with self.subTest(
+                phase=phase_name, marker=marker_kind, identity=identity
+            ), self.retained_recovery_fixture(
+                phase_name, marker_kind=marker_kind, identity=identity
+            ) as fixture:
+                before = retained_publication_snapshot(
+                    fixture["mount"], fixture["marker"], fixture["phase"]
+                )
+
+                inspected = invoke(
+                    ["inspect-recovery"], fixture["environment"],
+                    run=fixture["external"], opened=fixture["opened"],
+                )
+
+                action = "start" if phase_name == "prepare-publish" else "stop"
+                self.assertEqual(
+                    (
+                        0,
+                        f"recovery eligible: {phase_name}\n"
+                        f"next action: proton-drive-desktop {action}\n",
+                        "",
+                    ),
+                    inspected,
+                )
+                self.assertEqual(
+                    before,
+                    retained_publication_snapshot(
+                        fixture["mount"], fixture["marker"], fixture["phase"]
+                    ),
+                )
+                self.assertEqual(1, len(fixture["external_calls"]))
+
+                if phase_name == "prepare-publish":
+                    recovered = invoke(
+                        ["_prepare"], fixture["environment"],
+                        opened=fixture["opened"],
+                    )
+                    self.assertEqual((0, "", ""), recovered)
+                else:
+                    recovered = invoke(
+                        ["stop"], fixture["environment"],
+                        run=fixture["external"], opened=fixture["opened"],
+                    )
+                    self.assertEqual((0, "stopped\n", ""), recovered)
+                self.assertFalse(fixture["phase"].exists())
+                self.assertEqual(
+                    b"preserve this xattr",
+                    os.getxattr(fixture["mount"], "user.keep"),
+                )
+
+    def test_inspection_and_recovery_reject_every_present_invalid_marker(self):
+        invalid_markers = {
+            "null": b"null",
+            "scalar": b'"marker"',
+            "array": b"[]",
+            "malformed": b'{"mount":',
+            "extra-field": None,
+        }
+        for phase_name in ("prepare-publish", "cleanup-retained"):
+            for marker_case, marker_bytes in invalid_markers.items():
+                with self.subTest(
+                    phase=phase_name, marker=marker_case
+                ), self.retained_recovery_fixture(
+                    phase_name, identity="matching"
+                ) as fixture:
+                    if marker_bytes is None:
+                        operation = json.loads(fixture["phase"].read_text())
+                        marker_bytes = json.dumps({
+                            key: operation[key]
+                            for key in (
+                                "mount", "device", "inode", "created",
+                                "nonce", "mount_tag",
+                            )
+                        } | {"version": 2}, separators=(",", ":")).encode()
+                    fixture["marker"].write_bytes(marker_bytes)
+                    before = retained_publication_snapshot(
+                        fixture["mount"], fixture["marker"], fixture["phase"]
+                    )
+
+                    inspected = invoke(
+                        ["inspect-recovery"], fixture["environment"],
+                        run=fixture["external"], opened=fixture["opened"],
+                    )
+
+                    self.assertEqual(
+                        (
+                            1,
+                            "",
+                            "marker does not match phase; preserve everything\n",
+                        ),
+                        inspected,
+                    )
+                    self.assertEqual(
+                        before,
+                        retained_publication_snapshot(
+                            fixture["mount"], fixture["marker"], fixture["phase"]
+                        ),
+                    )
+
+                    if phase_name == "prepare-publish":
+                        rejected = invoke(
+                            ["_prepare"], fixture["environment"],
+                            opened=fixture["opened"],
+                        )
+                        self.assertEqual(
+                            (
+                                1,
+                                "",
+                                "interrupted mountpoint identity publication "
+                                "requires stopped recovery\n",
+                            ),
+                            rejected,
+                        )
+                    else:
+                        rejected = invoke(
+                            ["stop"], fixture["environment"],
+                            run=fixture["external"], opened=fixture["opened"],
+                        )
+                        self.assertEqual(1, rejected[0])
+                    self.assertEqual(
+                        before,
+                        retained_publication_snapshot(
+                            fixture["mount"], fixture["marker"], fixture["phase"]
+                        ),
+                    )
+
+    def test_cleanup_inspection_does_not_accept_publication_predecessor(self):
+        with self.retained_recovery_fixture(
+            "cleanup-retained", marker_kind="predecessor", identity="matching"
+        ) as fixture:
+            before = retained_publication_snapshot(
+                fixture["mount"], fixture["marker"], fixture["phase"]
+            )
+
+            inspected = invoke(
+                ["inspect-recovery"], fixture["environment"],
+                run=fixture["external"], opened=fixture["opened"],
+            )
+
+            self.assertEqual(
+                (
+                    1,
+                    "",
+                    "marker does not match phase; preserve everything\n",
+                ),
+                inspected,
+            )
+            self.assertEqual(
+                before,
+                retained_publication_snapshot(
+                    fixture["mount"], fixture["marker"], fixture["phase"]
+                ),
+            )
+            stopped = invoke(
+                ["stop"], fixture["environment"],
+                run=fixture["external"], opened=fixture["opened"],
+            )
+            self.assertEqual(1, stopped[0])
+            self.assertEqual(
+                before,
+                retained_publication_snapshot(
+                    fixture["mount"], fixture["marker"], fixture["phase"]
+                ),
+            )
+
+    def test_inspection_and_prepare_share_directory_evidence_refusals(self):
+        cases = {
+            "unsafe-mode": "unsafe mountpoint; preserve everything\n",
+            "foreign-owner": "unsafe mountpoint; preserve everything\n",
+            "contents": "mountpoint is not empty; preserve everything\n",
+            "replacement": "directory identity mismatch; preserve everything\n",
+            "wrong-nonce": "directory identity mismatch; preserve everything\n",
+            "wrong-tag": "marker does not match phase; preserve everything\n",
+            "wrong-path": (
+                "phase names a different mountpoint; preserve everything\n"
+            ),
+            "wrong-device": "directory identity mismatch; preserve everything\n",
+            "wrong-inode": "directory identity mismatch; preserve everything\n",
+        }
+        for evidence, expected_error in cases.items():
+            with self.subTest(evidence=evidence), self.retained_recovery_fixture(
+                "prepare-publish", marker_kind="prepared", identity="matching"
+            ) as fixture:
+                mount = fixture["mount"]
+                fstat_patch = contextlib.nullcontext()
+                if evidence == "unsafe-mode":
+                    mount.chmod(0o770)
+                elif evidence == "foreign-owner":
+                    def foreign_owner_fstat(descriptor):
+                        information = REAL_FSTAT(descriptor)
+                        try:
+                            path = pathlib.Path(
+                                os.readlink(f"/proc/self/fd/{descriptor}")
+                            )
+                        except OSError:
+                            return information
+                        if path == pathlib.Path(tempfile.gettempdir()).resolve():
+                            return with_mode(information, 0o755)
+                        if path == mount:
+                            return with_uid(information, os.getuid() + 1)
+                        return information
+
+                    fstat_patch = mock.patch(
+                        "os.fstat", side_effect=foreign_owner_fstat
+                    )
+                elif evidence == "contents":
+                    (mount / "keep.txt").write_text("preserve this file")
+                elif evidence == "replacement":
+                    retained = mount.parent / "retained-original"
+                    mount.rename(retained)
+                    mount.mkdir(mode=0o700)
+                    os.setxattr(mount, "user.keep", b"preserve replacement")
+                elif evidence == "wrong-nonce":
+                    os.setxattr(
+                        mount,
+                        "user.proton-drive-desktop.identity",
+                        b"9a" * 32,
+                    )
+                elif evidence == "wrong-tag":
+                    ownership = json.loads(fixture["marker"].read_text())
+                    ownership["mount_tag"] = (
+                        "proton-drive-desktop-" + "ab" * 32
+                    )
+                    fixture["marker"].write_text(json.dumps(
+                        ownership, separators=(",", ":")
+                    ))
+                elif evidence in {"wrong-path", "wrong-device", "wrong-inode"}:
+                    operation = json.loads(fixture["phase"].read_text())
+                    if evidence == "wrong-path":
+                        operation["mount"] += "-other"
+                    elif evidence == "wrong-device":
+                        operation["device"] += 1
+                    else:
+                        operation["inode"] += 1
+                    fixture["phase"].write_text(json.dumps(
+                        operation, separators=(",", ":")
+                    ))
+                else:
+                    raise AssertionError(evidence)
+                before = retained_publication_snapshot(
+                    mount, fixture["marker"], fixture["phase"]
+                )
+
+                with fstat_patch:
+                    inspected = invoke(
+                        ["inspect-recovery"], fixture["environment"],
+                        run=fixture["external"], opened=fixture["opened"],
+                    )
+                    rejected = invoke(
+                        ["_prepare"], fixture["environment"],
+                        opened=fixture["opened"],
+                    )
+
+                self.assertEqual((1, "", expected_error), inspected)
+                self.assertEqual(1, rejected[0])
+                self.assertEqual(
+                    before,
+                    retained_publication_snapshot(
+                        mount, fixture["marker"], fixture["phase"]
+                    ),
+                )
+
+    def test_inspection_and_public_commands_reject_manager_and_mount_uncertainty(self):
+        manager_cases = {
+            "unavailable": subprocess.CompletedProcess([], 1, stdout=""),
+            "malformed": subprocess.CompletedProcess(
+                [], 0, stdout="ActiveState=inactive\n"
+            ),
+            "active": subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=(
+                    "ActiveState=active\nSubState=running\nResult=success\n"
+                ),
+            ),
+        }
+        for manager_state, response in manager_cases.items():
+            with self.subTest(
+                manager=manager_state
+            ), self.retained_recovery_fixture(
+                "prepare-publish", identity="absent"
+            ) as fixture:
+                calls = []
+
+                def external(arguments, **kwargs):
+                    calls.append(arguments)
+                    stdout = response.stdout
+                    if (
+                        response.returncode == 0
+                        and "--property=MainPID" in arguments
+                    ):
+                        stdout += "MainPID=0\n"
+                    return subprocess.CompletedProcess(
+                        arguments, response.returncode, stdout=stdout
+                    )
+
+                before = retained_publication_snapshot(
+                    fixture["mount"], fixture["marker"], fixture["phase"]
+                )
+                inspected = invoke(
+                    ["inspect-recovery"], fixture["environment"],
+                    run=external, opened=fixture["opened"],
+                )
+                started = invoke(
+                    ["start"], fixture["environment"],
+                    run=external, opened=fixture["opened"],
+                )
+
+                self.assertEqual(1, inspected[0])
+                self.assertEqual(1, started[0])
+                self.assertFalse(any(
+                    call[0] == "/usr/bin/systemctl" and call[2] == "start"
+                    for call in calls
+                ))
+                self.assertEqual(
+                    before,
+                    retained_publication_snapshot(
+                        fixture["mount"], fixture["marker"], fixture["phase"]
+                    ),
+                )
+
+        with self.retained_recovery_fixture(
+            "prepare-publish", identity="absent"
+        ) as fixture:
+            mount = fixture["mount"]
+            encoded_mount = str(mount).replace(" ", "\\040")
+            foreign_mount = (
+                f"71 30 0:71 / {encoded_mount} rw,nosuid,nodev - "
+                "fuse.other local: rw\n"
+            )
+
+            def opened(name, *args, **kwargs):
+                if name == "/proc/self/mountinfo":
+                    return io.StringIO(foreign_mount)
+                return io.open(name, *args, **kwargs)
+
+            before = retained_publication_snapshot(
+                mount, fixture["marker"], fixture["phase"]
+            )
+            inspected = invoke(
+                ["inspect-recovery"], fixture["environment"],
+                run=fixture["external"], opened=opened,
+            )
+            started = invoke(
+                ["start"], fixture["environment"],
+                run=fixture["external"], opened=opened,
+            )
+
+            self.assertEqual(
+                (
+                    1,
+                    "",
+                    "recovery target is mounted or foreign; preserving "
+                    "recovery evidence\n",
+                ),
+                inspected,
+            )
+            self.assertEqual((1, "", "inconsistent/foreign state\n"), started)
+            self.assertFalse(any(
+                call[0] == "/usr/bin/systemctl" and call[2] == "start"
+                for call in fixture["external_calls"]
+            ))
+            self.assertEqual(
+                before,
+                retained_publication_snapshot(
+                    mount, fixture["marker"], fixture["phase"]
+                ),
+            )
+
+    def test_inspect_recovery_rejects_a_stopped_manager_with_a_process(self):
+        with self.retained_recovery_fixture(
+            "prepare-publish", identity="absent"
+        ) as fixture:
+            def manager_with_process(arguments, **kwargs):
+                return subprocess.CompletedProcess(
+                    arguments,
+                    0,
+                    stdout=(
+                        "ActiveState=failed\nSubState=failed\n"
+                        "Result=exit-code\nMainPID=42\n"
+                    ),
+                )
+
+            inspected = invoke(
+                ["inspect-recovery"], fixture["environment"],
+                run=manager_with_process, opened=fixture["opened"],
+            )
+
+            self.assertEqual(
+                (
+                    1,
+                    "",
+                    "service still has a process; preserving recovery evidence\n",
+                ),
+                inspected,
+            )
 
     def test_prepare_accepts_only_the_fixed_scrubbed_rclone_version_command(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1657,64 +2710,78 @@ class PublicCommandTests(unittest.TestCase):
             self.assertTrue((original / "proton-drive-desktop/files").is_dir())
 
     def test_mount_anchors_config_parent_across_late_ancestor_replacement(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary)
-            config_home = root / "config"
-            config_parent = config_home / "rclone"
-            data_home = root / "data"
-            runtime = root / "run"
-            config_parent.mkdir(parents=True, mode=0o700)
-            data_home.mkdir(mode=0o700)
-            runtime.mkdir(mode=0o700)
-            config = config_parent / "proton-drive.conf"
-            config.write_text("trusted-encrypted-placeholder")
-            config.chmod(0o600)
-            environment = {
-                "HOME": temporary,
-                "XDG_CONFIG_HOME": str(config_home),
-                "XDG_DATA_HOME": str(data_home),
-                "XDG_RUNTIME_DIR": str(runtime),
-            }
+        def exercise_handoff():
+            with tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                config_home = root / "config"
+                config_parent = config_home / "rclone"
+                data_home = root / "data"
+                runtime = root / "run"
+                config_parent.mkdir(parents=True, mode=0o700)
+                data_home.mkdir(mode=0o700)
+                runtime.mkdir(mode=0o700)
+                config = config_parent / "proton-drive.conf"
+                config.write_text("trusted-encrypted-placeholder")
+                config.chmod(0o600)
+                environment = {
+                    "HOME": temporary,
+                    "XDG_CONFIG_HOME": str(config_home),
+                    "XDG_DATA_HOME": str(data_home),
+                    "XDG_RUNTIME_DIR": str(runtime),
+                }
 
-            def opened(name, *args, **kwargs):
-                if name == "/proc/self/mountinfo":
-                    return io.StringIO("")
-                return io.open(name, *args, **kwargs)
+                def opened(name, *args, **kwargs):
+                    if name == "/proc/self/mountinfo":
+                        return io.StringIO("")
+                    return io.open(name, *args, **kwargs)
 
-            self.assertEqual(
-                (0, "", ""), invoke(["_prepare"], environment, opened=opened)
-            )
-            observed = {}
+                self.assertEqual(
+                    (0, "", ""),
+                    invoke(["_prepare"], environment, opened=opened),
+                )
+                observed = {}
 
-            def replace_before_rclone_opens_config(path, arguments, exec_environment):
-                original = root / "trusted-config"
-                root.chmod(0o777)
-                config_home.rename(original)
-                replacement_parent = config_home / "rclone"
-                replacement_parent.mkdir(parents=True, mode=0o700)
-                replacement = replacement_parent / "proton-drive.conf"
-                replacement.write_text("attacker-controlled-placeholder")
-                replacement.chmod(0o600)
-                config_argument = arguments[arguments.index("--config") + 1]
-                observed["argument"] = config_argument
-                observed["contents"] = pathlib.Path(config_argument).read_text()
-                raise SystemExit(0)
+                def replace_before_rclone_opens_config(
+                    path, arguments, exec_environment
+                ):
+                    original = root / "trusted-config"
+                    root.chmod(0o777)
+                    config_home.rename(original)
+                    replacement_parent = config_home / "rclone"
+                    replacement_parent.mkdir(parents=True, mode=0o700)
+                    replacement = replacement_parent / "proton-drive.conf"
+                    replacement.write_text("attacker-controlled-placeholder")
+                    replacement.chmod(0o600)
+                    config_argument = arguments[arguments.index("--config") + 1]
+                    descriptor = int(pathlib.Path(config_argument).parts[-2])
+                    observed["argument"] = config_argument
+                    observed["inheritable"] = os.get_inheritable(descriptor)
+                    observed["contents"] = pathlib.Path(config_argument).read_text()
+                    raise SystemExit(0)
 
-            result = invoke(
-                ["_mount"],
-                environment,
-                execve=replace_before_rclone_opens_config,
-                opened=opened,
-            )
+                result = invoke(
+                    ["_mount"],
+                    environment,
+                    execve=replace_before_rclone_opens_config,
+                    opened=opened,
+                )
+                return result, observed
 
-            self.assertEqual((0, "", ""), result)
-            self.assertRegex(
-                observed["argument"],
-                r"\A/proc/self/fd/[0-9]+/proton-drive\.conf\Z",
-            )
-            self.assertEqual(
-                "trusted-encrypted-placeholder", observed["contents"]
-            )
+        result, observed = exercise_handoff()
+        self.assertEqual((0, "", ""), result)
+        self.assertRegex(
+            observed["argument"],
+            r"\A/proc/self/fd/[0-9]+/proton-drive\.conf\Z",
+        )
+        self.assertEqual(
+            "trusted-encrypted-placeholder", observed["contents"]
+        )
+        self.assertTrue(observed["inheritable"])
+
+        with mock.patch("os.set_inheritable", return_value=None):
+            mutated_result, mutated = exercise_handoff()
+        self.assertEqual((0, "", ""), mutated_result)
+        self.assertFalse(mutated["inheritable"])
 
     def test_mount_rechecks_data_home_owner_and_preserves_prepared_state(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -4508,12 +5575,6 @@ class PublicCommandTests(unittest.TestCase):
             )
 
         self.assertEqual(production_bytes, PROGRAM.read_bytes())
-        if (
-            result.returncode == 127
-            and "Failed to bind socket" in result.stderr
-            and "Operation not permitted" in result.stderr
-        ):
-            self.skipTest("private D-Bus fixture is blocked by sandbox socket policy")
         self.assertEqual(
             0, result.returncode,
             f"private bus fixture failed\nstdout:\n{result.stdout}stderr:\n{result.stderr}",

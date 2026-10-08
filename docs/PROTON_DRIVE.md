@@ -544,145 +544,44 @@ cannot be reconciled from the evidence source still has:
 
 Do not copy or guess the recorded nonce. Do not start rclone, edit either JSON
 record, remove an unfamiliar xattr, or use forced, lazy, or recursive cleanup.
-First stop the unit and require it to have no running process and no mount at
-the exact target. A failed unit is acceptable only when it has no process:
+First ask systemd to stop the unit, then inspect the retained evidence:
 
 ```sh
 systemctl --user stop proton-drive-desktop.service || :
-systemctl --user show proton-drive-desktop.service \
-  --property=ActiveState --property=MainPID
-
-runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/proton-drive-desktop"
-binding="$runtime/binding.json"
-marker="$runtime/mountpoint.json"
-phase="$runtime/mountpoint-phase.json"
-mountpoint=$(python3 - "$binding" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/proton-drive-desktop/files" <<'PY'
-import json
-import pathlib
-import sys
-
-binding = pathlib.Path(sys.argv[1])
-fallback = sys.argv[2]
-print(json.loads(binding.read_text())["mount"] if binding.exists() else fallback)
-PY
-)
-findmnt --mountpoint "$mountpoint"
+proton-drive-desktop inspect-recovery
 ```
 
-Continue only when `ActiveState` is `inactive` or `failed`, `MainPID` is `0`,
-and `findmnt` reports no mount at that exact path. If the leaf exists, run this
-read-only evidence check. It requires a user-owned, non-symlink, empty mode-
-`0700` directory. For `prepare-publish` and `cleanup-retained`, it also compares
-the current device and inode with the phase before recovery, checks any marker
-against the same phase, and accepts only an absent or matching application
-identity xattr. It prints xattr names, but not their values:
+`inspect-recovery` reads the effective XDG binding, manager state, mount table,
+phase record (`mountpoint-phase.json`), marker, directory metadata, contents,
+and application identity xattr. It does not create directories or locks,
+change records or xattrs, mount or unmount anything, start or stop a service,
+request credentials, or retrieve cloud contents. It refuses when manager state
+is unavailable, the unit is not inactive or failed with `MainPID=0`, or any
+mount remains at the target.
 
-```sh
-# proton-drive-recovery-evidence: inspect
-python3 - "$phase" "$marker" "$mountpoint" <<'PY'
-import json
-import errno
-import os
-import pathlib
-import re
-import stat
-import sys
+For an eligible operation it prints the retained phase and one next command:
 
-phase_path = pathlib.Path(sys.argv[1])
-marker_path = pathlib.Path(sys.argv[2])
-mountpoint = pathlib.Path(sys.argv[3])
-operation = json.loads(phase_path.read_text())
-if operation.get("mount") != str(mountpoint):
-    raise SystemExit("phase names a different mountpoint; preserve everything")
-information = mountpoint.lstat()
-if (
-    not stat.S_ISDIR(information.st_mode)
-    or mountpoint.is_symlink()
-    or information.st_uid != os.getuid()
-    or stat.S_IMODE(information.st_mode) != 0o700
-):
-    raise SystemExit("unsafe mountpoint; preserve everything")
-if next(mountpoint.iterdir(), None) is not None:
-    raise SystemExit("mountpoint is not empty; preserve everything")
-
-name = operation.get("phase")
-common = (
-    isinstance(operation.get("created"), bool)
-    and isinstance(operation.get("nonce"), str)
-    and re.fullmatch(r"[0-9a-f]{64}", operation["nonce"]) is not None
-    and isinstance(operation.get("mount_tag"), str)
-    and re.fullmatch(
-        r"proton-drive-desktop-[0-9a-f]{64}", operation["mount_tag"]
-    ) is not None
-)
-if name == "prepare-create":
-    if not common or set(operation) != {
-        "phase", "mount", "created", "nonce", "mount_tag",
-    }:
-        raise SystemExit("invalid prepare-create phase; preserve everything")
-    raise SystemExit(
-        "prepare-create cannot authorize an existing leaf; preserve everything"
-    )
-if (
-    name not in {"prepare-publish", "cleanup-retained"}
-    or not common
-    or type(operation.get("device")) is not int
-    or type(operation.get("inode")) is not int
-    or set(operation) != {
-        "phase", "mount", "device", "inode", "created", "nonce",
-        "mount_tag",
-    }
-):
-    raise SystemExit("invalid recovery phase; preserve everything")
-if (
-    information.st_dev != operation["device"]
-    or information.st_ino != operation["inode"]
-):
-    raise SystemExit("directory identity mismatch; preserve everything")
-
-if marker_path.exists():
-    marker = json.loads(marker_path.read_text())
-    compared = ("mount", "device", "inode", "created", "nonce", "mount_tag")
-    marker_keys = set(marker) if isinstance(marker, dict) else set()
-    if (
-        not isinstance(marker, dict)
-        or marker_keys not in (set(compared), set(compared) | {"mount_id"})
-        or any(marker.get(key) != operation[key] for key in compared)
-        or (
-            "mount_id" in marker
-            and (
-                not isinstance(marker["mount_id"], str)
-                or not marker["mount_id"].isdigit()
-            )
-        )
-    ):
-        raise SystemExit("marker does not match phase; preserve everything")
-
-identity_name = "user.proton-drive-desktop.identity"
-try:
-    identity = os.getxattr(
-        mountpoint, identity_name, follow_symlinks=False
-    ).decode("ascii")
-except OSError as error:
-    missing = {
-        number for number in (
-            getattr(errno, "ENODATA", None), getattr(errno, "ENOATTR", None),
-        ) if number is not None
-    }
-    if error.errno not in missing:
-        raise
-    identity = None
-except UnicodeDecodeError:
-    identity = ""
-if identity not in {None, operation["nonce"]}:
-    raise SystemExit("directory identity mismatch; preserve everything")
-
-print("evidence matched:", name)
-print("created:", operation["created"])
-print("xattrs:", *sorted(os.listxattr(mountpoint, follow_symlinks=False)))
-PY
+```text
+recovery eligible: prepare-publish
+next action: proton-drive-desktop start
 ```
+
+The evaluator uses the same schemas and phase-specific predicates as recovery
+inside the helper. It accepts a user-owned, non-symlink, empty directory when
+group and other write bits are clear, including modes `0755` and `0750`. For
+`prepare-create`, the marker may be absent or must be a structurally valid
+predecessor at the same mount path whose complete contents are committed by the
+phase nonce and mount tag. For
+`prepare-publish` and `cleanup-retained`, it compares the current device and
+inode with the phase before recovery. For `prepare-publish`, the marker may be
+absent, the exact planned marker, or the structurally valid predecessor
+committed by the phase's mount tag. For `cleanup-retained`, an absent marker or
+a prepared or verified marker must
+match the phase's mount, device, inode, created flag, nonce, and mount tag; a
+verified marker may retain its `mount_id`, and predecessor commitment does not
+apply. A present JSON `null`, scalar, array, malformed object, or object with
+unsupported fields is invalid rather than absent. The directory identity xattr
+may be absent or match the phase nonce.
 
 Apply only the matching branch:
 
@@ -691,18 +590,27 @@ Apply only the matching branch:
   and creates a newly identified leaf. If a leaf exists, preserve the leaf,
   phase, marker, contents, and xattrs for investigation. Do not infer ownership
   from `created=true` or remove the leaf.
-- For `prepare-publish`, require the evidence check to pass, then retry
+- For `prepare-publish`, require a successful inspection, then retry
   `proton-drive-desktop start`. Preparation accepts the unchanged recorded
   directory, restores the planned application identity when the interrupted
-  write left it absent, publishes the marker, and removes the phase. A
-  different identity, device, inode, marker, mode, or directory entry preserves
-  every record and filesystem object.
-- For `cleanup-retained`, require the evidence check to pass, then retry
+  write left it absent, publishes the marker, and removes the phase. When a
+  missing recorded leaf was recreated, the retained predecessor marker is
+  accepted only when the phase's mount tag commits to its complete contents.
+  A different identity, device, inode, unrelated or malformed marker, mode, or
+  directory entry preserves every record and filesystem object.
+- For `cleanup-retained`, require a successful inspection, then retry
   `proton-drive-desktop stop`. Cleanup accepts the unchanged recorded directory
   with the application identity either present or already removed. It removes
   only that identity and the matching private records. It retains the empty
   directory and every other xattr. This covers marker-present and phase-only
   interruptions.
+
+The result describes only the evidence observed during that invocation. It is
+not a durable authorization. Run only the printed `start` or `stop` action;
+that action independently rereads and validates the phase, marker, mountpoint,
+directory contents, and identity xattr before changing them. If inspection or
+the action refuses, preserve the phase, marker, directory, contents, modes, and
+xattrs for investigation.
 
 If the private runtime directory is gone, its phase and ownership records are
 gone too. An identity xattr without those records remains unknown and is
