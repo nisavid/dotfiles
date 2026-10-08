@@ -571,6 +571,15 @@ class SampleTests(FixtureCase):
         self.assertEqual(result["classes"][0]["exe"], f"tool{mt.TOP_ENTRIES + 5}")
 
 
+class ScheduleTests(unittest.TestCase):
+    def test_a_late_tick_skips_the_slots_it_missed_and_leaves_room_before_the_next(self) -> None:
+        due = mt.next_tick_time
+        self.assertEqual(due(100.0, 10.0, 100.002), 110.0)  # on time: the cadence holds
+        self.assertEqual(due(100.0, 10.0, 104.0), 110.0)  # a slow tick that still finishes within its slot
+        self.assertAlmostEqual(due(110.0, 10.0, 125.0), 130.0)  # a stall past two slots skips them
+        self.assertAlmostEqual(due(110.0, 10.0, 119.99), 124.99)  # even one that ends just before the next slot
+
+
 def fast_record(t: float, available: int = 30) -> dict:
     return {"schema": mt.SCHEMA, "kind": "fast", "t": t, "t1": {"mem_available_kib": available}}
 
@@ -735,6 +744,12 @@ def journal_entry(t: float, message: str, **fields: str) -> dict:
             "_COMM": "COMM-SENTINEL", **fields}
 
 
+# What journald itself records about the senders of systemd's kill messages (the underscore fields a
+# client cannot set), as seen in this host's journal: PID 1, and the user manager in its init.scope.
+SYSTEM_MANAGER = {"_PID": "1", "_UID": "0", "_SYSTEMD_UNIT": "init.scope"}
+USER_MANAGER = {"_PID": "4344", "_UID": str(UID), "_SYSTEMD_UNIT": f"user@{UID}.service",
+                "_SYSTEMD_USER_UNIT": "init.scope"}
+
 OOMD_KILL_KINDS = ["oomd-kill", "oomd", "oomd-kill", "unit-oomd-kill"]
 
 
@@ -746,7 +761,7 @@ def oomd_kill_entries(t0: float, scope: str) -> list[dict]:
         journal_entry(t0 + 0.05, f"Marked /user.slice/{scope} for killing due to memory used (1) / total (2) and "
                                  "swap used (3) / total (4) being more than 90.00%", **oomd),
         journal_entry(t0 + 1.1, f"{scope}: systemd-oomd killed some process(es) in this unit.",
-                      MESSAGE_ID=mt.MESSAGE_UNIT_OOMD_KILL, USER_UNIT=scope, _SYSTEMD_UNIT=f"user@{UID}.service"),
+                      MESSAGE_ID=mt.MESSAGE_UNIT_OOMD_KILL, USER_UNIT=scope, **USER_MANAGER),
     ]
 
 
@@ -813,6 +828,49 @@ class IncidentTests(unittest.TestCase):
 
     def records(self) -> list[dict]:
         return [json.loads(path.read_text()) for path in sorted((self.root / "incidents").glob("*.json"))]
+
+    def kill_message(self, t: float, message_id: str, **sender: str) -> dict:
+        return journal_entry(t, "x.scope: killed some process(es) in this unit.",
+                             **({"MESSAGE_ID": message_id, "USER_UNIT": "x.scope"} | sender))
+
+    def test_kill_messages_are_taken_only_from_the_system_manager_and_this_users_manager(self) -> None:
+        for sender in (SYSTEM_MANAGER, USER_MANAGER):
+            for message_id in (mt.MESSAGE_UNIT_OOMD_KILL, mt.MESSAGE_UNIT_OOM):
+                shutil.rmtree(self.root / "incidents", ignore_errors=True)
+                incidents = self.incidents()
+                incidents.handle(self.kill_message(self.t0, message_id, **sender))
+                self.assertEqual(len(self.records()), 1, (sender, message_id))
+                self.assertEqual(incidents.ignored, 0)
+
+        # MESSAGE_ID is set by the sender; only journald's own fields say who the sender was.
+        foreign = {
+            "another user's service": {"_PID": "812", "_UID": str(UID + 1), "_SYSTEMD_UNIT": "dynamic.service"},
+            "another user's manager": {"_PID": "4400", "_UID": str(UID + 1), "_SYSTEMD_UNIT": f"user@{UID + 1}.service",
+                                       "_SYSTEMD_USER_UNIT": "init.scope"},
+            "an app of this user": USER_MANAGER | {"_SYSTEMD_USER_UNIT": "app-forger.scope"},
+            "a login session of this user": {"_PID": "900", "_UID": str(UID), "_SYSTEMD_UNIT": "session-2.scope"},
+            "a process of init.scope that is not PID 1": SYSTEM_MANAGER | {"_PID": "2"},
+            "PID 1 of another user": SYSTEM_MANAGER | {"_UID": "1001"},
+            "fields chosen by the sender": {"PID": "1", "UID": "0", "SYSTEMD_UNIT": "init.scope", "UNIT": "init.scope",
+                                            "USER_UNIT": "init.scope"},
+            "no origin at all": {},
+        }
+        shutil.rmtree(self.root / "incidents")
+        incidents = self.incidents()
+        for name, sender in foreign.items():
+            for message_id in (mt.MESSAGE_UNIT_OOMD_KILL, mt.MESSAGE_UNIT_OOM):
+                incidents.handle(self.kill_message(self.t0, message_id, **sender))
+        self.assertEqual(list((self.root / "incidents").iterdir()), [])
+        self.assertEqual((incidents.ignored, incidents.bytes_written), (2 * len(foreign), 0))
+
+        # A flood of them neither joins a genuine record nor costs a write.
+        incidents.handle(self.kill_message(self.t0, mt.MESSAGE_UNIT_OOMD_KILL, **USER_MANAGER))
+        written = incidents.bytes_written
+        for index in range(2000):
+            incidents.handle(journal_entry(self.t0 + 0.5 + index / 4000, f"forged {index}",
+                                           MESSAGE_ID=mt.MESSAGE_UNIT_OOM, **foreign["another user's service"]))
+        self.assertEqual((incidents.ignored, incidents.bytes_written), (2 * len(foreign) + 2000, written))
+        self.assertEqual([len(record["events"]) for record in self.records()], [1])
 
     def test_a_kill_read_in_pieces_or_across_restarts_makes_one_record(self) -> None:
         entries = oomd_kill_entries(self.t0, "a.scope")
@@ -884,7 +942,7 @@ class IncidentTests(unittest.TestCase):
                                                     "total-vm:1kB", _TRANSPORT="kernel"))
             incidents.handle(journal_entry(
                 t + 0.3, "x.scope: A process of this unit has been killed by the OOM killer.",
-                MESSAGE_ID=mt.MESSAGE_UNIT_OOM, USER_UNIT="x.scope"))
+                MESSAGE_ID=mt.MESSAGE_UNIT_OOM, USER_UNIT="x.scope", **SYSTEM_MANAGER))
         incidents.finalize()
         files = sorted((self.root / "incidents").glob("*.json"))
         self.assertEqual(len(files), 2)
@@ -952,6 +1010,9 @@ class RunTests(FixtureCase):
         entries = [{key: value for key, value in entry.items() if not key.startswith("__")}
                    for entry in oomd_kill_entries(0, scope)]
         entries.append({"_TRANSPORT": "kernel", "MESSAGE": "[ 4242] 1000 COMM-SENTINEL ARGV-SENTINEL-7f3a"})
+        # Any process can log a message with systemd's MESSAGE_ID; the collector must not take it for systemd's.
+        entries.insert(0, {"MESSAGE_ID": mt.MESSAGE_UNIT_OOM, "MESSAGE": "FORGED-SENTINEL: killed by the OOM killer",
+                           "_UID": str(UID + 1), "_SYSTEMD_UNIT": "forger.service"})
         self.environment = os.environ | {
             "FAKE_JOURNAL_LOG": str(self.log),
             "FAKE_JOURNAL_ENTRIES": json.dumps(entries),
@@ -1016,8 +1077,9 @@ class RunTests(FixtureCase):
         def recorded() -> bool:
             kinds = [sample["kind"] for sample in mt.read_samples(self.state / "samples", 0, time.time() + 60)]
             records = self.records()
+            ignored = ((mt.load_json(self.state / "latest.json") or {}).get("collector") or {}).get("journal_ignored")
             return (self.journal_state() == "following" and kinds.count("fast") >= 3 and kinds.count("slow") >= 2
-                    and len(records) == 1 and len(records[0]["events"]) == len(OOMD_KILL_KINDS))
+                    and len(records) == 1 and len(records[0]["events"]) == len(OOMD_KILL_KINDS) and ignored == 1)
 
         self.wait_for(process, recorded, "samples and a complete kill record")
         self.stop(process)
@@ -1027,15 +1089,18 @@ class RunTests(FixtureCase):
         self.assertEqual((latest["schema"], latest["kind"]), (mt.SCHEMA, "fast"))
         self.assertEqual(latest["oomd"], {"swap_used_limit": 0.9, "source": "etc/systemd/oomd.conf"})
         self.assertEqual(latest["collector"]["journal"], "following")
+        self.assertEqual(latest["collector"]["journal_ignored"], 1)  # the forged kill message
         self.assertIn("per_s", latest["t3"])
         samples = mt.read_samples(self.state / "samples", 0, time.time() + 60)
         fast = [sample for sample in samples if sample["kind"] == "fast"]
         slow = [sample for sample in samples if sample["kind"] == "slow"]
         self.assertEqual(set(fast[-1]["collector"]), {"cpu_s", "rss_anon_kib", "rss_file_kib", "hwm_kib",
-                                                     "bytes_written", "lag_ms", "journal", "journal_cpu_s",
-                                                     "journal_rss_anon_kib", "journal_rss_file_kib"}
+                                                     "bytes_written", "lag_ms", "journal", "journal_ignored",
+                                                     "journal_cpu_s", "journal_rss_anon_kib",
+                                                     "journal_rss_file_kib"}
                          if sys.platform == "linux" else
-                         {"cpu_s", "rss_anon_kib", "rss_file_kib", "hwm_kib", "bytes_written", "lag_ms", "journal"})
+                         {"cpu_s", "rss_anon_kib", "rss_file_kib", "hwm_kib", "bytes_written", "lag_ms", "journal",
+                          "journal_ignored"})
         self.assertTrue(all("collector_cgroup" in sample and "collector" not in sample for sample in slow))
         # Rates need an earlier sample from the same boot, so the first sample after a start has none.
         self.assertFalse({"interval_s", "per_s"} & (set(fast[0]) | set(fast[0]["t3"])))
@@ -1057,14 +1122,14 @@ class RunTests(FixtureCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["argv"], ["--follow", "--output=json", "--no-pager", "--quiet", "--lines=0",
                                             *mt.JOURNAL_MATCHES])
-        self.assert_child_gone(calls[0]["pid"])
+        self.assert_child_gone(calls[0]["pid"])  # SIGTERM (self.stop above) exited 0 and reaped its journalctl
         cursor = (self.state / "journal.cursor").read_text().strip()
         self.assertTrue(cursor.startswith("s=fake;i="))
 
         everything = "".join(path.read_text(errors="replace") for path in self.state.rglob("*")
                              if path.is_file() and not path.name.endswith(".gz"))
         everything += "".join(gzip.open(path, "rt").read() for path in self.state.rglob("*.gz"))
-        for secret in SECRETS:
+        for secret in (*SECRETS, "FORGED-SENTINEL"):
             self.assertNotIn(secret, everything)
         self.assertNotIn("/usr/lib/claude-desktop", everything)
 
@@ -1088,16 +1153,61 @@ class RunTests(FixtureCase):
         self.assertIsInstance(record["following"]["fast"], list)
         self.assertEqual(len(list((self.state / "incidents").glob("*.json"))), 1)
 
-    def test_sigterm_stops_the_collector_and_its_journalctl(self) -> None:
-        process = subprocess.Popen(self.command(), env=self.environment | {"FAKE_JOURNAL_ENTRIES": "[]"},
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        deadline = time.monotonic() + 30
-        while not (self.log.exists() and (self.state / "latest.json").exists()) and time.monotonic() < deadline:
+    def fast_samples(self) -> list[dict]:
+        samples = mt.read_samples(self.state / "samples", 0, time.time() + 60)
+        return [sample for sample in samples if sample["kind"] == "fast"]
+
+    def test_a_stall_is_followed_by_a_pause_not_by_a_sample_over_a_few_milliseconds(self) -> None:
+        process = self.start(environment=self.environment | {"FAKE_JOURNAL_ENTRIES": "[]"})
+        self.addCleanup(process.send_signal, signal.SIGCONT)  # a stopped collector would not see the SIGTERM
+        self.wait_for(process, lambda: len(self.fast_samples()) >= 3, "the first fast samples")
+        process.send_signal(signal.SIGSTOP)
+        stopped = time.monotonic()
+        while time.monotonic() - stopped < 1.0:  # five intervals pass while it cannot run
             time.sleep(0.05)
-        process.send_signal(signal.SIGTERM)
-        _, errors = process.communicate(timeout=15)
-        self.assertEqual(process.returncode, 0, errors)
-        self.assert_child_gone(self.journal_calls()[0]["pid"])
+        process.send_signal(signal.SIGCONT)
+        before = len(self.fast_samples())
+        self.wait_for(process, lambda: len(self.fast_samples()) >= before + 4, "fast samples after the stall")
+        self.stop(process)
+        intervals = [sample["interval_s"] for sample in self.fast_samples() if "interval_s" in sample]
+        self.assertGreater(max(intervals), 1.0)  # the sample that ran late covers the stall
+        # The missed ticks are skipped, and the next sample waits half an interval (0.1 s) after the late one.
+        self.assertGreaterEqual(min(intervals), 0.09, intervals)
+
+    @unittest.skipIf(os.geteuid() == 0, "root can write where a directory refuses writes")
+    def test_a_kill_whose_record_cannot_be_written_is_read_again_after_a_restart(self) -> None:
+        self.state.mkdir()
+        (self.state / "journal.cursor").write_text("s=saved\n")
+        incidents = self.state / "incidents"
+        incidents.mkdir(mode=0o700)
+        incidents.chmod(0o500)  # readable, not writable
+        self.addCleanup(incidents.chmod, 0o700)  # so the temporary directory can be removed
+        entries = [entry | {"__CURSOR": f"s=kill;i={index}"}
+                   for index, entry in enumerate(oomd_kill_entries(time.time() - 1, "a.scope"))]
+        # Every catch-up call delivers the kill, as journalctl does for entries after the position it is given.
+        plan = [{"entries": entries}, {"entries": entries}, {"entries": []}]
+        environment = self.environment | {"FAKE_JOURNAL_PLAN": json.dumps(plan), "FAKE_JOURNAL_ENTRIES": "[]"}
+
+        process = self.start(environment=environment)
+        _, errors = process.communicate(timeout=180)  # it fails as soon as it handles the first kill entry
+        self.assertEqual(process.returncode, 1, errors)
+        self.assertIn(b"PermissionError", errors)
+        self.assertEqual(self.records(), [])
+        self.assertEqual((self.state / "journal.cursor").read_text().strip(), "s=saved")  # not past the kill
+
+        incidents.chmod(0o700)
+        process = self.start(environment=environment)
+
+        def recorded() -> bool:
+            records = self.records()
+            return bool(records) and records[0]["events"][-1]["kind"] == "unit-oomd-kill"
+
+        self.wait_for(process, recorded, "the kill record after the restart")
+        self.stop(process)
+        self.assertEqual(self.journal_calls()[1]["argv"][3:5], ["--after-cursor", "s=saved"])
+        self.assertEqual([[event["kind"] for event in record["events"]] for record in self.records()],
+                         [OOMD_KILL_KINDS])
+        self.assertEqual((self.state / "journal.cursor").read_text().strip(), "s=kill;i=3")
 
     def test_a_restart_catches_up_before_following_and_handles_overlap_once(self) -> None:
         self.state.mkdir()
@@ -1124,14 +1234,19 @@ class RunTests(FixtureCase):
                          [OOMD_KILL_KINDS])
         self.assertEqual((self.state / "journal.cursor").read_text().strip(), "s=kill;i=3")
 
-    def drain(self, journal, calls: int) -> list[dict]:
-        """Poll until journalctl has been started `calls` times in all and the latest child has ended."""
+    def drain(self, journal, calls: int, handle: bool = True) -> list[dict]:
+        """Poll until journalctl has been started `calls` times in all and the latest child has ended.
+
+        Like the run loop, it marks each entry handled once it has the entry, unless told not to."""
         entries: list[dict] = []
         deadline = time.monotonic() + 60
         while not (len(self.journal_calls()) >= calls and journal.process is None):
             if time.monotonic() > deadline:
                 self.fail(f"journalctl was not started {calls} times")
-            entries += journal.poll(0.2)
+            for entry in journal.poll(0.2):
+                entries.append(entry)
+                if handle:
+                    journal.mark_handled(entry)
         return entries
 
     def journal_environment(self, **values: str) -> None:
@@ -1148,7 +1263,7 @@ class RunTests(FixtureCase):
                                  FAKE_JOURNAL_ENTRIES="[]")
         cursor_path.write_text("s=old\n")
         journal = mt.Journal(str(self.fake), cursor_path)
-        self.assertEqual(len(self.drain(journal, calls=2)), 5)
+        self.assertEqual(len(self.drain(journal, calls=2)), len(json.loads(self.environment["FAKE_JOURNAL_ENTRIES"])))
         self.assertTrue(journal.cursor.startswith("s=fake;i="))
         calls = self.journal_calls()
         self.assertEqual(calls[0]["argv"][:5], ["--output=json", "--no-pager", "--quiet", "--after-cursor", "s=old"])
@@ -1172,6 +1287,25 @@ class RunTests(FixtureCase):
         self.assertEqual(self.drain(journal, calls=5), [])
         self.assertIsNone(journal.cursor)
         self.assertEqual(journal.state, "exited: 1")
+
+    def test_the_saved_position_never_passes_an_entry_that_was_not_handled(self) -> None:
+        self.state.mkdir()
+        cursor_path = self.state / "journal.cursor"
+        cursor_path.write_text("s=saved\n")
+        entries = [{"MESSAGE": message, "__CURSOR": f"s=c{index}", "__REALTIME_TIMESTAMP": str(index)}
+                   for index, message in enumerate(("first", "second", "third"), 1)]
+        self.journal_environment(FAKE_JOURNAL_PLAN=json.dumps([{"entries": entries}, {"entries": []}]))
+        journal = mt.Journal(str(self.fake), cursor_path)
+        received = self.drain(journal, calls=2, handle=False)
+        self.assertEqual(len(received), 3)
+        # The child continues after the last entry read, but a restart resumes after the last one handled.
+        self.assertEqual(self.journal_calls()[1]["argv"][4:6], ["--after-cursor", "s=c3"])
+        journal.save_cursor()
+        self.assertEqual(cursor_path.read_text().strip(), "s=saved")
+        journal.mark_handled(received[0])
+        journal.mark_handled(received[1])
+        journal.save_cursor()
+        self.assertEqual(cursor_path.read_text().strip(), "s=c2")
 
     def test_a_line_cut_short_by_a_dying_journalctl_loses_no_entry(self) -> None:
         self.state.mkdir()
@@ -1199,6 +1333,14 @@ class RunTests(FixtureCase):
                       "a sample reporting journalctl unavailable")
         self.stop(process)
         self.assertEqual(list((self.state / "incidents").iterdir()), [])
+
+    def test_an_empty_journalctl_command_is_reported_like_a_missing_one(self) -> None:
+        command = self.command()
+        command[command.index("--journalctl") + 1] = ""
+        process = self.start(command)
+        self.wait_for(process, lambda: (self.journal_state() or "").startswith("unavailable: "),
+                      "a sample reporting journalctl unavailable")
+        self.stop(process)
 
     def test_sample_and_report_commands(self) -> None:
         result = subprocess.run([sys.executable, "-I", "-B", str(SCRIPT), "sample", *self.fixture.options()],

@@ -56,9 +56,11 @@ task names.
 
 oomd checks swap every 150 ms and acts with no duration, so #404 ruled out
 5-minute polling. At 10 s, a 15-minute kill window holds 90 fast samples. The
-per-process scan behind T9 is the costly part, so it runs every 60 s. The
-collector skips ticks it misses during a stall rather than catching up, and
-records how late each tick ran in `collector.lag_ms`.
+per-process scan behind T9 is the costly part, so it runs every 60 s. When a
+stall makes a tick late, the collector skips the ticks it missed rather than
+catching up, and the next tick waits at least half an interval (5 s by default),
+so two fast samples are never closer than that. It records how late each tick
+ran in `collector.lag_ms`.
 
 `run` takes `--interval`, `--slow-every`, `--window` (seconds of samples kept
 before a kill), `--grace` (seconds during which later kill messages join the
@@ -92,7 +94,7 @@ Each line in a segment and each `latest.json` has:
 | `t` | Unix time in seconds, wall clock |
 | `boot` | The boot ID. Counters are comparable only within one boot. |
 | `unavailable` | Present when a required source could not be read: source name to error class, such as `"proc:pressure/io": "FileNotFoundError"`. [When a source cannot be read](#when-a-source-cannot-be-read) lists the required sources and what the affected fields look like. Whether `journalctl` runs is reported in `collector.journal` instead. |
-| `interval_s` | Fast samples only: seconds since the previous fast sample. Absent from the first sample after a start or a boot change. |
+| `interval_s` | Fast samples only: seconds since the previous fast sample, at least half the configured interval. The sample that ran late after a stall has a long one, and its rates are averages over it. Absent from the first sample after a start or a boot change. |
 
 Sizes ending in `_kib` are KiB as `/proc/meminfo` reports them; sizes ending in
 `_bytes` are bytes as cgroup files and amdgpu report them.
@@ -116,7 +118,7 @@ Sizes ending in `_kib` are KiB as `/proc/meminfo` reports them; sizes ending in
 | `t8.gtt_used_bytes`, `t8.devices` | T8 | amdgpu `mem_info_{gtt,vram}_{used,total}` |
 | `t8.gpu_active_kib`, `t8.gpu_reclaim_kib` | T8 | `GPUActive`, `GPUReclaim` in `/proc/meminfo` |
 | `oomd.swap_used_limit`, `oomd.source` | — | oomd's `SwapUsedLimit` and the file that set it, read like systemd reads `oomd.conf` and its drop-ins; `default`, or `default (configuration unreadable)` when a file could not be read |
-| `collector` | — | The collector's own cost, cumulative since it started: `cpu_s`, `rss_anon_kib`, `rss_file_kib`, `hwm_kib`, `bytes_written` (samples, `latest.json`, kill records and the journal cursor), `lag_ms` (how late this tick ran), `journal`, and while `journalctl` runs, its `journal_cpu_s`, `journal_rss_anon_kib` and `journal_rss_file_kib`. `journal` is `starting` in a run's first sample, which is taken before `journalctl` starts; `catching up` while it reads the entries after its saved position; `following`; `exited: <status>`; or `unavailable: <error>` |
+| `collector` | — | The collector's own cost, cumulative since it started: `cpu_s`, `rss_anon_kib`, `rss_file_kib`, `hwm_kib`, `bytes_written` (samples, `latest.json`, kill records and the journal cursor), `lag_ms` (how late this tick ran), `journal`, `journal_ignored`, and while `journalctl` runs, its `journal_cpu_s`, `journal_rss_anon_kib` and `journal_rss_file_kib`. `journal` is always present: `starting` in a run's first sample, which is taken before `journalctl` starts; `catching up` while it reads the entries after its saved position; `following`; `exited: <status>`; or `unavailable: <error>`, which is also what a `--journalctl` command that cannot be run reports. `journal_ignored` counts the kill messages dropped since the start because they came from a sender other than the managers (see [Kill records](#kill-records)) |
 
 ### Slow samples
 
@@ -195,6 +197,17 @@ Any of these journal entries opens a record (T7):
 The kernel's `oom_reaper:` lines, oomd's candidate details, and any other kernel
 line mentioning an OOM join an open record but never open one; such other lines
 are kept only as `(kernel OOM line in an unrecognized format)`.
+
+A `MESSAGE_ID` is set by whoever writes the entry, and any local process can
+write to the journal, so the two systemd messages count only when journald
+itself, through the fields it sets and the sender cannot, attributes them to
+the system manager (PID 1, `_UID=0`, `_SYSTEMD_UNIT=init.scope`) or to this
+user's manager (`_UID` this user's, `_SYSTEMD_UNIT=user@<uid>.service`,
+`_SYSTEMD_USER_UNIT=init.scope`). Those are the only senders of these messages in
+this host's journal over the last 30 days. A message from any other sender opens
+and joins nothing; it is counted in `collector.journal_ignored` and not
+recorded. oomd's log and the kernel lines are told by `_SYSTEMD_UNIT` and
+`_TRANSPORT`, which journald also sets. A record has no cap on its events.
 
 Entries within 60 s of a record's first entry join that record, even if the
 record was closed on an earlier tick or by an earlier collector process, so a
@@ -348,13 +361,22 @@ malformed, by exiting at once with an error and no output, makes the collector
 start again from the journal's end. The journal's own retention depends on an
 unmanaged journald setting.
 
+The saved position is that of the last entry the collector finished handling,
+not of the last one it read. If handling an entry fails, such as a kill record
+that cannot be written because the state directory is full or not writable, the
+collector exits with the error, the position stays before that entry, and the
+restart 30 s later reads it again. While the failure lasts, that repeats every 30
+s, and each start also reads every stored kill record.
+
 ## Operating it
 
 chezmoi does not start or restart the unit. An existing `run_after_` script
 (`home/run_after_activate-proton-pass-provider-ready.zsh.tmpl`) reloads the
 user manager on every Linux apply, so after an apply the unit is loaded and
-enabled, and it starts at the next login. To start it now, or to restart it
-after an apply that changes it:
+enabled. An enabled unit starts the next time the user manager starts: at the
+next boot on this host, where lingering (`Linger=yes`) keeps the manager running
+between logins, and at the next login on a host without it. To start it now, or
+to restart it after an apply that changes it:
 
 ```zsh
 systemctl --user daemon-reload && systemctl --user restart memory-telemetry.service

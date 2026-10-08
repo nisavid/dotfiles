@@ -57,9 +57,12 @@ OOMD_CONFIG_DIRS = ("etc/systemd", "run/systemd", "usr/local/lib/systemd", "usr/
 # Journal sources of kill records (T7): systemd's messages that systemd-oomd
 # killed processes in a unit (SD_MESSAGE_UNIT_OOMD_KILL) and that the kernel OOM
 # killer killed a process of a unit (SD_MESSAGE_UNIT_OUT_OF_MEMORY), oomd's own
-# log, and the kernel's OOM report lines.
+# log, and the kernel's OOM report lines. The first two are told by MESSAGE_ID,
+# which any process that can write to the journal sets as it likes, so they count
+# only from the managers that really send them (see from_a_manager).
 MESSAGE_UNIT_OOMD_KILL = "d989611b15e44c9dbf31e3c81256e4ed"
 MESSAGE_UNIT_OOM = "fe6faa94e7774663a0da52717891d8ef"
+KILL_MESSAGE_IDS = (MESSAGE_UNIT_OOMD_KILL, MESSAGE_UNIT_OOM)
 OOMD_UNIT = "systemd-oomd.service"
 JOURNAL_MATCHES = (
     f"MESSAGE_ID={MESSAGE_UNIT_OOMD_KILL}", "+",
@@ -1031,6 +1034,20 @@ def journal_event(entry: Record) -> tuple[Record, bool] | None:
     return event, opener
 
 
+def from_a_manager(entry: Record, uid: int) -> bool:
+    """Whether journald itself attributes the entry to the system manager or to this user's manager.
+
+    A field whose name starts with an underscore is set by journald from the sending process, which
+    cannot choose it; MESSAGE_ID and every other field are the sender's own. The system manager is
+    PID 1 in init.scope. This user's manager is a process of this UID in init.scope inside
+    user@<uid>.service, where no app, session or service of the user runs."""
+    unit = entry.get("_SYSTEMD_UNIT")
+    if entry.get("_PID") == "1" and entry.get("_UID") == "0":
+        return unit == "init.scope"
+    return (entry.get("_UID") == str(uid) and unit == f"user@{uid}.service"
+            and entry.get("_SYSTEMD_USER_UNIT") == "init.scope")
+
+
 class Incidents:
     """T7 kill records. Each one keeps its journal events, the preceding window of
     samples, the T9 top contributors, and the fast samples of the grace period
@@ -1039,18 +1056,24 @@ class Incidents:
     collector process, so a kill read in pieces or replayed after a restart still
     makes one record."""
 
-    def __init__(self, directory: Path, samples: Path, window: float, grace: float, max_files: int) -> None:
+    def __init__(self, directory: Path, samples: Path, window: float, grace: float, max_files: int,
+                 uid: int | None = None) -> None:
         self.directory = directory
         self.samples = samples
         self.window = window
         self.grace = grace
         self.max_files = max_files
+        self.uid = os.getuid() if uid is None else uid
         self.current: Record | None = None
         self.path: Path | None = None
         self.bytes_written = 0
+        self.ignored = 0  # kill messages from a sender other than the managers, counted and dropped
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     def handle(self, entry: Record) -> None:
+        if entry.get("MESSAGE_ID") in KILL_MESSAGE_IDS and not from_a_manager(entry, self.uid):
+            self.ignored += 1
+            return
         classified = journal_event(entry)
         if classified is None:
             return
@@ -1163,7 +1186,11 @@ class Journal:
     With a saved position, a catch-up child first reads every entry after it without
     --follow, which covers every boot on every systemd version (with --follow, systemd
     262 shows only the current boot), and a --follow child then continues after the
-    newest entry read. Without a saved position it follows from the journal's end."""
+    newest entry read. Without a saved position it follows from the journal's end.
+
+    The position a child continues from (`cursor`) is the last entry read. The position saved for
+    a restart (`handled`) is the last entry whose handling finished, so an entry whose handling
+    failed is read again rather than skipped."""
 
     def __init__(self, command: str, cursor_path: Path) -> None:
         self.command = command
@@ -1173,6 +1200,7 @@ class Journal:
         except OSError:
             saved = ""
         self.cursor: str | None = saved or None
+        self.handled = self.cursor
         self.saved_cursor = self.cursor
         self.bytes_written = 0
         self.process: subprocess.Popen[bytes] | None = None
@@ -1278,12 +1306,17 @@ class Journal:
             process.kill()
             return process.wait()
 
+    def mark_handled(self, entry: Record) -> None:
+        """Note that `entry` has been handled, so a restart may resume after it."""
+        if isinstance(entry.get("__CURSOR"), str):
+            self.handled = entry["__CURSOR"]
+
     def save_cursor(self) -> None:
-        if self.cursor and self.cursor != self.saved_cursor:
+        if self.handled and self.handled != self.saved_cursor:
             temporary = self.cursor_path.with_name(f".{self.cursor_path.name}.tmp")
-            self.bytes_written += temporary.write_text(self.cursor + "\n", encoding="utf-8")
+            self.bytes_written += temporary.write_text(self.handled + "\n", encoding="utf-8")
             os.replace(temporary, self.cursor_path)
-            self.saved_cursor = self.cursor
+            self.saved_cursor = self.handled
 
     def usage(self) -> Record:
         if self.process is None:
@@ -1330,8 +1363,18 @@ def make_sources(options: argparse.Namespace) -> Sources:
     return Sources(Path(options.proc_root), Path(options.sys_root), Path(options.config_root), os.getuid())
 
 
+def next_tick_time(scheduled: float, interval: float, now: float) -> float:
+    """When the tick after the one scheduled at `scheduled`, which finished at `now`, is due.
+
+    Normally that is the next slot, which keeps the cadence. A tick that ran late skips the slots it
+    missed rather than catching up, and the next tick waits at least half an interval after `now`, so
+    two fast samples are never closer than that: a rate measured over a few milliseconds after a stall
+    would read as no swap activity and no stalls."""
+    return max(scheduled + interval, now + interval / 2)
+
+
 class Collector:
-    def __init__(self, options: argparse.Namespace, sources: Sources, state: Path, journal: Journal | None) -> None:
+    def __init__(self, options: argparse.Namespace, sources: Sources, state: Path, journal: Journal) -> None:
         self.options = options
         self.sources = sources
         self.state = state
@@ -1367,8 +1410,7 @@ class Collector:
         self.store.bytes_written += write_json_atomic(self.state / "latest.json", fast)
         self.previous_fast = fast
         self.incidents.finalize_due(now)
-        if self.journal is not None:
-            self.journal.save_cursor()
+        self.journal.save_cursor()
         self.ticks += 1
 
     def footprint(self, lag: float) -> Record:
@@ -1382,13 +1424,12 @@ class Collector:
             "rss_anon_kib": status.get("RssAnon"),
             "rss_file_kib": status.get("RssFile"),
             "hwm_kib": status.get("VmHWM"),
-            "bytes_written": self.store.bytes_written + self.incidents.bytes_written
-            + (self.journal.bytes_written if self.journal is not None else 0),
+            "bytes_written": self.store.bytes_written + self.incidents.bytes_written + self.journal.bytes_written,
             "lag_ms": round(lag * 1000, 1),
+            "journal": self.journal.state,
+            "journal_ignored": self.incidents.ignored,
         }
-        if self.journal is not None:
-            block["journal"] = self.journal.state
-            block.update(self.journal.usage())
+        block.update(self.journal.usage())
         return block
 
     def own_cgroup(self) -> Record | None:
@@ -1411,7 +1452,7 @@ def run(options: argparse.Namespace) -> int:
     os.umask(0o077)  # the record names this user's processes and units
     state = state_directory(options.state_dir)
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
-    journal = Journal(options.journalctl, state / "journal.cursor") if options.journalctl else None
+    journal = Journal(options.journalctl, state / "journal.cursor")
     collector = Collector(options, make_sources(options), state, journal)
     stopping = False
 
@@ -1426,7 +1467,7 @@ def run(options: argparse.Namespace) -> int:
     try:
         while not stopping:
             collector.tick(max(0.0, time.monotonic() - next_tick))
-            next_tick = max(next_tick + options.interval, time.monotonic())  # skip ticks missed by a stall
+            next_tick = next_tick_time(next_tick, options.interval, time.monotonic())
             while not stopping:
                 now = time.monotonic()
                 if deadline is not None and now >= deadline:
@@ -1435,14 +1476,13 @@ def run(options: argparse.Namespace) -> int:
                 if now >= next_tick:
                     break
                 wait = min(next_tick - now, 1.0, (deadline - now) if deadline is not None else 1.0)
-                if journal is None:
-                    time.sleep(wait)
-                    continue
                 for entry in journal.poll(wait):
                     collector.incidents.handle(entry)
+                    # An entry whose handling raised is never marked, so a restart reads it again. Only a
+                    # failing sink raises here, such as a record that cannot be written.
+                    journal.mark_handled(entry)
     finally:
-        if journal is not None:
-            journal.close()
+        journal.close()
         collector.store.close()
     return 0
 
@@ -1555,8 +1595,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     run_parser.add_argument("--retention-days", type=positive(float), default=DEFAULT_RETENTION_DAYS)
     run_parser.add_argument("--max-sample-bytes", type=positive(int), default=DEFAULT_MAX_SAMPLE_BYTES)
     run_parser.add_argument("--max-incidents", type=positive(int), default=DEFAULT_MAX_INCIDENTS)
-    run_parser.add_argument("--journalctl", default="journalctl",
-                            help="journalctl command; empty disables kill records")
+    run_parser.add_argument("--journalctl", default="journalctl", help="journalctl command")
     run_parser.add_argument("--duration", type=positive(float), help="stop after this many seconds")
     report_parser.add_argument("--window", type=positive(float), default=DEFAULT_WINDOW,
                                help="seconds of growth to show")

@@ -17,7 +17,9 @@
 # and ~/.local/bin/memory-telemetry. It does not start or restart the unit. An
 # existing run_after script (run_after_activate-proton-pass-provider-ready)
 # reloads the user manager on every Linux apply, so the unit is then loaded and
-# starts at the next login. To start it now, or after an apply that changes it:
+# enabled. It starts the next time the user manager starts: at the next boot where
+# lingering keeps the manager running between logins (Linger=yes), at the next
+# login elsewhere. To start it now, or after an apply that changes it:
 #   systemctl --user daemon-reload && systemctl --user restart memory-telemetry.service
 # To turn it off for good, delete its chezmoi source files or ignore their
 # targets in home/.chezmoiignore, then delete the live files and run:
