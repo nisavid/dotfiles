@@ -580,6 +580,82 @@ class ScheduleTests(unittest.TestCase):
         self.assertAlmostEqual(due(110.0, 10.0, 119.99), 124.99)  # even one that ends just before the next slot
 
 
+class CollectorTests(FixtureCase):
+    def collector(self, *extra: str):
+        options = mt.parse_arguments(["run", "--state-dir", str(self.state), *self.fixture.options(), *extra])
+        journal = mt.Journal(str(self.base / "no-journalctl"), self.state / "journal.cursor")  # never started
+        collector = mt.Collector(options, mt.make_sources(options), self.state, journal)
+        self.addCleanup(collector.store.close)
+        return collector
+
+    def test_a_slow_scan_does_not_skew_the_rates_of_the_fast_samples(self) -> None:
+        # The fixture's memory PSI totals and pswpout grow with the clock, by 1 s of stall and 1,000 pages per
+        # second, so every stall fraction is 1 and every pswpout rate 1,000. The clock moves on by a whole 1 s
+        # interval between ticks and by 0.6 s during each slow scan, as a long scan under memory pressure would.
+        start = 1_791_000_000.0
+        clock = [start]
+        proc = self.fixture.proc
+        read = mt.Sources.text
+
+        def text(sources, path: Path, required: bool = False) -> str | None:
+            if path == proc / "pressure/memory":
+                return psi(round(clock[0] * 1e6), round(clock[0] * 1e6))
+            if path == proc / "vmstat":
+                return f"pswpin 10\npswpout {round(clock[0] * 1000)}\n"
+            return read(sources, path, required)
+
+        scan = mt.slow_sample
+
+        def slow_scan(*args, **kwargs):
+            result = scan(*args, **kwargs)
+            clock[0] += 0.6
+            return result
+
+        with (mock.patch.object(mt.Sources, "text", text), mock.patch.object(mt, "slow_sample", slow_scan),
+              mock.patch.object(mt.time, "time", lambda: clock[0])):
+            collector = self.collector("--interval", "1", "--slow-every", "3")
+            for tick in range(7):
+                clock[0] = start + tick
+                collector.tick(0.0)
+        fast = [sample for sample in mt.read_samples(self.state / "samples", start, start + 60)
+                if sample["kind"] == "fast" and "interval_s" in sample]
+        self.assertEqual(len(fast), 6)
+        for sample in fast:
+            stalled = sample["t2"]["memory"]["stall_fraction"]
+            self.assertAlmostEqual(stalled["some"], 1.0, places=3, msg=sample["t"] - start)
+            self.assertAlmostEqual(stalled["full"], 1.0, places=3, msg=sample["t"] - start)
+            self.assertAlmostEqual(sample["t3"]["per_s"]["pswpout"], 1000.0, delta=1.0, msg=sample["t"] - start)
+
+    def test_an_entry_is_marked_handled_only_once_its_record_change_is_written(self) -> None:
+        collector = self.collector()
+        journal, incidents = collector.journal, self.state / "incidents"
+        collector.tick(0.0)
+        entries = [entry | {"__CURSOR": f"s=e{index}"}
+                   for index, entry in enumerate(oomd_kill_entries(time.time(), "a.scope"))]
+
+        def written() -> list[int]:
+            return [len(mt.load_json(path)["events"]) for path in sorted(incidents.glob("*.json"))]
+
+        collector.handle(entries[0])  # opens a record, written at once
+        self.assertEqual((journal.handled, written()), ("s=e0", [1]))
+        collector.handle(entries[1])
+        collector.handle(entries[2])  # both join the record in memory
+        journal.save_cursor()
+        self.assertEqual((journal.handled, written()), ("s=e0", [1]))
+        self.assertEqual((self.state / "journal.cursor").read_text().strip(), "s=e0")
+        collector.tick(0.0)  # writes the record once, then marks the entries the write covers and saves
+        self.assertEqual((journal.handled, written()), ("s=e2", [3]))
+        self.assertEqual((self.state / "journal.cursor").read_text().strip(), "s=e2")
+        if os.geteuid() == 0:
+            return  # permission bits do not bind root
+        collector.handle(entries[3])
+        incidents.chmod(0o500)  # the next write of the record fails
+        self.addCleanup(incidents.chmod, 0o700)
+        with self.assertRaises(PermissionError):
+            collector.tick(0.0)
+        self.assertEqual((journal.handled, written()), ("s=e2", [3]))
+
+
 def fast_record(t: float, available: int = 30) -> dict:
     return {"schema": mt.SCHEMA, "kind": "fast", "t": t, "t1": {"mem_available_kib": available}}
 
@@ -790,8 +866,14 @@ class IncidentTests(unittest.TestCase):
             incidents.handle(entry)
         files = list((self.root / "incidents").glob("*.json"))
         self.assertEqual(len(files), 1)
+        # The record is written when it opens; the events that join it wait in memory for the tick's write.
+        self.assertEqual(len(json.loads(files[0].read_text())["events"]), 1)
+        self.assertTrue(incidents.unwritten)
+        incidents.flush()
+        self.assertFalse(incidents.unwritten)
         record = json.loads(files[0].read_text())
         self.assertTrue(record["id"].endswith("Z-oomd-kill"))
+        self.assertEqual(record["dropped_events"], 0)
         self.assertFalse(record["finalized"])
         self.assertEqual([event["kind"] for event in record["events"]], OOMD_KILL_KINDS)
         self.assertEqual(record["events"][3]["user_unit"], "app-org.chromium.Chromium-1.scope")
@@ -880,6 +962,7 @@ class IncidentTests(unittest.TestCase):
         incidents.finalize_due(self.t0 + 61)
         for entry in entries[1:]:
             incidents.handle(entry)
+        incidents.flush()
         self.assertEqual([len(record["events"]) for record in self.records()], [4])
         self.assertTrue(self.records()[0]["finalized"])
         shutil.rmtree(self.root / "incidents")
@@ -902,13 +985,17 @@ class IncidentTests(unittest.TestCase):
         first = self.incidents()
         for entry in oomd_kill_entries(self.t0, "a.scope"):
             first.handle(entry)
+        first.flush()
         self.assertFalse(self.records()[0]["finalized"])
-        # Every rewrite of the record counts toward the collector's written bytes.
-        self.assertGreaterEqual(first.bytes_written,
-                                4 * max(path.stat().st_size for path in (self.root / "incidents").iterdir()) // 2)
+        # Every write of the record counts toward the collector's written bytes: one when it opened, with its first
+        # event, and one for the three events that joined it.
+        size = max(path.stat().st_size for path in (self.root / "incidents").iterdir())
+        self.assertGreater(first.bytes_written, size)
+        self.assertLess(first.bytes_written, 2 * size)
         self.incidents().recover(self.t0 + 120)
         record = self.records()[0]
         self.assertTrue(record["finalized"])
+        self.assertEqual([event["kind"] for event in record["events"]], OOMD_KILL_KINDS)
         following = [sample["t"] for sample in record["following"]["fast"]]
         self.assertEqual((following[0], following[-1]), (self.t0 + 10, self.t0 + 60))
 
@@ -951,6 +1038,123 @@ class IncidentTests(unittest.TestCase):
         for path in files:
             for secret in SECRETS:
                 self.assertNotIn(secret, path.read_text())
+
+    def test_a_repeated_kill_message_id_is_counted_and_dropped_whatever_the_sender(self) -> None:
+        # journalctl prints a field that an entry repeats as a list, and its MESSAGE_ID= match selects the entry when
+        # any value matches. The managers never repeat MESSAGE_ID, so such an entry is never theirs.
+        senders = {
+            "another process of this user": {"_PID": "4242", "_UID": str(UID), "_SYSTEMD_UNIT": "app-x.scope"},
+            "this user's manager": USER_MANAGER,
+            "the system manager": SYSTEM_MANAGER,
+        }
+        repeated = ([mt.MESSAGE_UNIT_OOMD_KILL, mt.MESSAGE_UNIT_OOM], ["0" * 32, mt.MESSAGE_UNIT_OOM],
+                    [mt.MESSAGE_UNIT_OOMD_KILL, mt.MESSAGE_UNIT_OOMD_KILL])
+        incidents = self.incidents()
+        for sender in senders.values():
+            for message_id in repeated:
+                incidents.handle(journal_entry(self.t0, "x.scope: killed some process(es) in this unit.",
+                                               MESSAGE_ID=message_id, USER_UNIT="x.scope", **sender))
+        self.assertEqual(list((self.root / "incidents").iterdir()), [])
+        self.assertEqual((incidents.ignored, incidents.bytes_written), (len(senders) * len(repeated), 0))
+        # Repeated values without a kill ID are not a kill message at all.
+        incidents.handle(journal_entry(self.t0, "a note", MESSAGE_ID=["0" * 32, "1" * 32], **USER_MANAGER))
+        self.assertEqual(incidents.ignored, len(senders) * len(repeated))
+
+    def test_task_names_with_oom_words_cannot_multiply_a_records_writes(self) -> None:
+        # Any process can put an OOM word in its task name, and the kernel prints that name at the end of the
+        # process's row in every OOM report's task table and at the start of each of its segfault lines.
+        names = ("oom-killer-test", "oom_reaper_test", "out of memory!")
+        kernel = {"_TRANSPORT": "kernel", "_BOOT_ID": "b" * 32}
+        memcg = "/user.slice/user-1001.slice/user@1001.service/app.slice/probe.scope"
+        recognized = [
+            journal_entry(self.t0, f"{names[0]} invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, "
+                                   "oom_score_adj=200", **kernel),
+            journal_entry(self.t0 + 0.5, "oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=probe.scope,"
+                                         f"mems_allowed=0,oom_memcg={memcg},task_memcg={memcg},task={names[1]},"
+                                         "pid=500000,uid=1001", **kernel),
+            journal_entry(self.t0 + 0.6, f"Memory cgroup out of memory: Killed process 500000 ({names[2]}) "
+                                         "total-vm:302232kB, anon-rss:261536kB, file-rss:9336kB, shmem-rss:0kB, "
+                                         "UID:1001 pgtables:580kB oom_score_adj:200", **kernel),
+            journal_entry(self.t0 + 0.7, f"oom_reaper: reaped process 500000 ({names[2]}), now anon-rss:0kB, "
+                                         "file-rss:0kB, shmem-rss:0kB", **kernel),
+            journal_entry(self.t0 + 0.8, "probe.scope: A process of this unit has been killed by the OOM killer.",
+                          MESSAGE_ID=mt.MESSAGE_UNIT_OOM, USER_UNIT="probe.scope", **SYSTEM_MANAGER),
+        ]
+        rows = [journal_entry(self.t0 + 1e-4 * (index + 1),
+                              f"[{pid:7d}]  1001 {pid:7d}    75558    67718    65384     2334         0   593920"
+                              f"        0           200 {names[index % 3]}", **kernel)
+                for index, pid in enumerate(range(500001, 502001))]
+        crashes = [journal_entry(self.t0 + 0.9 + index / 100,
+                                 f"{name}[{600000 + index}]: segfault at 0 ip 0000562ec0a62679 sp 00007ffdbc4368c0 "
+                                 f"error 4 in {name}[2a679,562ec0a48000+f1000] likely on CPU 3 (core 0, socket 0)",
+                                 **kernel)
+                   for index, name in enumerate(names * 10)]
+        incidents = self.incidents()
+        for entry in [recognized[0], *rows, *recognized[1:4], *crashes, recognized[4]]:
+            incidents.handle(entry)
+        incidents.finalize()
+        [record] = self.records()
+        size = next((self.root / "incidents").glob("*.json")).stat().st_size
+        # Written when it opened and when it was finalized, not once per line.
+        self.assertLessEqual(incidents.bytes_written, 2 * size)
+        messages = [event["message"] for event in record["events"]]
+        kept = [message for message in messages if message != mt.KERNEL_OOM_UNRECOGNIZED]
+        self.assertEqual(kept, [*(mt.kernel_oom_line(entry["MESSAGE"])[0] for entry in recognized[:4]),
+                                recognized[4]["MESSAGE"]])
+        unrecognized = len(rows) + len(crashes)
+        self.assertEqual(messages.count(mt.KERNEL_OOM_UNRECOGNIZED), mt.MAX_UNRECOGNIZED_EVENTS)
+        self.assertEqual(record["dropped_events"], unrecognized - mt.MAX_UNRECOGNIZED_EVENTS)
+        self.assertLessEqual(len(messages), mt.MAX_RECORD_EVENTS)
+        text = json.dumps(record)
+        for name in names:
+            self.assertNotIn(name, text)
+
+    def test_a_record_keeps_at_most_its_cap_of_events_and_counts_the_rest(self) -> None:
+        # An oom.group kill prints a "Killed process" line for every task of the cgroup.
+        kills = [journal_entry(self.t0 + index / 1000, f"Memory cgroup out of memory: Killed process {4000 + index} "
+                                                        "(x) total-vm:1kB, anon-rss:1kB", _TRANSPORT="kernel")
+                 for index in range(mt.MAX_RECORD_EVENTS + 100)]
+        incidents = self.incidents()
+        for entry in kills:
+            incidents.handle(entry)
+        incidents.flush()
+        [record] = self.records()
+        self.assertEqual(len(record["events"]), mt.MAX_RECORD_EVENTS)
+        self.assertEqual(record["dropped_events"], 100)
+        last_kept = mt.kernel_oom_line(kills[mt.MAX_RECORD_EVENTS - 1]["MESSAGE"])[0]
+        self.assertEqual(record["events"][-1]["message"], last_kept)
+        # De-duplication runs first: the kept events, read again, change nothing and cost no write.
+        written = incidents.bytes_written
+        for entry in kills[: mt.MAX_RECORD_EVENTS]:
+            incidents.handle(entry)
+        self.assertFalse(incidents.unwritten)
+        incidents.flush()
+        self.assertEqual((incidents.bytes_written, self.records()[0]["dropped_events"]), (written, 100))
+        # An event that was dropped is not remembered, so reading it again, as after a restart, counts it again.
+        incidents.handle(kills[-1])
+        incidents.flush()
+        self.assertEqual(self.records()[0]["dropped_events"], 101)
+
+    def test_a_record_too_large_to_read_is_left_alone(self) -> None:
+        entries = oomd_kill_entries(self.t0, "a.scope")
+        self.incidents().handle(entries[0])
+        [path] = (self.root / "incidents").glob("*.json")
+        size = path.stat().st_size
+        self.assertIsNotNone(mt.load_json(path, size))
+        self.assertIsNone(mt.load_json(path, size - 1))
+        before = path.read_bytes()
+        with mock.patch.object(mt, "MAX_RECORD_BYTES", size - 1):
+            incidents = self.incidents()
+            incidents.recover(self.t0 + 1)  # neither resumed nor finalized
+            incidents.handle(entries[1])  # nothing to join
+            for entry in entries[2:]:  # the next opener opens a record of its own
+                incidents.handle(entry)
+            incidents.finalize()
+        self.assertEqual(path.read_bytes(), before)
+        records = self.records()
+        self.assertEqual([[event["kind"] for event in record["events"]] for record in records],
+                         [["oomd-kill"], ["oomd-kill", "unit-oomd-kill"]])
+        self.assertEqual([record["finalized"] for record in records], [False, True])
 
 
 # A follow call (--follow) prints FAKE_JOURNAL_ENTRIES after FAKE_JOURNAL_DELAY and lingers for

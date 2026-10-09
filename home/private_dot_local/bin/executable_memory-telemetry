@@ -76,7 +76,10 @@ OOMD_KILL_MESSAGE = re.compile(r"for killing|^Killed ")
 # three open a kill record; the reaper lines only join one. Any other kernel line
 # with these words keeps no text and only joins an open record, so driver
 # messages such as "Out of memory during recovery" and forged task names in
-# other kernel lines never open one.
+# other kernel lines never open one. Every process can put these words in its
+# task name, which the kernel prints on lines of its own (an OOM report's task
+# table, a segfault line), so a record keeps only a few such lines; see
+# MAX_UNRECOGNIZED_EVENTS.
 KERNEL_OOM_FORMATS = (
     (re.compile(r"(?s).* invoked oom-killer: "
                 r"(?P<rest>gfp_mask=0x[0-9a-f]+\([^()]*\), order=-?\d+, oom_score_adj=-?\d+)"),
@@ -112,6 +115,14 @@ DEFAULT_RETENTION_DAYS = 30
 DEFAULT_MAX_SAMPLE_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_INCIDENTS = 200
 DEFAULT_WATCH = ("app-com.anthropic.Claude*", "app-chatgpt@*", "app-org.chromium.Chromium-*")
+# Bounds on one kill record, whatever the journal delivers. This host's 30-day journal gives 1-22 events per record
+# and no kernel line in an unrecognized format; an oom.group kill prints one "Killed process" line per task, so 500
+# leaves room for large genuine kills. A genuine record is about 0.7 MB on disk and parsing one peaks at about 4.7
+# times its size, so a record of MAX_RECORD_BYTES still parses well inside the unit's MemoryMax=128M; a larger one is
+# left unread.
+MAX_RECORD_EVENTS = 500
+MAX_UNRECOGNIZED_EVENTS = 50
+MAX_RECORD_BYTES = 8 * 1024 * 1024
 JOURNAL_RESTART_DELAY = 30.0
 TOP_ENTRIES = 20
 TOP_SWAP_HOLDERS = 10
@@ -841,9 +852,13 @@ def write_json_atomic(path: Path, data: Record, durable: bool = False) -> int:
     return len(text)
 
 
-def load_json(path: Path) -> Record | None:
+def load_json(path: Path, max_bytes: int | None = None) -> Record | None:
+    """A file's JSON object, or None. A file larger than max_bytes is not read."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        with open(path, "rb") as handle:
+            if max_bytes is not None and os.fstat(handle.fileno()).st_size > max_bytes:
+                return None
+            data = json.loads(handle.read())
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
@@ -1034,6 +1049,13 @@ def journal_event(entry: Record) -> tuple[Record, bool] | None:
     return event, opener
 
 
+def kill_message(entry: Record) -> bool:
+    """Whether the entry carries one of systemd's kill MESSAGE_IDs, among them the values journalctl prints as a
+    list when an entry repeats the field."""
+    message_id = entry.get("MESSAGE_ID")
+    return any(value in KILL_MESSAGE_IDS for value in (message_id if isinstance(message_id, list) else [message_id]))
+
+
 def from_a_manager(entry: Record, uid: int) -> bool:
     """Whether journald itself attributes the entry to the system manager or to this user's manager.
 
@@ -1048,13 +1070,45 @@ def from_a_manager(entry: Record, uid: int) -> bool:
             and entry.get("_SYSTEMD_USER_UNIT") == "init.scope")
 
 
+def event_key(event: Record) -> tuple[Any, ...]:
+    """What makes two events of a record the same."""
+    return (event.get("t"), event.get("kind"), event.get("message"))
+
+
+@dataclass
+class HeldRecord:
+    """A kill record kept in memory while events join it."""
+
+    path: Path
+    data: Record
+    keys: set[tuple[Any, ...]]  # event_key of each kept event
+    unrecognized: int  # kept kernel lines in an unrecognized format
+    unwritten: bool = False  # changed since it was last written
+
+    @classmethod
+    def of(cls, path: Path, data: Record) -> HeldRecord:
+        events = [event for event in data["events"] if isinstance(event, dict)]
+        return cls(path, data, {event_key(event) for event in events},
+                   sum(event.get("message") == KERNEL_OOM_UNRECOGNIZED for event in events))
+
+
 class Incidents:
     """T7 kill records. Each one keeps its journal events, the preceding window of
     samples, the T9 top contributors, and the fast samples of the grace period
     after it opened. Events within the grace period of a record's first event join
     that record, even when it was closed on an earlier tick or by an earlier
     collector process, so a kill read in pieces or replayed after a restart still
-    makes one record."""
+    makes one record.
+
+    One record's cost is bounded whatever the journal delivers. It is written, and
+    synced to disk, when it opens and when it is finalized; joining events change
+    it in memory only, and a changed record is written at most once per tick
+    (flush), so a kill read as it happens writes its record at most about
+    2 + grace / interval times. It keeps at most
+    MAX_RECORD_EVENTS events, at most MAX_UNRECOGNIZED_EVENTS of them kernel lines
+    in an unrecognized format, and counts any other new event in `dropped_events`.
+    A stored record larger than MAX_RECORD_BYTES is never read: it is not joined,
+    resumed or finalized, and it stays until the record cap deletes it."""
 
     def __init__(self, directory: Path, samples: Path, window: float, grace: float, max_files: int,
                  uid: int | None = None) -> None:
@@ -1064,59 +1118,77 @@ class Incidents:
         self.grace = grace
         self.max_files = max_files
         self.uid = os.getuid() if uid is None else uid
-        self.current: Record | None = None
-        self.path: Path | None = None
+        self.open_record: HeldRecord | None = None  # the record events join until its grace period has passed
+        self.late: HeldRecord | None = None  # a finalized record that late events joined, until the next flush
         self.bytes_written = 0
-        self.ignored = 0  # kill messages from a sender other than the managers, counted and dropped
+        self.ignored = 0  # kill messages not from the managers, or with a repeated MESSAGE_ID; counted and dropped
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
 
+    @property
+    def unwritten(self) -> bool:
+        """Whether a held record has changes that are not written yet."""
+        return any(held is not None and held.unwritten for held in (self.open_record, self.late))
+
     def handle(self, entry: Record) -> None:
-        if entry.get("MESSAGE_ID") in KILL_MESSAGE_IDS and not from_a_manager(entry, self.uid):
+        # The managers never repeat MESSAGE_ID within an entry, so a kill ID among repeated values is not theirs.
+        if kill_message(entry) and (isinstance(entry.get("MESSAGE_ID"), list) or not from_a_manager(entry, self.uid)):
             self.ignored += 1
             return
         classified = journal_event(entry)
         if classified is None:
             return
         event, opener = classified
-        if self.current is not None and abs(event["t"] - self.current["opened"]) <= self.grace:
-            self.add(self.current, self.path, event)
-            return
+        for held in (self.open_record, self.late):
+            if held is not None and abs(event["t"] - held.data["opened"]) <= self.grace:
+                self.add(held, event)
+                return
         recent = self.recent(event["t"])
         if recent is not None:
-            path, record = recent
-            if record.get("finalized"):
-                self.add(record, path, event)
+            if recent.data.get("finalized"):
+                self.hold_late(recent)
             else:  # left open by an earlier collector process
                 self.finalize()
-                self.current, self.path = record, path
-                self.add(record, path, event)
+                self.open_record = recent
+            self.add(recent, event)
         elif opener:
             self.finalize()
             self.open(event)
 
-    def recent(self, t: float) -> tuple[Path, Record] | None:
-        """The newest stored record whose first event is within the grace period of t."""
+    def held_paths(self) -> set[Path]:
+        return {held.path for held in (self.open_record, self.late) if held is not None}
+
+    def recent(self, t: float) -> HeldRecord | None:
+        """The newest stored record whose first event is within the grace period of t, unless it is held already or
+        cannot be read."""
         best: tuple[float, Path] | None = None
         for path in self.directory.glob("*.json"):
             opened = record_opened(path.name)
             if opened is not None and abs(t - opened) <= self.grace and (best is None or opened > best[0]):
                 best = (opened, path)
-        if best is None or best[1] == self.path:
+        if best is None or best[1] in self.held_paths():
             return None
-        record = load_json(best[1])
-        return (best[1], record) if record is not None and isinstance(record.get("events"), list) else None
+        data = load_json(best[1], MAX_RECORD_BYTES)
+        if data is None or not isinstance(data.get("events"), list) or not isinstance(data.get("opened"), (int, float)):
+            return None
+        return HeldRecord.of(best[1], data)
+
+    def hold_late(self, held: HeldRecord) -> None:
+        """Keep a finalized record in memory while late events join it, one at a time."""
+        if self.late is not None and self.late.unwritten:
+            self.write_held(self.late)
+        self.late = held
 
     def recover(self, now: float) -> None:
         """Finalize records an earlier collector process left open; resume the newest still in its grace period."""
         for path in sorted(self.directory.glob("*.json")):
-            record = load_json(path)
-            if record is None or record.get("finalized") or not isinstance(record.get("opened"), (int, float)):
+            data = load_json(path, MAX_RECORD_BYTES)
+            if data is None or data.get("finalized") or not isinstance(data.get("opened"), (int, float)):
                 continue
-            if now - record["opened"] > self.grace:
-                self.finish(record, path)
-            else:
+            if now - data["opened"] > self.grace:
+                self.finish(data, path)
+            elif isinstance(data.get("events"), list):
                 self.finalize()
-                self.current, self.path = record, path
+                self.open_record = HeldRecord.of(path, data)
 
     def open(self, event: Record) -> None:
         opened = event["t"]
@@ -1124,13 +1196,14 @@ class Incidents:
         identifier = f"{stamp}-{event['kind']}"
         samples = read_samples(self.samples, opened - self.window, opened)
         slow = [sample for sample in samples if sample.get("kind") == "slow"]
-        self.path = self.directory / f"{identifier}.json"
-        self.current = {
+        path = self.directory / f"{identifier}.json"
+        data = {
             "schema": f"{SCHEMA}/incident",
             "id": identifier,
             "opened": opened,
             "finalized": False,
             "events": [event],
+            "dropped_events": 0,
             "window": {
                 "start": round(opened - self.window, 3),
                 "end": opened,
@@ -1140,39 +1213,61 @@ class Incidents:
             "t9": t9_growth(slow),
             "following": None,
         }
-        self.write(self.current, self.path)
+        self.write(data, path)
+        self.open_record = HeldRecord.of(path, data)
 
-    def add(self, record: Record, path: Path | None, event: Record) -> None:
-        events = record["events"]
-        if all((known["t"], known["kind"], known["message"]) != (event["t"], event["kind"], event["message"])
-               for known in events):
+    def add(self, held: HeldRecord, event: Record) -> None:
+        """Join an event to a held record, in memory. A duplicate changes nothing, and a new event over a cap is
+        only counted."""
+        key = event_key(event)
+        if key in held.keys:
+            return
+        events = held.data["events"]
+        unrecognized = event["message"] == KERNEL_OOM_UNRECOGNIZED
+        if len(events) >= MAX_RECORD_EVENTS or (unrecognized and held.unrecognized >= MAX_UNRECOGNIZED_EVENTS):
+            dropped = held.data.get("dropped_events")
+            held.data["dropped_events"] = (dropped if isinstance(dropped, int) else 0) + 1
+        else:
             events.append(event)
             events.sort(key=lambda known: known["t"])
-            self.write(record, path)
+            held.keys.add(key)
+            held.unrecognized += unrecognized
+        held.unwritten = True
+
+    def flush(self) -> None:
+        """Write each held record that changed since it was last written. The run loop calls this once per tick."""
+        for held in (self.open_record, self.late):
+            if held is not None and held.unwritten:
+                self.write_held(held)
+        self.late = None  # read again if more late events join it
 
     def finalize_due(self, now: float) -> None:
-        if self.current is not None and now - self.current["opened"] > self.grace:
+        if self.open_record is not None and now - self.open_record.data["opened"] > self.grace:
             self.finalize()
 
     def finalize(self) -> None:
-        if self.current is not None and self.path is not None:
-            self.finish(self.current, self.path)
-        self.current = self.path = None
+        if self.open_record is not None:
+            self.finish(self.open_record.data, self.open_record.path)
+        self.open_record = None
         self.prune()
 
-    def finish(self, record: Record, path: Path) -> None:
-        opened = record["opened"]
+    def finish(self, data: Record, path: Path) -> None:
+        opened = data["opened"]
         following = read_samples(self.samples, opened + 1e-6, opened + self.grace)
-        record["following"] = {"fast": [sample for sample in following if sample.get("kind") == "fast"]}
-        record["finalized"] = True
-        self.write(record, path)
+        data["following"] = {"fast": [sample for sample in following if sample.get("kind") == "fast"]}
+        data["finalized"] = True
+        self.write(data, path)
 
-    def write(self, record: Record, path: Path | None) -> None:
-        if path is not None:
-            self.bytes_written += write_json_atomic(path, record, durable=True)
+    def write_held(self, held: HeldRecord) -> None:
+        self.write(held.data, held.path)
+        held.unwritten = False
+
+    def write(self, data: Record, path: Path) -> None:
+        self.bytes_written += write_json_atomic(path, data, durable=True)
 
     def prune(self) -> None:
-        records = sorted(path for path in self.directory.glob("*.json") if path != self.path)
+        held = self.held_paths()
+        records = sorted(path for path in self.directory.glob("*.json") if path not in held)
         for path in records[: max(0, len(records) - self.max_files)]:
             try:
                 path.unlink()
@@ -1189,8 +1284,9 @@ class Journal:
     newest entry read. Without a saved position it follows from the journal's end.
 
     The position a child continues from (`cursor`) is the last entry read. The position saved for
-    a restart (`handled`) is the last entry whose handling finished, so an entry whose handling
-    failed is read again rather than skipped."""
+    a restart (`handled`) is the last entry whose handling finished, with every record change it
+    caused written (Collector.handle), so an entry whose handling failed, or whose change was still
+    waiting to be written, is read again rather than skipped."""
 
     def __init__(self, command: str, cursor_path: Path) -> None:
         self.command = command
@@ -1391,17 +1487,20 @@ class Collector:
         self.previous_fast: Record | None = None
         self.previous_slow: Record | None = None
         self.ticks = 0
+        self.unwritten_entry: Record | None = None  # the newest journal entry whose record change is not written
 
     def tick(self, lag: float) -> None:
-        now = time.time()
         if self.ticks % self.options.slow_every == 0:
             self.limit, self.limit_source, self.limit_errors = oomd_swap_used_limit(self.sources.config)
             slow, self.watched, self.sampled = slow_sample(
-                self.sources, self.options.watch, self.options.oomd_root, now, self.boot, self.previous_slow,
-                self.sampled)
+                self.sources, self.options.watch, self.options.oomd_root, time.time(), self.boot,
+                self.previous_slow, self.sampled)
             slow["collector_cgroup"] = self.own_cgroup()
             self.store.append(slow)
             self.previous_slow = slow
+        # Stamped as it reads its sources, after any slow scan: rates divide the change of the counters by the
+        # time between two reads, and a slow scan can take a large part of an interval under memory pressure.
+        now = time.time()
         fast = fast_sample(self.sources, self.limit, self.watched, now, self.boot, self.previous_fast)
         fast["oomd"] = {"swap_used_limit": self.limit, "source": self.limit_source}
         add_unavailable(fast, self.limit_errors)
@@ -1410,8 +1509,27 @@ class Collector:
         self.store.bytes_written += write_json_atomic(self.state / "latest.json", fast)
         self.previous_fast = fast
         self.incidents.finalize_due(now)
+        self.flush()
         self.journal.save_cursor()
         self.ticks += 1
+
+    def handle(self, entry: Record) -> None:
+        """Handle one journal entry. It counts as handled, so a restart resumes after it, once every record change
+        it caused is written; while a change waits in memory for the tick's write, so do the entries after it."""
+        self.incidents.handle(entry)
+        if self.incidents.unwritten:
+            self.unwritten_entry = entry
+        else:
+            self.journal.mark_handled(entry)
+            self.unwritten_entry = None
+
+    def flush(self) -> None:
+        """Write the record changes kept in memory, then mark the entries they cover as handled. If a write
+        raises, nothing after the last successful write is marked."""
+        self.incidents.flush()
+        if self.unwritten_entry is not None:
+            self.journal.mark_handled(self.unwritten_entry)
+            self.unwritten_entry = None
 
     def footprint(self, lag: float) -> Record:
         """The collector's own cost: cumulative CPU, memory and bytes written."""
@@ -1477,10 +1595,11 @@ def run(options: argparse.Namespace) -> int:
                     break
                 wait = min(next_tick - now, 1.0, (deadline - now) if deadline is not None else 1.0)
                 for entry in journal.poll(wait):
-                    collector.incidents.handle(entry)
-                    # An entry whose handling raised is never marked, so a restart reads it again. Only a
-                    # failing sink raises here, such as a record that cannot be written.
-                    journal.mark_handled(entry)
+                    # An entry whose handling raised, or whose record change is not written yet, is not marked
+                    # handled, so a restart reads it again. Only a failing sink raises here, such as a record
+                    # that cannot be written.
+                    collector.handle(entry)
+        collector.flush()  # stopping: write the changes the last entries made, then mark them handled
     finally:
         journal.close()
         collector.store.close()

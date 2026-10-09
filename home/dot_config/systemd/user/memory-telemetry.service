@@ -21,9 +21,12 @@
 # lingering keeps the manager running between logins (Linger=yes), at the next
 # login elsewhere. To start it now, or after an apply that changes it:
 #   systemctl --user daemon-reload && systemctl --user restart memory-telemetry.service
-# To turn it off for good, delete its chezmoi source files or ignore their
-# targets in home/.chezmoiignore, then delete the live files and run:
-#   systemctl --user disable --now memory-telemetry.service && systemctl --user daemon-reload
+# To turn it off for good, first stop and disable it while its files still
+# exist (disable needs the unit file):
+#   systemctl --user disable --now memory-telemetry.service
+# then delete its chezmoi source files or ignore their targets in
+# home/.chezmoiignore, delete the live files, and run:
+#   systemctl --user daemon-reload
 # The record stays in ~/.local/state/memory-telemetry until deleted.
 
 [Unit]

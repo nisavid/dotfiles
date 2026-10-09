@@ -50,7 +50,7 @@ task names.
 
 | Sample | Every | Contents |
 |---|---|---|
-| fast | 10 s | T1, T2, T3, T4 and T8: the shared counters |
+| fast | 10 s | T1, T2, T3 and T8, the shared counters, and T4 |
 | slow | 60 s (every 6th fast sample) | Per-cgroup T3–T6, the oomd swap-holder ranking (T4), and T9 attribution |
 | kill record | on each oomd or kernel OOM kill | T7 events with the preceding 15 minutes of samples |
 
@@ -83,7 +83,10 @@ Retention keeps samples for 30 days and at most 512 MiB in total, deleting the
 oldest hour first; the open hour is never deleted. At the measured volume (see
 [Measured cost](#measured-cost)), the 30-day bound is the one that applies to
 samples. `incidents/` keeps the newest 200 kill records; at an estimated
-0.7–0.8 MB each, that is up to about 150 MB more.
+0.7–0.8 MB each, that is up to about 150 MB more. One record's size and write
+cost stay bounded whatever the journal delivers: it keeps at most 500 journal
+events (see [Kill records](#kill-records)), and it is written only a few times
+(see [Measured cost](#measured-cost)).
 
 Each line in a segment and each `latest.json` has:
 
@@ -91,7 +94,7 @@ Each line in a segment and each `latest.json` has:
 |---|---|
 | `schema` | `memory-telemetry/v1` |
 | `kind` | `fast` or `slow` |
-| `t` | Unix time in seconds, wall clock |
+| `t` | Unix time in seconds, wall clock, taken as the sample starts reading its sources |
 | `boot` | The boot ID. Counters are comparable only within one boot. |
 | `unavailable` | Present when a required source could not be read: source name to error class, such as `"proc:pressure/io": "FileNotFoundError"`. [When a source cannot be read](#when-a-source-cannot-be-read) lists the required sources and what the affected fields look like. Whether `journalctl` runs is reported in `collector.journal` instead. |
 | `interval_s` | Fast samples only: seconds since the previous fast sample, at least half the configured interval. The sample that ran late after a stall has a long one, and its rates are averages over it. Absent from the first sample after a start or a boot change. |
@@ -118,7 +121,7 @@ Sizes ending in `_kib` are KiB as `/proc/meminfo` reports them; sizes ending in
 | `t8.gtt_used_bytes`, `t8.devices` | T8 | amdgpu `mem_info_{gtt,vram}_{used,total}` |
 | `t8.gpu_active_kib`, `t8.gpu_reclaim_kib` | T8 | `GPUActive`, `GPUReclaim` in `/proc/meminfo` |
 | `oomd.swap_used_limit`, `oomd.source` | — | oomd's `SwapUsedLimit` and the file that set it, read like systemd reads `oomd.conf` and its drop-ins; `default`, or `default (configuration unreadable)` when a file could not be read |
-| `collector` | — | The collector's own cost, cumulative since it started: `cpu_s`, `rss_anon_kib`, `rss_file_kib`, `hwm_kib`, `bytes_written` (samples, `latest.json`, kill records and the journal cursor), `lag_ms` (how late this tick ran), `journal`, `journal_ignored`, and while `journalctl` runs, its `journal_cpu_s`, `journal_rss_anon_kib` and `journal_rss_file_kib`. `journal` is always present: `starting` in a run's first sample, which is taken before `journalctl` starts; `catching up` while it reads the entries after its saved position; `following`; `exited: <status>`; or `unavailable: <error>`, which is also what a `--journalctl` command that cannot be run reports. `journal_ignored` counts the kill messages dropped since the start because they came from a sender other than the managers (see [Kill records](#kill-records)) |
+| `collector` | — | The collector's own cost, cumulative since it started: `cpu_s`, `rss_anon_kib`, `rss_file_kib`, `hwm_kib`, `bytes_written` (samples, `latest.json`, kill records and the journal cursor), `lag_ms` (how late this tick ran), `journal`, `journal_ignored`, and while `journalctl` runs, its `journal_cpu_s`, `journal_rss_anon_kib` and `journal_rss_file_kib`. `journal` is always present: `starting` in a run's first sample, which is taken before `journalctl` starts; `catching up` while it reads the entries after its saved position; `following`; `exited: <status>`; or `unavailable: <error>`, which is also what a `--journalctl` command that cannot be run reports. `journal_ignored` counts the kill messages dropped since the start because they came from a sender other than the managers or repeated their `MESSAGE_ID` (see [Kill records](#kill-records)) |
 
 ### Slow samples
 
@@ -196,7 +199,10 @@ Any of these journal entries opens a record (T7):
 
 The kernel's `oom_reaper:` lines, oomd's candidate details, and any other kernel
 line mentioning an OOM join an open record but never open one; such other lines
-are kept only as `(kernel OOM line in an unrecognized format)`.
+are kept only as `(kernel OOM line in an unrecognized format)`. Any process can
+put an OOM word in its task name, and the kernel prints task names on lines of
+their own (each row of an OOM report's task table, each segfault line), so a
+record keeps at most 50 such lines.
 
 A `MESSAGE_ID` is set by whoever writes the entry, and any local process can
 write to the journal, so the two systemd messages count only when journald
@@ -206,8 +212,17 @@ user's manager (`_UID` this user's, `_SYSTEMD_UNIT=user@<uid>.service`,
 `_SYSTEMD_USER_UNIT=init.scope`). Those are the only senders of these messages in
 this host's journal over the last 30 days. A message from any other sender opens
 and joins nothing; it is counted in `collector.journal_ignored` and not
-recorded. oomd's log and the kernel lines are told by `_SYSTEMD_UNIT` and
-`_TRANSPORT`, which journald also sets. A record has no cap on its events.
+recorded. So is an entry that repeats `MESSAGE_ID` (`journalctl` prints the
+values as a list) with one of the two among the values, whoever sent it: the
+managers never repeat it. oomd's log and the kernel lines are told by
+`_SYSTEMD_UNIT` and `_TRANSPORT`, which journald also sets.
+
+A record keeps at most 500 events; this host's 30-day journal gives 1–22 per
+record. An event new to the record that would go over a cap (500 events, or 50
+kernel lines in an unrecognized format) is not kept and is counted in
+`dropped_events`. A duplicate of a kept event changes nothing, but a dropped
+event is not remembered, so reading it again, as the catch-up after a restart
+can, counts it again.
 
 Entries within 60 s of a record's first entry join that record, even if the
 record was closed on an earlier tick or by an earlier collector process, so a
@@ -218,7 +233,8 @@ holds:
 |---|---|
 | `id` | UTC time of the first event and its kind, also the file name |
 | `opened` | Unix time of the first event, in seconds |
-| `events` | The journal events, in order |
+| `events` | The journal events, in order, at most 500 |
+| `dropped_events` | How many new events the record did not keep because they would have gone over a cap |
 | `window.fast`, `window.slow` | Every sample from the 15 minutes before the first event: T1–T4 and T8, and the per-cgroup and T9 detail |
 | `t9.latest` | The latest T9 attribution before the kill |
 | `t9.growth` | The classes and trees whose anonymous plus swapped memory grew most. Each is measured from the earliest window sample that knows its size: one that lists it, or one whose list for its cgroup is complete (no `(rest)`), where it had nothing. Each item has `cgroup`, `section` (`classes` or `trees`), `exe` and `role` or `tree`, `anon_swap_kib` (its size now), `growth_kib`, `since` (the time of the sample it is measured from) and `new` (`true` when it had nothing then) |
@@ -230,6 +246,13 @@ The kill record reads the window from the sample segments, so a kill found in
 the journal after a restart still gets the samples recorded before it, and a
 damaged compressed segment contributes the samples before the damage. The #366
 `builds.slice` cap kills open records too.
+
+The collector reads a stored record only to join, resume or finalize it, and
+never reads one larger than 8 MiB, more than ten times a genuine record, so
+that parsing one stays well inside the unit's `MemoryMax=128M` (a parsed record
+takes about 4.7 times its file size at the peak). A larger record is left as it
+is, never joined, resumed or finalized, until the 200-record cap deletes it; an
+entry that would have joined it is handled as if it were absent.
 
 ## Reading the shared counters (#403)
 
@@ -274,39 +297,46 @@ includes page cache and the charged zswap pool), `oomctl`'s per-cgroup swap
 
 ## Measured cost
 
-Measured on 2026-10-08 over a 10-minute run at the default cadence against the
-live host (kernel 7.2.9), while the watched cgroups held about 1,610 processes
-(562 in the Claude Desktop scope, 996 in the ChatGPT Chromium scope) and
-oomd's roots held 165 leaf cgroups. Every figure comes from that run's own
-records: the `collector` blocks, the record sizes, and the process and cgroup
-counts in its last slow sample.
+Measured on 2026-10-09 (UTC) over a 10-minute run at the default cadence
+against the live host (kernel 7.2.9), while the watched cgroups held about
+1,690 processes (611 in the Claude Desktop scope, 1,013 in the ChatGPT Chromium
+scope) and oomd's roots held 163 leaf cgroups. Every figure comes from that
+run's own records (the `collector` blocks, the record sizes, and the process
+and cgroup counts in its last slow sample), except the reads, which come from
+`/proc/<pid>/io` and `/usr/bin/time`. The highest values are those this run
+observed, not bounds.
 
 | Measure | Value |
 |---|---|
-| CPU per fast sample | about 2 ms (3 ms at most) |
-| CPU per slow sample, including the T9 scan and the 165 leaf cgroups | about 67 ms (70 ms at most) |
-| CPU at startup, including the first slow sample | about 120 ms |
-| Average CPU of the collector | 0.12% of one core (0.70 s in 590 s) |
-| Average CPU of its `journalctl` | under 0.01% of one core (0.05 s in 10 minutes without kill messages) |
-| Memory of the collector | 15.3 MiB anonymous, 8.7 MiB file-backed, 24.0 MiB peak RSS |
-| Memory of its `journalctl` | 0.7 MiB anonymous, 6.7 MiB of mapped journal files, which is reclaimable page cache and varies with how much of the journal is mapped (34 MiB in an earlier run) |
-| Sample record | about 3.9 KB per fast sample and 23.1 KB per slow sample: about 67 MB a day uncompressed, about 9 MB a day once an hour is compressed (gzip, about 7×), so about 280 MB at 30 days |
-| Other writes | `latest.json`, replaced every 10 s: about 33 MB a day |
-| Tick lag | at most 2 ms |
+| CPU per fast sample | about 2 ms (3 ms highest observed) |
+| CPU per slow sample, including the T9 scan and the 163 leaf cgroups | about 75 ms (85 ms highest observed) |
+| CPU at startup, including the first slow sample | about 130 ms |
+| Average CPU of the collector | 0.13% of one core (0.78 s in 590 s) |
+| Average CPU of its `journalctl` | about 0.015% of one core (0.09 s in 10 minutes without kill messages) |
+| Memory of the collector | 15.6 MiB anonymous, 8.6 MiB file-backed, 24.3 MiB peak RSS |
+| Memory of its `journalctl` | 0.8 MiB anonymous, 35.9 MiB of mapped journal files, which is reclaimable page cache and varies with how much of the journal is mapped (6.7 MiB in an earlier run) |
+| Reads | Each `journalctl` start reads journal files to find where to start and the matching entries after it: 147 MB from disk in this run's first 20 s (its `read_bytes`; `/usr/bin/time` counted the same 147 MB of file-system input for the whole run), and 42 MB in an earlier run. How much comes from disk depends on how much of the 3.4 GB journal is in the page cache. In steady state it reads nothing more from disk, and the collector itself read 32 KiB: its `/proc` and `/sys` reads are not disk I/O. Each collector start, and each restart of `journalctl`, reads again, from the saved position when there is one. |
+| Sample record | about 3.7 KB per fast sample and 21.7 KB per slow sample: about 63 MB a day uncompressed, about 8.5 MB a day once an hour is compressed (gzip, about 7×), so about 250 MB at 30 days |
+| Other writes | `latest.json`, replaced every 10 s: about 32 MB a day |
+| Tick lag | 1.4 ms highest observed |
 
 The slow-sample cost grows with the number of processes in the watched
-cgroups: the run's median slow sample took about 42 µs per process.
+cgroups: the run's median slow sample took about 44 µs per process.
 
 Kill records are not in these figures: no kill happened during the run, and
 the kill-record path has been tested only with fixtures. Estimated from the
 run's median sample sizes, a record holds about 90 fast and 15 slow samples
 from its window, 6 following fast samples and its T9 summary, about 0.7–0.8 MB,
-so the 200 records `incidents/` keeps take up to about 150 MB. Each journal
-event that joins a record rewrites the whole record and syncs it to disk, so a
-kill whose five journal messages join one record writes it up to six times:
-about 4.5 MB at that size. At each start the collector reads and parses every
-stored record to finalize any left open; the startup figure above was measured
-with none stored.
+so the 200 records `incidents/` keeps take up to about 150 MB. A record is
+written, and synced to disk, when it opens, at most once per tick while journal
+events join it, and when it is finalized, however many events arrive. A kill
+whose messages all arrive within one 10-s tick writes its record three times,
+about 2 MB at that size; one whose events keep arriving for the whole 60 s
+writes it at most about eight times, about 6 MB. At each start
+the collector reads and parses every stored record to finalize any left open;
+the startup figure above was measured with none stored. With 200 stored records
+of 0.69 MB each, that parse took about 3.5 s of CPU per start, and 10–20 s of
+wall time on a loaded host.
 
 These are per-process figures from runs started by hand, outside the unit. The
 memory charged to the unit's own cgroup, which also counts page cache from its
@@ -362,11 +392,17 @@ start again from the journal's end. The journal's own retention depends on an
 unmanaged journald setting.
 
 The saved position is that of the last entry the collector finished handling,
-not of the last one it read. If handling an entry fails, such as a kill record
-that cannot be written because the state directory is full or not writable, the
-collector exits with the error, the position stays before that entry, and the
-restart 30 s later reads it again. While the failure lasts, that repeats every 30
-s, and each start also reads every stored kill record.
+not of the last one it read, and an entry is finished only once every
+kill-record change it caused is written. Events that join a record wait in
+memory for the next tick's write, so the position stays before them, and before
+every entry read after them, until that write succeeds; a collector stopped by
+`SIGTERM` writes them first and then saves the position. If handling an entry
+fails, such as a kill record that cannot be written because the state directory
+is full or not writable, the collector exits with the error, the position stays
+before every entry whose change was not written, and the restart 30 s later
+reads them again without duplicating what was written. While the failure
+lasts, that repeats every 30 s, and each start also reads every stored kill
+record.
 
 ## Operating it
 
