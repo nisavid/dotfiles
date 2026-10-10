@@ -84,7 +84,7 @@ linux_packages=$(
   ' <<<"$linux_install"
 )
 linux_install_words=(${=linux_packages})
-for package in acl bat ca-certificates curl gcc git jq libc6-dev openssh-client procps psmisc python3 ripgrep systemd util-linux zsh; do
+for package in acl bat ca-certificates curl dbus-daemon dbus-tests gcc git jq libc6-dev libglib2.0-bin openssh-client procps psmisc python3 ripgrep systemd util-linux zsh; do
   (( ${linux_install_words[(Ie)$package]} )) ||
     fail "Actions does not install the Linux runtime dependency $package"
 done
@@ -97,7 +97,17 @@ for linux_pin in \
   'https://github.com/astral-sh/uv/releases/download/0.11.32/$uv_archive' \
   'AGE_TOOLING_ARCHIVE=%s' \
   'AGE_TOOLING_ARCHIVE_SHA256=%s' \
-  '"$RUNNER_TEMP/age/age-inspect"'
+  '"$RUNNER_TEMP/age/age-inspect"' \
+  'rclone_version=1.75.2' \
+  'rclone_archive=rclone-v${rclone_version}-linux-amd64.zip' \
+  'https://downloads.rclone.org/v${rclone_version}/$rclone_archive' \
+  '349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702' \
+  '"$rclone_package" | sha256sum --check' \
+  'python3 -m zipfile -e "$rclone_package" "$RUNNER_TEMP/rclone"' \
+  'sudo install -m 0755' \
+  '"$RUNNER_TEMP/rclone/rclone-v${rclone_version}-linux-amd64/rclone" /usr/bin/rclone' \
+  'rclone_output=$(/usr/bin/rclone version)' \
+  'test "${rclone_output%%$'"'"'\n'"'"'*}" = "rclone v1.75.2"'
 do
   [[ $linux_install == *$linux_pin* ]] ||
     fail "Actions is missing the pinned Linux tooling contract: $linux_pin"
@@ -113,6 +123,10 @@ grep -Fq \
   "python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'" \
   "$test_groups" ||
   fail 'platform test groups do not discover production agent-equipment tests'
+grep -Fqx \
+  '  python3 -m unittest tests.test_proton_drive_desktop tests.test_proton_drive_desktop_deployment' \
+  "$test_groups" || \
+  fail 'platform test groups do not run both desktop suites'
 expected_pyrefly_type_gate=$(
   print -rl -- \
     '  uvx --from pyrefly==1.2.0 pyrefly check \' \
@@ -493,6 +507,7 @@ typeset -a darwin_only_patterns=(
   '.local/bin/cmake'
   '.local/bin/makepkg'
   '.local/bin/ninja'
+  '.local/bin/proton-drive-desktop'
   '.local/lib/builds-slice'
 )
 
@@ -546,8 +561,10 @@ expected_linux_source_inventory=$(
     'dot_config/systemd/user/builds.slice' \
     'dot_config/systemd/user/codex-usage-safeguard.service.tmpl' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
+    'dot_config/systemd/user/proton-drive-desktop.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
     'private_dot_local/private_share/applications/claude-code-url-handler.desktop' \
+    'private_dot_local/private_share/applications/proton-drive.desktop.tmpl' \
     'private_dot_local/private_share/applications/proton-pass-url-handler.desktop'
 )
 [[ $linux_source_inventory == $expected_linux_source_inventory ]] ||
