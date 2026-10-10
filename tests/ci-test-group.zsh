@@ -199,20 +199,20 @@ jobs:
             acl bat ca-certificates curl dbus-daemon dbus-tests gcc git jq libc6-dev \
             libglib2.0-bin openssh-client procps psmisc python3 ripgrep systemd util-linux zsh
           [[ -e /usr/local/bin/bat ]] || sudo ln -s /usr/bin/batcat /usr/local/bin/bat
-          rclone_version=1.75.1
+          rclone_version=1.75.2
           rclone_archive=rclone-v${rclone_version}-linux-amd64.zip
           rclone_package="$RUNNER_TEMP/$rclone_archive"
           curl --fail --location --silent --show-error \
             --output "$rclone_package" \
             "https://downloads.rclone.org/v${rclone_version}/$rclone_archive"
           printf '%s  %s\n' \
-            982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab \
+            349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702 \
             "$rclone_package" | sha256sum --check
           python3 -m zipfile -e "$rclone_package" "$RUNNER_TEMP/rclone"
           sudo install -m 0755 \
             "$RUNNER_TEMP/rclone/rclone-v${rclone_version}-linux-amd64/rclone" /usr/bin/rclone
           rclone_output=$(/usr/bin/rclone version)
-          test "${rclone_output%%$'\n'*}" = "rclone v1.75.1"
+          test "${rclone_output%%$'\n'*}" = "rclone v1.75.2"
           archive=chezmoi_${CHEZMOI_VERSION}_linux_amd64.tar.gz
           package="$RUNNER_TEMP/$archive"
           curl --fail --location --silent --show-error \

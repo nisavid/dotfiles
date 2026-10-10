@@ -31,7 +31,7 @@ TEST_MOUNT_TAG = "proton-drive-desktop-" + "ab" * 32
 REAL_FSTAT = os.fstat
 REAL_POPEN = subprocess.Popen
 RCLONE_VERSION_COMMAND = ["/usr/bin/rclone", "version"]
-RCLONE_VERSION_OUTPUT = b"rclone v1.75.1\n- os/version: synthetic\n"
+RCLONE_VERSION_OUTPUT = b"rclone v1.75.2\n- os/version: synthetic\n"
 INTERRUPTED_CLEANUP_DIAGNOSTIC = (
     "interrupted retained mountpoint cleanup requires stopped recovery"
 )
@@ -92,6 +92,14 @@ class SyntheticVersionProcess:
 
     def wait(self, timeout=None):
         return self.returncode
+
+
+def synthetic_version_popen(command, *args, **kwargs):
+    if command != RCLONE_VERSION_COMMAND:
+        raise AssertionError(f"unexpected synthetic process command: {command!r}")
+    return SyntheticVersionProcess(subprocess.CompletedProcess(
+        command, 0, stdout=RCLONE_VERSION_OUTPUT
+    ))
 
 
 def invoke(
@@ -2068,11 +2076,11 @@ class PublicCommandTests(unittest.TestCase):
                 RCLONE_VERSION_COMMAND, 0, stdout=b"not-rclone\n"
             ),
             "invalid-utf8": subprocess.CompletedProcess(
-                RCLONE_VERSION_COMMAND, 0, stdout=b"rclone v1.75.1\xff\n"
+                RCLONE_VERSION_COMMAND, 0, stdout=b"rclone v1.75.2\xff\n"
             ),
             "oversized": subprocess.CompletedProcess(
                 RCLONE_VERSION_COMMAND, 0,
-                stdout=b"rclone v1.75.1\n" + b"x" * 8192,
+                stdout=b"rclone v1.75.2\n" + b"x" * 8192,
             ),
             "failing": subprocess.CompletedProcess(
                 RCLONE_VERSION_COMMAND, 23, stdout=b"secret-canary\n"
@@ -4498,7 +4506,7 @@ class PublicCommandTests(unittest.TestCase):
             class FakeSubprocess:
                 PIPE = subprocess.PIPE
                 DEVNULL = subprocess.DEVNULL
-                Popen = subprocess.Popen
+                Popen = staticmethod(synthetic_version_popen)
                 TimeoutExpired = subprocess.TimeoutExpired
 
                 @staticmethod
@@ -7613,7 +7621,7 @@ class PublicCommandTests(unittest.TestCase):
             class FakeSubprocess:
                 PIPE = subprocess.PIPE
                 DEVNULL = subprocess.DEVNULL
-                Popen = subprocess.Popen
+                Popen = staticmethod(synthetic_version_popen)
                 TimeoutExpired = subprocess.TimeoutExpired
 
                 @staticmethod
@@ -7708,7 +7716,7 @@ class PublicCommandTests(unittest.TestCase):
             class FakeSubprocess:
                 PIPE = subprocess.PIPE
                 DEVNULL = subprocess.DEVNULL
-                Popen = subprocess.Popen
+                Popen = staticmethod(synthetic_version_popen)
                 TimeoutExpired = subprocess.TimeoutExpired
 
                 @staticmethod
@@ -7787,6 +7795,9 @@ class PublicCommandTests(unittest.TestCase):
             self.assertEqual("211", marker["mount_id"])
 
     def test_concurrent_public_and_service_first_binding_have_one_winner(self):
+        self.enterContext(mock.patch(
+            "subprocess.Popen", side_effect=synthetic_version_popen
+        ))
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             runtime = root / "run"
@@ -7925,7 +7936,7 @@ class PublicCommandTests(unittest.TestCase):
             class FakeSubprocess:
                 PIPE = subprocess.PIPE
                 DEVNULL = subprocess.DEVNULL
-                Popen = subprocess.Popen
+                Popen = staticmethod(synthetic_version_popen)
                 TimeoutExpired = subprocess.TimeoutExpired
 
                 @staticmethod
@@ -8030,6 +8041,9 @@ class PublicCommandTests(unittest.TestCase):
             self.assertEqual("212", marker["mount_id"])
 
     def test_public_start_does_not_hold_binding_lock_while_service_prepares(self):
+        self.enterContext(mock.patch(
+            "subprocess.Popen", side_effect=synthetic_version_popen
+        ))
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             runtime = root / "run"
@@ -8076,6 +8090,9 @@ class PublicCommandTests(unittest.TestCase):
             self.assertEqual([prepared[0], prepared[0]], prepared)
 
     def test_cleanup_finishes_before_overlapping_preparation_publishes_new_state(self):
+        self.enterContext(mock.patch(
+            "subprocess.Popen", side_effect=synthetic_version_popen
+        ))
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             config_parent = root / "config/rclone"
@@ -8196,6 +8213,9 @@ class PublicCommandTests(unittest.TestCase):
                 self.assertFalse(marker.exists())
 
     def test_preparation_finishes_before_public_cleanup_and_is_preserved(self):
+        self.enterContext(mock.patch(
+            "subprocess.Popen", side_effect=synthetic_version_popen
+        ))
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             config_parent = root / "config/rclone"
@@ -10687,13 +10707,13 @@ def run_real_user_manager_cleanup_retention(
             check=False,
         )
     except OSError:
-        raise RuntimeError("rclone 1.75.1 is unavailable") from None
+        raise RuntimeError("rclone 1.75.2 is unavailable") from None
     if (
         rclone_version.returncode != 0
         or not isinstance(rclone_version.stdout, bytes)
-        or rclone_version.stdout.splitlines()[:1] != [b"rclone v1.75.1"]
+        or rclone_version.stdout.splitlines()[:1] != [b"rclone v1.75.2"]
     ):
-        raise RuntimeError("rclone 1.75.1 is unavailable")
+        raise RuntimeError("rclone 1.75.2 is unavailable")
 
     bus_address = os.environ.get(
         "DBUS_SESSION_BUS_ADDRESS", f"unix:path={runtime_base}/bus"
@@ -12248,7 +12268,7 @@ class RealUserManagerCleanupRetentionFixtureTests(unittest.TestCase):
 
         evidence, boundary = self.run_synthetic_fixture()
         with self.assertRaisesRegex(
-            RuntimeError, "rclone 1.75.1 is unavailable"
+            RuntimeError, "rclone 1.75.2 is unavailable"
         ):
             run_real_user_manager_cleanup_retention(
                 evidence, command_runner=command_runner,
@@ -12262,7 +12282,7 @@ class RealUserManagerCleanupRetentionFixtureTests(unittest.TestCase):
         evidence, boundary = self.run_synthetic_fixture("rclone-unavailable")
 
         with self.assertRaisesRegex(
-            RuntimeError, "rclone 1.75.1 is unavailable"
+            RuntimeError, "rclone 1.75.2 is unavailable"
         ):
             run_real_user_manager_cleanup_retention(
                 evidence,

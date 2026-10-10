@@ -37,12 +37,12 @@ interval is unsupported: stock rclone/FUSE mounts and unmounts by pathname,
 so a replacement may be mounted over or unmounted despite a preceding identity
 check. This contract also applies at logout and direct service shutdown.
 Activation therefore still requires an ordinary-user live check
-with rclone 1.75.1 and the distribution FUSE helper; synthetic exec mocks do
+with rclone 1.75.2 and the distribution FUSE helper; synthetic exec mocks do
 not establish that FUSE works.
 
 ## Prerequisites
 
-Use Linux with Plasma, systemd user services, Dolphin, rclone 1.75.1, the
+Use Linux with Plasma, systemd user services, Dolphin, rclone 1.75.2, the
 distribution FUSE helper, KWallet's Secret Service, and the credential client
 at `/usr/bin/secret-tool`. Before authentication or mounting, inspect the
 installed client and confirm that the credential client is executable:
@@ -52,7 +52,7 @@ installed client and confirm that the credential client is executable:
 test -x /usr/bin/secret-tool
 ```
 
-The first version line must be `rclone v1.75.1`. Stop on a different version
+The first version line must be `rclone v1.75.2`. Stop on a different version
 or a failed command; qualify that client revision before proceeding. Confirm
 the executable belongs to the expected distribution package and has not been
 locally replaced. On Arch, use `pacman -Qo /usr/bin/rclone` and
@@ -668,7 +668,7 @@ python3 tests/test_proton_drive_desktop.py \
 ```
 
 The command prints the absolute receipt path and returns nonzero when the user
-manager, its bus, `libsystemd.so.0` sd-bus runtime, rclone 1.75.1, or directory
+manager, its bus, `libsystemd.so.0` sd-bus runtime, rclone 1.75.2, or directory
 xattrs are unavailable. It never skips an unavailable requirement.
 
 The fixture keeps its home, config, data, runtime, lifecycle runner, and hook
@@ -717,7 +717,7 @@ credential client, FUSE, provider, installed Proton service, or network.
 Accept the receipt only when all of this evidence is present:
 
 - The local rclone preflight and the hook's own version check both see exactly
-  rclone 1.75.1. An unavailable executable or another version is a prerequisite
+  rclone 1.75.2. An unavailable executable or another version is a prerequisite
   failure, not lifecycle evidence.
 - The manager start returns nonzero. The start-pre record contains status 1,
   empty standard output, and exactly `interrupted retained mountpoint cleanup
