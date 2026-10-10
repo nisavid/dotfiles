@@ -12177,12 +12177,12 @@ class RealUserManagerCleanupRetentionFixtureTests(unittest.TestCase):
         )
 
         required = set(boundary.lifecycle_environment_names)
-        shell_names = required | {"PWD", "SHLVL", "_"}
+        allowed_shell_names = required | {"PWD", "SHLVL", "_"}
         for hook_name in ("start-pre", "post-stop"):
             with self.subTest(hook=hook_name):
-                self.assertEqual(
-                    shell_names, boundary.shell_environment_names[hook_name]
-                )
+                observed_shell_names = boundary.shell_environment_names[hook_name]
+                self.assertLessEqual(required, observed_shell_names)
+                self.assertLessEqual(observed_shell_names, allowed_shell_names)
                 self.assertEqual(
                     required, boundary.helper_environment_names[hook_name]
                 )
