@@ -181,25 +181,53 @@ def invoke_credential(
     environment, launch_tag=TEST_MOUNT_TAG, **kwargs
 ):
     read_descriptor, write_descriptor = os.pipe()
+    pipe_output = bytearray()
+    collector_errors = []
+
+    def collect():
+        try:
+            while True:
+                chunk = os.read(read_descriptor, 8192)
+                if not chunk:
+                    break
+                pipe_output.extend(chunk)
+        except BaseException as error:
+            collector_errors.append(error)
+        finally:
+            try:
+                os.close(read_descriptor)
+            except OSError as error:
+                collector_errors.append(error)
+
+    collector = threading.Thread(target=collect, name="credential-output-collector")
+    collector_started = False
+    invocation_error = None
     try:
-        result = invoke(
-            ["_credential", launch_tag],
-            environment,
-            stdout_descriptor=write_descriptor,
-            **kwargs,
-        )
-        os.close(write_descriptor)
-        write_descriptor = None
-        pipe_output = bytearray()
-        while True:
-            chunk = os.read(read_descriptor, 8192)
-            if not chunk:
-                break
-            pipe_output.extend(chunk)
+        collector.start()
+        collector_started = True
+        try:
+            result = invoke(
+                ["_credential", launch_tag],
+                environment,
+                stdout_descriptor=write_descriptor,
+                **kwargs,
+            )
+        except BaseException as error:
+            invocation_error = error
     finally:
-        if write_descriptor is not None:
+        try:
             os.close(write_descriptor)
-        os.close(read_descriptor)
+        finally:
+            if collector_started:
+                collector.join()
+            else:
+                os.close(read_descriptor)
+    if invocation_error is not None:
+        if collector_errors:
+            raise invocation_error from collector_errors[0]
+        raise invocation_error
+    if collector_errors:
+        raise collector_errors[0]
     code, redirected_output, error = result
     if pipe_output and redirected_output:
         raise AssertionError("credential output used two stdout paths")
@@ -5348,6 +5376,158 @@ class PublicCommandTests(unittest.TestCase):
             self.assertIsNotNone(
                 hung_processes[0].poll(), "timed-out producer survived"
             )
+
+    def test_credential_fixture_drains_a_4096_byte_output_pipe(self):
+        if os.sysconf("SC_PAGESIZE") != 4096:
+            self.skipTest("a 4096-byte pipe requires 4096-byte Linux pages")
+        worker_source = textwrap.dedent('''\
+            import fcntl
+            import json
+            import os
+            import pathlib
+            import runpy
+            import signal
+            import sys
+            import unittest
+            from unittest import mock
+
+            namespace = runpy.run_path(sys.argv[1])
+            module = namespace["invoke_credential"].__globals__
+            original = module["invoke_credential"]
+            real_pipe = os.pipe
+            real_popen = module["REAL_POPEN"]
+            pid_file = pathlib.Path(sys.argv[2])
+            processes = []
+            process_records = []
+            accepted_maximum = False
+            launching = False
+            termination_pending = False
+
+            def terminate(signum, frame):
+                global termination_pending
+                if launching:
+                    termination_pending = True
+                else:
+                    raise SystemExit("credential fixture worker terminated")
+
+            signal.signal(signal.SIGTERM, terminate)
+
+            def producer(*args, **kwargs):
+                global launching, termination_pending
+                launching = True
+                try:
+                    process = real_popen(*args, **kwargs)
+                    processes.append(process)
+                    status = pathlib.Path(f"/proc/{process.pid}/stat").read_text()
+                    process_records.append([
+                        process.pid, status.split(") ", 1)[1].split()[19]
+                    ])
+                    pid_file.write_text(json.dumps(process_records))
+                    return process
+                finally:
+                    launching = False
+                    if termination_pending:
+                        termination_pending = False
+                        raise SystemExit("credential fixture worker terminated")
+
+            def credential(*args, **kwargs):
+                capacities = []
+
+                def output_pipe():
+                    read_descriptor, write_descriptor = real_pipe()
+                    if not capacities:
+                        try:
+                            fcntl.fcntl(write_descriptor, fcntl.F_SETPIPE_SZ, 4096)
+                            capacity = fcntl.fcntl(
+                                write_descriptor, fcntl.F_GETPIPE_SZ
+                            )
+                            if capacity != 4096:
+                                raise AssertionError(
+                                    f"fixture output pipe capacity is {capacity}"
+                                )
+                            capacities.append(capacity)
+                        except BaseException:
+                            os.close(write_descriptor)
+                            os.close(read_descriptor)
+                            raise
+                    return read_descriptor, write_descriptor
+
+                with mock.patch("os.pipe", side_effect=output_pipe):
+                    outcome = original(*args, **kwargs)
+                if outcome == (0, "x" * 4096 + "\\n", ""):
+                    global accepted_maximum
+                    accepted_maximum = True
+                return outcome
+
+            try:
+                with mock.patch.dict(module, {
+                    "invoke_credential": credential,
+                    "REAL_POPEN": producer,
+                }):
+                    case = namespace["PublicCommandTests"](
+                        "test_credential_bounds_output_acquisition_and_reaps_producers"
+                    )
+                    result = unittest.TestResult()
+                    case.run(result)
+                if not result.wasSuccessful():
+                    raise AssertionError(result.errors + result.failures)
+                if not accepted_maximum:
+                    raise AssertionError("maximum credential was not captured")
+                print(json.dumps({"accepted_maximum": accepted_maximum}))
+            finally:
+                for process in processes:
+                    try:
+                        if process.poll() is None:
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                        process.wait(timeout=2)
+                    finally:
+                        process.stdout.close()
+        ''')
+
+        with tempfile.TemporaryDirectory() as temporary:
+            pid_file = pathlib.Path(temporary) / "producers.json"
+            worker = REAL_POPEN(
+                [sys.executable, "-c", worker_source, str(pathlib.Path(__file__).resolve()),
+                 str(pid_file)],
+                cwd=ROOT,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                try:
+                    output, error = worker.communicate(timeout=15)
+                except subprocess.TimeoutExpired:
+                    self.fail("credential fixture blocked on a measured 4096-byte pipe")
+                self.assertEqual(0, worker.returncode, error)
+                self.assertEqual("", error)
+                self.assertTrue(json.loads(output)["accepted_maximum"])
+            finally:
+                try:
+                    if worker.poll() is None:
+                        worker.terminate()
+                        try:
+                            worker.communicate(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            worker.kill()
+                            worker.communicate()
+                    if pid_file.exists():
+                        for process_id, start_time in json.loads(pid_file.read_text()):
+                            try:
+                                status = pathlib.Path(f"/proc/{process_id}/stat").read_text()
+                                if status.split(") ", 1)[1].split()[19] == start_time:
+                                    os.killpg(process_id, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            except FileNotFoundError:
+                                pass
+                finally:
+                    worker.stdout.close()
+                    worker.stderr.close()
 
     def test_failed_fixed_producers_terminate_forked_pipe_holders(self):
         worker_source = textwrap.dedent('''\
