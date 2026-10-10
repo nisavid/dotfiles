@@ -129,11 +129,18 @@ class DesktopDeploymentTests(unittest.TestCase):
             printf '%s\\n' "$*" >> "$SYNTHETIC_BALOO_CALLS"
             case "$1 $2 $3" in
               'config add excludeFolders')
-                grep -F -x -q -- "$4" "$SYNTHETIC_BALOO_STATE" 2>/dev/null ||
-                  printf '%s\\n' "$4" >> "$SYNTHETIC_BALOO_STATE"
+                [ "${SYNTHETIC_BALOO_FAILURE-}" != add ] || exit 74
+                if grep -F -x -q -- "$4" "$SYNTHETIC_BALOO_STATE"; then
+                  printf '%s\\n' 'Folder already excluded' >&2
+                  exit 1
+                fi
+                printf '%s\\n' "$4" >> "$SYNTHETIC_BALOO_STATE"
                 ;;
               'config list excludeFolders')
-                cat "$SYNTHETIC_BALOO_STATE"
+                [ "${SYNTHETIC_BALOO_FAILURE-}" != list ] || exit 75
+                while IFS= read -r entry; do
+                  printf '    %s%s\\n' "$entry" "${SYNTHETIC_BALOO_LIST_SUFFIX-/}"
+                done < "$SYNTHETIC_BALOO_STATE"
                 ;;
               *) exit 64 ;;
             esac
@@ -169,7 +176,7 @@ class DesktopDeploymentTests(unittest.TestCase):
             ["/existing/unrelated-exclusion", str(managed_parent)],
             state.read_text().splitlines(),
         )
-        self.assertEqual(4, len(calls.read_text().splitlines()))
+        self.assertEqual(5, len(calls.read_text().splitlines()))
 
     @unittest.skipUnless(sys.platform == "linux", "Baloo setup requires Linux stat")
     def test_documented_baloo_setup_accepts_a_valid_existing_parent(self):
@@ -189,7 +196,55 @@ class DesktopDeploymentTests(unittest.TestCase):
             ["/existing/unrelated-exclusion", str(managed_parent)],
             state.read_text().splitlines(),
         )
-        self.assertEqual(2, len(calls.read_text().splitlines()))
+        self.assertEqual(3, len(calls.read_text().splitlines()))
+
+    @unittest.skipUnless(sys.platform == "linux", "Baloo setup requires Linux stat")
+    def test_documented_baloo_setup_reuses_existing_exclusion(self):
+        for suffix in ("", "/"):
+            with self.subTest(list_suffix=suffix):
+                environment, state, calls = self.baloo_fixture()
+                data_home = self.root / "existing XDG data [glob]*? 'quote\" $cash` \\path"
+                managed_parent = data_home / "proton-drive-desktop"
+                managed_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                environment["XDG_DATA_HOME"] = str(data_home) + "///"
+                environment["SYNTHETIC_BALOO_LIST_SUFFIX"] = suffix
+                state.write_text(
+                    "/existing/unrelated-exclusion\n" + str(managed_parent) + "\n"
+                )
+                original_state = state.read_bytes()
+
+                for _ in range(2):
+                    result = self.run_baloo_setup(environment)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual("", result.stderr)
+
+                self.assertEqual(original_state, state.read_bytes())
+                self.assertEqual(
+                    ["config list excludeFolders"] * 4,
+                    calls.read_text().splitlines(),
+                )
+
+    @unittest.skipUnless(sys.platform == "linux", "Baloo setup requires Linux stat")
+    def test_documented_baloo_setup_preserves_baloo_failures(self):
+        for failure, status in (("add", 74), ("list", 75)):
+            with self.subTest(failure=failure):
+                environment, state, calls = self.baloo_fixture()
+                data_home = self.root / f"Baloo {failure} failure"
+                data_home.mkdir(mode=0o700)
+                environment["XDG_DATA_HOME"] = str(data_home)
+                environment["SYNTHETIC_BALOO_FAILURE"] = failure
+                original_state = state.read_bytes()
+
+                result = self.run_baloo_setup(environment)
+
+                self.assertEqual(status, result.returncode)
+                self.assertEqual(original_state, state.read_bytes())
+                expected_calls = ["config list excludeFolders"]
+                if failure == "add":
+                    expected_calls.append(
+                        f"config add excludeFolders {data_home / 'proton-drive-desktop'}"
+                    )
+                self.assertEqual(expected_calls, calls.read_text().splitlines())
 
     @unittest.skipUnless(sys.platform == "linux", "Baloo setup requires Linux stat")
     def test_documented_baloo_setup_rejects_unsafe_paths_before_baloo(self):
