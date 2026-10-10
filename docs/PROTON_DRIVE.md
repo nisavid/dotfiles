@@ -575,8 +575,8 @@ phase nonce and mount tag. For
 `prepare-publish` and `cleanup-retained`, it compares the current device and
 inode with the phase before recovery. For `prepare-publish`, the marker may be
 absent, the exact planned marker, or the structurally valid predecessor
-committed by the phase's mount tag. For `cleanup-retained`, an absent marker or
-a prepared or verified marker must
+at the same mount path committed by the phase's mount tag. For
+`cleanup-retained`, an absent marker or a prepared or verified marker must
 match the phase's mount, device, inode, created flag, nonce, and mount tag; a
 verified marker may retain its `mount_id`, and predecessor commitment does not
 apply. A present JSON `null`, scalar, array, malformed object, or object with
@@ -595,15 +595,19 @@ Apply only the matching branch:
   directory, restores the planned application identity when the interrupted
   write left it absent, publishes the marker, and removes the phase. When a
   missing recorded leaf was recreated, the retained predecessor marker is
-  accepted only when the phase's mount tag commits to its complete contents.
-  A different identity, device, inode, unrelated or malformed marker, mode, or
-  directory entry preserves every record and filesystem object.
+  accepted only when it names the same mount path and the phase's mount tag
+  commits to its complete contents. A different identity, device, inode,
+  unrelated or malformed marker, mode, or directory entry preserves every
+  record and filesystem object.
 - For `cleanup-retained`, require a successful inspection, then retry
   `proton-drive-desktop stop`. Cleanup accepts the unchanged recorded directory
   with the application identity either present or already removed. It removes
   only that identity and the matching private records. It retains the empty
-  directory and every other xattr. This covers marker-present and phase-only
-  interruptions.
+  directory and every other xattr. A failed `start`, `open`, or automatic
+  activation refuses this phase during preparation. The following unit
+  post-stop hook leaves the retained evidence unchanged; only explicit public
+  `stop` revalidates and completes this recovery. This covers marker-present
+  and phase-only interruptions.
 
 The result describes only the evidence observed during that invocation. It is
 not a durable authorization. Run only the printed `start` or `stop` action;
@@ -650,6 +654,140 @@ These tests use synthetic files and mocked account/process boundaries.
 Before publishing changes, also run the repository's privacy and diff checks
 from `AGENTS.md`. Credential or service behavior changes require review of
 the changed scope and new host qualification.
+
+### Qualify cleanup retention with a real user manager
+
+The root coordinator must run this fixture on a capable Linux host against the
+final reviewed revision. Run it from the repository root as the ordinary user
+whose real user manager is under qualification:
+
+```sh
+evidence_dir=$(mktemp -d -- "${TMPDIR:-/tmp}/proton-drive-manager-evidence.XXXXXXXX")
+python3 tests/test_proton_drive_desktop.py \
+  --real-user-manager-cleanup-retention "$evidence_dir"
+```
+
+The command prints the absolute receipt path and returns nonzero when the user
+manager, its bus, `libsystemd.so.0` sd-bus runtime, rclone 1.75.1, or directory
+xattrs are unavailable. It never skips an unavailable requirement.
+
+The fixture keeps its home, config, data, runtime, lifecycle runner, and hook
+records under one private directory in the current `XDG_RUNTIME_DIR`. It
+validates the ordinary user's existing `XDG_RUNTIME_DIR/systemd/private` as an
+owned Unix socket, then places a symlink to that exact socket at the supported
+`systemd/private` location inside the fixture runtime. The copied helper still
+uses its unchanged systemctl connection behavior. The fixture removes only its
+local alias before disposing or retaining the private root; it never removes or
+replaces the validated manager socket. It creates one uniquely named transient
+service; `systemd-run` uses
+`StartTransientUnit` and never calls `daemon-reload`, `link`, or
+`show-environment`. Every unit-targeted manager operation names that transient
+service. The fixture copies the reviewed production helper byte for byte, then
+changes only its service-unit binding to the unique test unit. It records both
+hashes and the replacement count in the receipt. After the launcher returns or
+raises, the fixture checks that unique unit's load state. A pre-execution launch
+exception followed by `not-found` retains its diagnostic and needs no unit stop.
+An observed creation receives checked unit cleanup even after a timeout or
+nonzero launcher result. A timeout or completed nonzero result followed by
+`not-found` leaves the launch outcome unresolved: a pending creation request
+may take effect after that separate query. The fixture names the unit
+and retains its private files for later checked cleanup; another negative query
+or an arbitrary delay does not resolve the outstanding creation request. If the
+probe fails or cannot establish the unit state, it likewise reports the launch
+failure and retained path. These failures publish no receipt. Keep the files
+until the pending launch is resolved and checked unit cleanup establishes that
+the unit is absent.
+
+The transient unit receives the known non-secret
+`PROTON_DRIVE_FIXTURE_SENTINEL`. Each lifecycle runner records only whether
+that name was present before the scrub. It launches the generated lifecycle
+file through its `#!/bin/sh` shebang and an `env -i` boundary containing only
+`HOME`, `LANG`, `PATH`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and
+`XDG_RUNTIME_DIR`. The shell-side record requires all six names and permits
+only the supported shell's `PWD`, `SHLVL`, and `_` housekeeping names. Before
+the lifecycle file invokes the copied helper, a second `env -i` passes exactly
+the six declared names. The records contain names and Boolean sentinel state,
+never values. The sentinel and arbitrary inherited names must be absent from
+both scrubbed boundaries. Because the unchanged helper passes its own
+environment to the fixed `/usr/bin/rclone version` command, this also checks
+that the version process receives the helper's minimal environment. A
+synthetic mode-0600 config and valid `cleanup-retained` evidence exercise no
+credential client, FUSE, provider, installed Proton service, or network.
+
+Accept the receipt only when all of this evidence is present:
+
+- The local rclone preflight and the hook's own version check both see exactly
+  rclone 1.75.1. An unavailable executable or another version is a prerequisite
+  failure, not lifecycle evidence.
+- The manager start returns nonzero. The start-pre record contains status 1,
+  empty standard output, and exactly `interrupted retained mountpoint cleanup
+  requires stopped recovery` on standard error. The post-stop record contains
+  status 0 with no diagnostic. The manager properties independently show
+  `ExecStartPre` status 1 and `ExecStopPost` status 0 for the lifecycle runner.
+- The manager reports the exact unique unit, `Transient=yes`, failed state, and
+  no main or control process. The `before` and `after_failed_start` recovery
+  snapshots are identical.
+- Public `stop` against the copied helper's unique unit removes the phase,
+  marker, and product identity xattr while preserving the directory identity,
+  mode, empty contents, and every unrelated xattr recorded before startup.
+  The before snapshot must contain the expected product identity; only that
+  attribute is removed from the expected after snapshot.
+- Public stop and checked teardown require that exact unit to be stopped
+  (`inactive` or `failed`) with `MainPID=0` and `ControlPID=0`. Checked teardown
+  then resets its failed state, verifies `inactive` with both process IDs still
+  zero, releases the narrow
+  unit reference that kept the transient unit inspectable during public
+  recovery, and requires final `LoadState=not-found`. One persistent sd-bus
+  connection owns `RefUnit` through public recovery and final inspection, then
+  performs `UnrefUnit` on that same connection. Failure cleanup closes the
+  connection after attempting checked unit cleanup.
+- The fixture builds receipt data only after qualification and checked unit
+  cleanup succeed. It disposes the private temporary root, writes a mode-0600
+  sibling temporary receipt in the evidence directory, and atomically renames
+  that file to the final JSON path. The temporary root is absent when the final
+  receipt becomes visible.
+
+Any prerequisite, manager-socket validation or alias cleanup, hook, diagnostic,
+manager-property, public-stop, evidence, teardown-stop, reset, reference
+release, collection, temporary-root disposal, or receipt-publication failure
+returns nonzero and leaves no qualifying final receipt. Missing bus or socket
+capability is a failure, never a skip. An unexpected fixture-local alias state
+retains the private root and does not authorize changes to the target socket. A
+teardown error names the exact transient unit and the retained private-file
+path, and reports the failed operation or exception. Completed manager-command
+failures use operation-specific messages; the fixture does not report their
+captured output or translate negative reference-release results. If that
+happens, keep the command output and those files, and use only that reported
+name for checked cleanup:
+
+```sh
+unit=proton-drive-cleanup-retention-REPLACE_WITH_REPORTED_SUFFIX.service
+systemctl --user stop "$unit"
+systemctl --user show "$unit" \
+  --property=ActiveState --property=MainPID --property=ControlPID
+systemctl --user reset-failed "$unit"
+systemctl --user show "$unit" --property=LoadState --value
+```
+
+Require inactive state, zero main and control PIDs, successful reset, and
+`not-found` from the final command. Do not reload the manager, remove a unit
+file, or treat failed cleanup as qualification. If these checks cannot be
+established, preserve the output and report the host gap.
+
+This fixture qualifies the failed `ExecStartPre` to `ExecStopPost` sequence,
+the later explicit-stop recovery, and collection of its transient test unit.
+The scratch synthetic boundary proves the fixture's connection-ownership,
+disconnect, launch-rejection and timeout handling, inconclusive probes,
+environment, disposal, and receipt rules; it does not prove a real
+manager's sender-scoped reference lifetime or garbage-collection timing. Only
+this root-coordinated host invocation can supply that evidence. The fixture
+does not qualify the installed unit, Plasma login or logout, KWallet, Secret
+Service, FUSE, rclone mounting, credentials, or provider behavior. Keep
+those activation gates in the host qualification above. Synthetic manager
+faults in the ordinary suite are labeled constructed negatives and cannot
+substitute for this coordinator-run real-manager proof. The fixture assumes no
+hostile same-user mutation during its bounded run; unexpected alias state is an
+unresolved failure, not qualification.
 
 Baloo's [settings schema](https://github.com/KDE/baloo/blob/master/src/lib/baloosettings.kcfg)
 defines folder exclusions. The installed `balooctl6 config` help describes

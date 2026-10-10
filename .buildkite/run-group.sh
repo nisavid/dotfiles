@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Provision a Buildkite hosted agent and run one scripts/ci-test-group group.
+# Retained provisioner for the archived Buildkite pipeline; offline tests only.
 #
-# Tool versions, and the arm64 macOS chezmoi and age digests, match
-# .github/workflows/platform-portability.yml, which installs uv with pip and no
-# digest. The Linux age digest is also pinned in
-# .github/workflows/privacy-age-integrity.yml; the other digests live only here.
-# .buildkite/pipeline.yml runs only Linux jobs, and the macOS path is kept so
-# the battery can move back onto Buildkite macOS.
+# The pinned Linux tools and macOS chezmoi/age digests also appear in
+# .github/workflows/platform-portability.yml. The protected boundary workflow
+# independently pins the Linux age digest.
+# Its historical Linux and macOS paths remain available for inspection.
+# GitHub Actions is the active CI provider for both platforms.
 # Linux jobs start as root in an ubuntu:24.04 container, so the tests run as
 # an unprivileged user, as they do on GitHub-hosted runners.
 set -euo pipefail
@@ -17,8 +16,6 @@ readonly AGE_LINUX_SHA256=bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f
 readonly AGE_DARWIN_SHA256=01120ea2cbf0463d4c6bd767f99f3271bbed1cdc8a9aa718a76ba1fe4f01998b
 readonly UV_VERSION=0.11.32
 readonly PYTHON_VERSION=3.12
-readonly RCLONE_VERSION=1.75.1
-readonly RCLONE_LINUX_SHA256=982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab
 # privacy-scan allows /home/runner paths, matching GitHub-hosted runners.
 readonly CI_USER=runner
 
@@ -78,14 +75,6 @@ install_tools() {
     UV_PYTHON_INSTALL_DIR=$tools/python "$tools/bin/uv" venv --quiet --clear \
       --python "$PYTHON_VERSION" --python-preference only-managed "$tools/venv"
   fi
-  if [[ $platform == linux-amd64 ]]; then
-    # The desktop tests exercise the qualified version's real CLI parser.
-    fetch_verified \
-      "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-${platform}.zip" \
-      "$RCLONE_LINUX_SHA256" "$downloads/rclone.zip"
-    python3 -m zipfile -e "$downloads/rclone.zip" "$downloads/rclone"
-    install -m 0755 "$downloads/rclone/rclone-v${RCLONE_VERSION}-${platform}/rclone" /usr/bin/rclone
-  fi
   rm -rf "$downloads"
   touch "$tools/.installed"
 }
@@ -120,8 +109,8 @@ main() {
       export DEBIAN_FRONTEND=noninteractive
       apt-get -qq update
       apt-get -qq install -y --no-install-recommends \
-        acl bat ca-certificates curl dbus-daemon dbus-tests gcc git jq libc6-dev \
-        libglib2.0-bin openssh-client procps psmisc python3 ripgrep systemd util-linux zsh >/dev/null
+        acl bat ca-certificates curl gcc git jq libc6-dev openssh-client procps psmisc \
+        python3 ripgrep systemd util-linux zsh >/dev/null
       [[ -e /usr/local/bin/bat ]] || ln -s /usr/bin/batcat /usr/local/bin/bat
       install_tools "$tools" "$platform" /usr/bin/python3
       chmod -R a+rX "$tools"

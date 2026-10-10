@@ -607,9 +607,12 @@ def recovery_marker_matches(phase, ownership):
         return True
     expected = recovered_marker(phase)
     if phase["phase"] == "prepare-publish":
-        return ownership == expected or secrets.compare_digest(
-            predecessor_mount_tag(ownership, phase["nonce"]),
-            phase["mount_tag"],
+        return ownership == expected or (
+            ownership["mount"] == phase["mount"]
+            and secrets.compare_digest(
+                predecessor_mount_tag(ownership, phase["nonce"]),
+                phase["mount_tag"],
+            )
         )
     if phase["phase"] == "cleanup-retained":
         return all(ownership.get(key) == value for key, value in expected.items())
@@ -1721,6 +1724,11 @@ def service_verify_mount(resolved):
 
 def service_post_stop(resolved):
     with metadata_lock(resolved):
+        phase = read_phase(resolved)
+        if phase is not None and phase["phase"] == "cleanup-retained":
+            if mount_state(resolved["mount"]) != "absent":
+                raise OperationError("residual mount remains")
+            return 0
         cleanup_mountpoint(resolved)
     return 0
 

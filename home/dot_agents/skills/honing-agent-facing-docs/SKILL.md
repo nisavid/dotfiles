@@ -9,7 +9,7 @@ description: Use when reviewing, refactoring, rewriting, or streamlining AGENTS.
 
 Agent-facing docs should load at the moment they help and stay quiet otherwise.
 
-**Required background:** Use `writing-skills` for agent-facing docs and `writing-clearly-and-concisely` for all prose. For durable docs that also serve humans, use `honing-human-facing-docs` alongside this skill, treat the agent-policy surface as reference, and apply `applying-diataxis` separately to the human-facing material.
+**Required background:** Use `writing-for-agents` for agent-facing docs; read its `SKILL-MECHANICS.md` when editing a skill. Use the current harness's `skill-creator` for skill packaging, validation, and applicable forward testing, and `writing-clearly-and-concisely` for all prose. For durable docs that also serve humans, use `honing-human-facing-docs` alongside this skill, treat the agent-policy surface as reference, and apply `applying-diataxis` separately to the human-facing material.
 
 ## When To Use
 
@@ -47,6 +47,14 @@ Put each durable fact in the narrowest place that will load when needed.
 - Put long command catalogs in repo docs when humans use them, in skill references when only agents need them, and in scripts when repeatable.
 - Keep exact error strings in troubleshooting references when they are useful search handles.
 
+## Check Changed Behavior
+
+Choose the instruction form from the observed failure. A missed constraint needs a clear decision rule; a wrong output form needs a positive recipe; an omission needs an explicit required element; a conditional action needs an observable condition. Use the least prescriptive form that addresses the failure, following `writing-for-agents` for wording and placement.
+
+For changes that alter agent behavior, exercise the owning route with a realistic request and the minimum raw artifacts. Choose pressures that could cause the target failure in ordinary use, and explain that connection when designing the case. Keep the task, inputs, and relevant pressures matched between the baseline and candidate so another change cannot explain the result. When claiming that a correction fixes an observed failure, establish that failure on the baseline and check the corrected behavior with the candidate. A baseline that passes supplies no evidence of that corrective effect; investigate the case rather than manufacturing a failure.
+
+Use the loaded `skill-creator` for its applicable testing workflow. Separate skill loading, observable task behavior, and environment failures. Report missing execution or observation capabilities as missing evidence. Mechanical edits that preserve behavior use checks proportionate to what changed.
+
 ## Closeout
 
 - Always-loaded guidance is shorter and still sufficient.
@@ -54,4 +62,4 @@ Put each durable fact in the narrowest place that will load when needed.
 - Bulky material moved to references, scripts, or repo docs.
 - Human-facing material did not get buried inside agent-only surfaces.
 - Links and commands needed for discovery work.
-- Skill changes followed `writing-skills`, including pressure-scenario testing.
+- Changed behavior was exercised through its owning route; the failure, relevant pressures, source revision, observed result, and any missing evidence are recorded.

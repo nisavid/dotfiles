@@ -1,4 +1,5 @@
 import contextlib
+import ctypes
 import errno
 import hashlib
 import io
@@ -8,8 +9,10 @@ import pathlib
 import re
 import resource
 import runpy
+import shlex
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -29,6 +32,9 @@ REAL_FSTAT = os.fstat
 REAL_POPEN = subprocess.Popen
 RCLONE_VERSION_COMMAND = ["/usr/bin/rclone", "version"]
 RCLONE_VERSION_OUTPUT = b"rclone v1.75.1\n- os/version: synthetic\n"
+INTERRUPTED_CLEANUP_DIAGNOSTIC = (
+    "interrupted retained mountpoint cleanup requires stopped recovery"
+)
 PRIVATE_BUS_SANDBOX_MESSAGES = {
     "Failed to turn off SO_PASSRIGHTS on user lookup socket, ignoring: "
     "Operation not permitted",
@@ -1067,12 +1073,16 @@ class PublicCommandTests(unittest.TestCase):
 
             def external(arguments, **kwargs):
                 external_calls.append(arguments)
+                main_pid = (
+                    "MainPID=0\n"
+                    if "--property=MainPID" in arguments else ""
+                )
                 return subprocess.CompletedProcess(
                     arguments,
                     0,
                     stdout=(
                         "ActiveState=inactive\nSubState=dead\n"
-                        "Result=success\nMainPID=0\n"
+                        f"Result=success\n{main_pid}"
                     ),
                 )
 
@@ -1104,6 +1114,15 @@ class PublicCommandTests(unittest.TestCase):
             self.assertEqual(
                 (0, "", ""),
                 invoke(["_post-stop"], environment, opened=opened),
+            )
+            self.assertEqual(
+                before, retained_publication_snapshot(mount, marker, phase)
+            )
+            self.assertEqual(
+                (0, "stopped\n", ""),
+                invoke(
+                    ["stop"], environment, run=external, opened=opened
+                ),
             )
             self.assertFalse(marker.exists())
             self.assertFalse(phase.exists())
@@ -1408,6 +1427,115 @@ class PublicCommandTests(unittest.TestCase):
                     os.getxattr(fixture["mount"], "user.keep"),
                 )
 
+    def test_committed_publication_predecessor_must_name_the_same_mount(self):
+        for same_path in (False, True):
+            with self.subTest(
+                same_path=same_path
+            ), self.retained_recovery_fixture(
+                "prepare-publish",
+                marker_kind="predecessor",
+                identity="absent",
+            ) as fixture:
+                marker = json.loads(fixture["marker"].read_bytes())
+                operation = json.loads(fixture["phase"].read_bytes())
+                if not same_path:
+                    marker["mount"] = str(
+                        fixture["root"] / "different-mount/files"
+                    )
+                    marker_bytes = json.dumps(
+                        marker, separators=(",", ":")
+                    ).encode("utf-8")
+                    fixture["marker"].write_bytes(marker_bytes)
+                    encoded = json.dumps(
+                        marker, sort_keys=True, separators=(",", ":")
+                    ).encode("utf-8")
+                    commitment = hashlib.sha256(
+                        b"proton-drive-desktop predecessor\0"
+                        + operation["nonce"].encode("ascii")
+                        + b"\0"
+                        + encoded
+                    ).hexdigest()
+                    operation["mount_tag"] = (
+                        f"proton-drive-desktop-{commitment}"
+                    )
+                    fixture["phase"].write_text(json.dumps(
+                        operation, separators=(",", ":")
+                    ))
+                before = retained_publication_snapshot(
+                    fixture["mount"], fixture["marker"], fixture["phase"]
+                )
+
+                inspected = invoke(
+                    ["inspect-recovery"], fixture["environment"],
+                    run=fixture["external"], opened=fixture["opened"],
+                )
+                if same_path:
+                    self.assertEqual(
+                        (
+                            0,
+                            "recovery eligible: prepare-publish\n"
+                            "next action: proton-drive-desktop start\n",
+                            "",
+                        ),
+                        inspected,
+                    )
+                else:
+                    self.assertEqual(
+                        (
+                            1,
+                            "",
+                            "marker does not match phase; preserve "
+                            "everything\n",
+                        ),
+                        inspected,
+                    )
+                self.assertEqual(
+                    before,
+                    retained_publication_snapshot(
+                        fixture["mount"], fixture["marker"], fixture["phase"]
+                    ),
+                )
+
+                recovered = invoke(
+                    ["_prepare"], fixture["environment"],
+                    opened=fixture["opened"],
+                )
+                if same_path:
+                    self.assertEqual((0, "", ""), recovered)
+                    self.assertFalse(fixture["phase"].exists())
+                    ownership = json.loads(fixture["marker"].read_bytes())
+                    self.assertEqual(
+                        operation["mount"], ownership["mount"]
+                    )
+                    self.assertEqual(
+                        operation["nonce"].encode("ascii"),
+                        os.getxattr(
+                            fixture["mount"],
+                            "user.proton-drive-desktop.identity",
+                        ),
+                    )
+                    self.assertEqual(
+                        b"preserve this xattr",
+                        os.getxattr(fixture["mount"], "user.keep"),
+                    )
+                else:
+                    self.assertEqual(
+                        (
+                            1,
+                            "",
+                            "interrupted mountpoint identity publication "
+                            "requires stopped recovery\n",
+                        ),
+                        recovered,
+                    )
+                    self.assertEqual(
+                        before,
+                        retained_publication_snapshot(
+                            fixture["mount"], fixture["marker"],
+                            fixture["phase"],
+                        ),
+                    )
+
     def test_inspection_and_recovery_reject_every_present_invalid_marker(self):
         invalid_markers = {
             "null": b"null",
@@ -1522,6 +1650,132 @@ class PublicCommandTests(unittest.TestCase):
                     fixture["mount"], fixture["marker"], fixture["phase"]
                 ),
             )
+
+    def test_cleanup_retained_survives_startup_hooks_until_explicit_stop(self):
+        diagnostic = (
+            "interrupted retained mountpoint cleanup requires stopped "
+            "recovery\n"
+        )
+        for entrypoint in ("start", "open", "automatic"):
+            with self.subTest(
+                entrypoint=entrypoint
+            ), self.retained_recovery_fixture(
+                "cleanup-retained",
+                marker_kind="verified",
+                mode=0o750,
+                identity="matching",
+            ) as fixture:
+                mount = fixture["mount"]
+                marker = fixture["marker"]
+                phase = fixture["phase"]
+                before = retained_publication_snapshot(mount, marker, phase)
+                information = mount.stat()
+                directory_identity = (
+                    information.st_dev,
+                    information.st_ino,
+                    stat.S_IMODE(information.st_mode),
+                )
+                hook_results = []
+                dolphin = mock.Mock()
+
+                def external(arguments, **kwargs):
+                    if arguments[2] == "show":
+                        main_pid = (
+                            "MainPID=0\n"
+                            if "--property=MainPID" in arguments else ""
+                        )
+                        return subprocess.CompletedProcess(
+                            arguments,
+                            0,
+                            stdout=(
+                                "ActiveState=inactive\nSubState=dead\n"
+                                f"Result=success\n{main_pid}"
+                            ),
+                        )
+                    if arguments[2] == "start":
+                        hook_results.extend((
+                            invoke(
+                                ["_prepare"], fixture["environment"],
+                                opened=fixture["opened"],
+                            ),
+                            invoke(
+                                ["_post-stop"], fixture["environment"],
+                                opened=fixture["opened"],
+                            ),
+                        ))
+                        return subprocess.CompletedProcess(arguments, 1)
+                    return subprocess.CompletedProcess(arguments, 0)
+
+                if entrypoint == "automatic":
+                    hook_results.extend((
+                        invoke(
+                            ["_prepare"], fixture["environment"],
+                            opened=fixture["opened"],
+                        ),
+                        invoke(
+                            ["_post-stop"], fixture["environment"],
+                            opened=fixture["opened"],
+                        ),
+                    ))
+                else:
+                    refused = invoke(
+                        [entrypoint], fixture["environment"],
+                        run=external, popen=dolphin,
+                        opened=fixture["opened"],
+                    )
+                    self.assertEqual((1, "", diagnostic), refused)
+                    dolphin.assert_not_called()
+
+                self.assertEqual(
+                    [(1, "", diagnostic), (0, "", "")], hook_results
+                )
+                self.assertEqual(
+                    before,
+                    retained_publication_snapshot(mount, marker, phase),
+                )
+
+                inspected = invoke(
+                    ["inspect-recovery"], fixture["environment"],
+                    run=external, opened=fixture["opened"],
+                )
+                self.assertEqual(
+                    (
+                        0,
+                        "recovery eligible: cleanup-retained\n"
+                        "next action: proton-drive-desktop stop\n",
+                        "",
+                    ),
+                    inspected,
+                )
+                self.assertEqual(
+                    before,
+                    retained_publication_snapshot(mount, marker, phase),
+                )
+
+                stopped = invoke(
+                    ["stop"], fixture["environment"],
+                    run=external, opened=fixture["opened"],
+                )
+                self.assertEqual((0, "stopped\n", ""), stopped)
+                self.assertFalse(marker.exists())
+                self.assertFalse(phase.exists())
+                after = mount.stat()
+                self.assertEqual(
+                    directory_identity,
+                    (
+                        after.st_dev,
+                        after.st_ino,
+                        stat.S_IMODE(after.st_mode),
+                    ),
+                )
+                self.assertEqual([], list(mount.iterdir()))
+                self.assertEqual(
+                    ["user.keep"],
+                    sorted(os.listxattr(mount, follow_symlinks=False)),
+                )
+                self.assertEqual(
+                    b"preserve this xattr", os.getxattr(mount, "user.keep")
+                )
 
     def test_inspection_and_prepare_share_directory_evidence_refusals(self):
         cases = {
@@ -9035,6 +9289,16 @@ class PublicCommandTests(unittest.TestCase):
                         return io.StringIO("")
                     return io.open(name, *args, **kwargs)
 
+                def external(arguments, **kwargs):
+                    return subprocess.CompletedProcess(
+                        arguments,
+                        0,
+                        stdout=(
+                            "ActiveState=inactive\nSubState=dead\n"
+                            "Result=success\n"
+                        ),
+                    )
+
                 self.assertEqual(
                     (0, "", ""),
                     invoke(["_prepare"], environment, opened=opened),
@@ -9078,9 +9342,20 @@ class PublicCommandTests(unittest.TestCase):
                         (recorded["device"], recorded["inode"]),
                         (mount.stat().st_dev, mount.stat().st_ino),
                     )
-                    result = invoke(
-                        ["_post-stop"], environment, opened=opened
-                    )
+                else:
+                    os.setxattr(mount, unknown_name, unknown_value)
+
+                self.assertEqual(
+                    (0, "", ""),
+                    invoke(["_post-stop"], environment, opened=opened),
+                )
+                self.assertEqual(phase_before, phase.read_bytes())
+
+                result = invoke(
+                    ["stop"], environment,
+                    run=external, opened=opened,
+                )
+                if replaced:
                     self.assertEqual(
                         (
                             1,
@@ -9092,11 +9367,7 @@ class PublicCommandTests(unittest.TestCase):
                     )
                     self.assertEqual(phase_before, phase.read_bytes())
                 else:
-                    os.setxattr(mount, unknown_name, unknown_value)
-                    self.assertEqual(
-                        (0, "", ""),
-                        invoke(["_post-stop"], environment, opened=opened),
-                    )
+                    self.assertEqual((0, "stopped\n", ""), result)
                     self.assertFalse(phase.exists())
 
                 self.assertTrue(mount.is_dir())
@@ -10234,5 +10505,1858 @@ class PublicCommandTests(unittest.TestCase):
             self.assertFalse((manager_data / "proton-drive-desktop/files").exists())
 
 
+def real_manager_cleanup_retention_snapshot(mount, marker, phase):
+    def record(path):
+        if not path.exists():
+            return None
+        value = path.read_bytes()
+        return {
+            "mode": stat.S_IMODE(path.lstat().st_mode),
+            "size": len(value),
+            "sha256": hashlib.sha256(value).hexdigest(),
+            "bytes_hex": value.hex(),
+        }
+
+    information = mount.lstat()
+    if not stat.S_ISDIR(information.st_mode) or mount.is_symlink():
+        raise RuntimeError("synthetic recovery mountpoint is not a directory")
+    contents = []
+    for child in sorted(mount.iterdir()):
+        child_information = child.lstat()
+        contents.append({
+            "name": child.name,
+            "mode": stat.S_IMODE(child_information.st_mode),
+            "type": (
+                "directory" if stat.S_ISDIR(child_information.st_mode)
+                else "file" if stat.S_ISREG(child_information.st_mode)
+                else "symlink" if stat.S_ISLNK(child_information.st_mode)
+                else "other"
+            ),
+        })
+    xattrs = {
+        name: os.getxattr(mount, name, follow_symlinks=False).hex()
+        for name in sorted(os.listxattr(mount, follow_symlinks=False))
+    }
+    return {
+        "marker": record(marker),
+        "phase": record(phase),
+        "directory": {
+            "device": information.st_dev,
+            "inode": information.st_ino,
+            "uid": information.st_uid,
+            "mode": stat.S_IMODE(information.st_mode),
+            "contents": contents,
+            "xattrs_hex": xattrs,
+        },
+    }
+
+
+class PersistentSystemdUnitReference:
+    def __init__(self):
+        try:
+            self.library = ctypes.CDLL("libsystemd.so.0")
+        except OSError:
+            raise RuntimeError("libsystemd sd-bus is unavailable") from None
+        self.library.sd_bus_open_user.argtypes = [
+            ctypes.POINTER(ctypes.c_void_p)
+        ]
+        self.library.sd_bus_open_user.restype = ctypes.c_int
+        self.library.sd_bus_call_method.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_char_p,
+        ]
+        self.library.sd_bus_call_method.restype = ctypes.c_int
+        self.library.sd_bus_message_unref.argtypes = [ctypes.c_void_p]
+        self.library.sd_bus_message_unref.restype = ctypes.c_void_p
+        self.library.sd_bus_flush_close_unref.argtypes = [ctypes.c_void_p]
+        self.library.sd_bus_flush_close_unref.restype = ctypes.c_void_p
+        self.bus = ctypes.c_void_p()
+        opened = self.library.sd_bus_open_user(ctypes.byref(self.bus))
+        if opened < 0:
+            if self.bus.value:
+                self.library.sd_bus_flush_close_unref(self.bus)
+            self.bus = ctypes.c_void_p()
+            raise RuntimeError("unable to open a persistent user-bus connection")
+
+    def call(self, method, unit_name):
+        if not self.bus.value:
+            return -errno.ENOTCONN
+        reply = ctypes.c_void_p()
+        try:
+            return self.library.sd_bus_call_method(
+                self.bus,
+                b"org.freedesktop.systemd1",
+                b"/org/freedesktop/systemd1",
+                b"org.freedesktop.systemd1.Manager",
+                method.encode("ascii"),
+                None,
+                ctypes.byref(reply),
+                b"s",
+                ctypes.c_char_p(unit_name.encode("utf-8")),
+            )
+        finally:
+            if reply.value:
+                self.library.sd_bus_message_unref(reply)
+
+    def close(self):
+        if self.bus.value:
+            self.library.sd_bus_flush_close_unref(self.bus)
+            self.bus = ctypes.c_void_p()
+
+
+def run_real_user_manager_cleanup_retention(
+    evidence_directory, *, command_runner=None, reference_owner_factory=None,
+):
+    """Qualify cleanup retention against one isolated real user-manager unit.
+
+    This coordinator-only fixture creates one uniquely named transient unit,
+    substitutes only that unit name in a disposable helper copy, and uses
+    synthetic config and recovery records. It invokes rclone only for its fixed
+    version output. It does not invoke credentials, FUSE, a provider, the
+    installed Proton unit, or the network.
+    """
+    if sys.platform != "linux":
+        raise RuntimeError("real user-manager qualification requires Linux")
+    if command_runner is None:
+        command_runner = subprocess.run
+    evidence_directory = pathlib.Path(evidence_directory)
+    if not evidence_directory.is_absolute():
+        raise RuntimeError("evidence directory must be absolute")
+
+    runtime_value = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime_value:
+        raise RuntimeError("XDG_RUNTIME_DIR is required")
+    runtime_base = pathlib.Path(runtime_value)
+    if not runtime_base.is_absolute():
+        raise RuntimeError("XDG_RUNTIME_DIR must be absolute")
+    runtime_information = runtime_base.lstat()
+    if (
+        not stat.S_ISDIR(runtime_information.st_mode)
+        or runtime_base.is_symlink()
+        or runtime_information.st_uid != os.getuid()
+        or runtime_information.st_mode & 0o022
+    ):
+        raise RuntimeError("XDG_RUNTIME_DIR is not a private user directory")
+    manager_directory = runtime_base / "systemd"
+    manager_socket = manager_directory / "private"
+    try:
+        manager_directory_information = manager_directory.lstat()
+        manager_socket_information = manager_socket.lstat()
+    except OSError:
+        raise RuntimeError(
+            "real user manager socket is unavailable or unsafe"
+        ) from None
+    if (
+        not stat.S_ISDIR(manager_directory_information.st_mode)
+        or manager_directory_information.st_uid != os.getuid()
+        or manager_directory_information.st_mode & 0o022
+        or not stat.S_ISSOCK(manager_socket_information.st_mode)
+        or manager_socket_information.st_uid != os.getuid()
+        or manager_socket_information.st_mode & 0o022
+    ):
+        raise RuntimeError("real user manager socket is unavailable or unsafe")
+
+    for command in (
+        pathlib.Path("/usr/bin/systemctl"),
+        pathlib.Path("/usr/bin/systemd-run"),
+        pathlib.Path("/usr/bin/rclone"),
+        pathlib.Path("/usr/bin/true"),
+        pathlib.Path("/usr/bin/env"),
+        pathlib.Path("/usr/bin/cut"),
+        pathlib.Path("/usr/bin/grep"),
+        pathlib.Path("/usr/bin/sort"),
+        pathlib.Path("/bin/sh"),
+    ):
+        if not command.is_file() or not os.access(command, os.X_OK):
+            raise RuntimeError(f"required executable is unavailable: {command}")
+
+    try:
+        rclone_version = command_runner(
+            ["/usr/bin/rclone", "version"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env={"LANG": "C.UTF-8", "PATH": "/usr/bin:/bin"},
+            timeout=10,
+            check=False,
+        )
+    except OSError:
+        raise RuntimeError("rclone 1.75.1 is unavailable") from None
+    if (
+        rclone_version.returncode != 0
+        or not isinstance(rclone_version.stdout, bytes)
+        or rclone_version.stdout.splitlines()[:1] != [b"rclone v1.75.1"]
+    ):
+        raise RuntimeError("rclone 1.75.1 is unavailable")
+
+    bus_address = os.environ.get(
+        "DBUS_SESSION_BUS_ADDRESS", f"unix:path={runtime_base}/bus"
+    )
+    if not bus_address or any(character.isspace() for character in bus_address):
+        raise RuntimeError("real user bus address is unavailable or unsafe")
+    manager_environment = {
+        "DBUS_SESSION_BUS_ADDRESS": bus_address,
+        "LANG": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+        "XDG_RUNTIME_DIR": str(runtime_base),
+    }
+    manager_operations = []
+
+    def manager(*arguments):
+        manager_operations.append(list(arguments))
+        return command_runner(
+            ["/usr/bin/systemctl", "--user", *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=manager_environment,
+            timeout=30,
+            check=False,
+        )
+
+    available = manager("show", "--property=Version", "--value")
+    if available.returncode != 0:
+        raise RuntimeError("real user manager is unavailable")
+    if not available.stdout.strip():
+        raise RuntimeError("real user manager returned no version")
+
+    evidence_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not evidence_directory.is_dir() or evidence_directory.is_symlink():
+        raise RuntimeError("evidence directory must be a directory")
+
+    def parse_properties(output, required):
+        observed = {}
+        for line in output.splitlines():
+            if line.count("=") < 1:
+                raise RuntimeError("manager properties are malformed")
+            key, value = line.split("=", 1)
+            if key not in required or key in observed:
+                raise RuntimeError("manager properties are malformed")
+            observed[key] = value
+        if set(observed) != set(required):
+            raise RuntimeError("manager properties are incomplete")
+        return observed
+
+    manager_property_names = (
+        "Id", "LoadState", "Transient", "ActiveState", "SubState",
+        "Result", "MainPID", "ControlPID", "ExecStartPre", "ExecStopPost",
+    )
+
+    def show_fixture_unit(unit_name):
+        shown = manager(
+            "show", unit_name,
+            *(f"--property={name}" for name in manager_property_names),
+        )
+        if shown.returncode != 0:
+            raise RuntimeError("unable to read transient fixture unit state")
+        return parse_properties(shown.stdout, manager_property_names)
+
+    def require_unit_identity(properties, unit_name):
+        if properties["Id"] != unit_name:
+            raise RuntimeError("manager returned properties for the wrong unit")
+        if properties["LoadState"] != "loaded":
+            raise RuntimeError("transient fixture unit is not loaded")
+        if properties["Transient"] != "yes":
+            raise RuntimeError("fixture unit is not transient")
+
+    def require_exec_result(properties, property_name, executable, status):
+        record = properties[property_name]
+        expression = re.compile(
+            r"\{[^{}]*path=" + re.escape(str(executable))
+            + r"(?:\s|;)[^{}]*code=exited(?:\s|;)[^{}]*status="
+            + str(status) + r"(?:/[^\s;}]+)?(?:\s|;|})"
+        )
+        if expression.search(record) is None:
+            raise RuntimeError(
+                f"{property_name} manager execution result is not qualifying"
+            )
+
+    def read_hook_evidence(hooks, hook_name):
+        result = {}
+        for suffix in (
+            "status", "stdout", "stderr", "sentinel-present",
+            "sentinel-absent", "environment-names",
+        ):
+            path = hooks / f"{hook_name}.{suffix}"
+            if not path.is_file() or path.is_symlink():
+                raise RuntimeError(f"{hook_name} evidence is incomplete")
+            result[suffix.replace("-", "_")] = path.read_text()
+        return result
+
+    def checked_teardown(unit_name, reference_owner, referenced):
+        try:
+            failure = None
+            reset_properties = None
+            stopped = manager("stop", unit_name)
+            if stopped.returncode != 0:
+                failure = RuntimeError(
+                    f"{unit_name}: transient fixture teardown stop failed"
+                )
+                stopped_properties = None
+                reset = None
+            else:
+                try:
+                    stopped_properties = show_fixture_unit(unit_name)
+                    require_unit_identity(stopped_properties, unit_name)
+                except RuntimeError as error:
+                    failure = error
+                    reset = None
+                else:
+                    if (
+                        stopped_properties["ActiveState"] not in ("inactive", "failed")
+                        or stopped_properties["MainPID"] != "0"
+                        or stopped_properties["ControlPID"] != "0"
+                    ):
+                        failure = RuntimeError(
+                            f"{unit_name}: transient fixture retained a process after stop"
+                        )
+                        reset = None
+                    else:
+                        reset = manager("reset-failed", unit_name)
+                        if reset.returncode != 0:
+                            failure = RuntimeError(
+                                f"{unit_name}: transient fixture failure reset failed"
+                            )
+                        else:
+                            reset_properties = show_fixture_unit(unit_name)
+                            require_unit_identity(reset_properties, unit_name)
+                            if (
+                                reset_properties["ActiveState"] != "inactive"
+                                or reset_properties["MainPID"] != "0"
+                                or reset_properties["ControlPID"] != "0"
+                            ):
+                                failure = RuntimeError(
+                                    f"{unit_name}: transient fixture did not become inactive after reset"
+                                )
+            release_returncode = None
+            if referenced:
+                manager_operations.append(["unref-unit", unit_name])
+                release_returncode = reference_owner.call("UnrefUnit", unit_name)
+                if release_returncode < 0 and failure is None:
+                    failure = RuntimeError(
+                        f"{unit_name}: transient fixture reference release failed"
+                    )
+            if failure is not None:
+                raise failure
+            collected = manager("show", unit_name, "--property=LoadState", "--value")
+            if collected.returncode != 0 or collected.stdout.strip() != "not-found":
+                raise RuntimeError(f"{unit_name}: transient fixture was not collected")
+            return {
+                "stop_returncode": stopped.returncode,
+                "after_stop": stopped_properties,
+                "after_reset": reset_properties,
+                "reset_failed_returncode": reset.returncode,
+                "release_returncode": release_returncode,
+                "collected_load_state": collected.stdout.strip(),
+            }
+        except Exception as error:
+            raise RuntimeError(
+                f"{unit_name}: checked teardown failed: {error}; fixture files retained at {root}"
+            ) from error
+
+    cleanup_safe = True
+    with tempfile.TemporaryDirectory(
+        prefix="proton-drive-cleanup-retention-", dir=runtime_base, delete=False,
+    ) as temporary:
+        manager_socket_alias = None
+        try:
+            root = pathlib.Path(temporary)
+            root.chmod(0o700)
+            home = root / "home"
+            config_home = root / "config"
+            config_parent = config_home / "rclone"
+            data_home = root / "data"
+            mount = data_home / "proton-drive-desktop/files"
+            fixture_runtime = root / "runtime"
+            private_runtime = fixture_runtime / "proton-drive-desktop"
+            hooks = root / "hooks"
+            for directory in (
+                home, config_parent, mount, private_runtime, hooks,
+            ):
+                directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+                directory.chmod(0o700)
+            mount.chmod(0o750)
+            fixture_manager_directory = fixture_runtime / "systemd"
+            fixture_manager_directory.mkdir(mode=0o700)
+            fixture_manager_directory.chmod(0o700)
+            alias_candidate = fixture_manager_directory / "private"
+            alias_candidate.symlink_to(manager_socket)
+            manager_socket_alias = alias_candidate
+            aliased_socket_information = manager_socket_alias.stat()
+            if (
+                not stat.S_ISSOCK(aliased_socket_information.st_mode)
+                or aliased_socket_information.st_dev
+                != manager_socket_information.st_dev
+                or aliased_socket_information.st_ino
+                != manager_socket_information.st_ino
+            ):
+                raise RuntimeError(
+                    "fixture manager socket alias does not name the validated socket"
+                )
+            config = config_parent / "proton-drive.conf"
+            config.write_text("synthetic encrypted config; no credential\n")
+            config.chmod(0o600)
+
+            unique = hashlib.sha256(
+                f"{os.getpid()}:{root}".encode("utf-8")
+            ).hexdigest()[:16]
+            unit_name = f"proton-drive-cleanup-retention-{unique}.service"
+            service_token = b"proton-drive-desktop.service"
+            source_helper = PROGRAM.read_bytes()
+            replacement_count = source_helper.count(service_token)
+            if replacement_count == 0:
+                raise RuntimeError("helper contains no replaceable service binding")
+            fixture_helper_bytes = source_helper.replace(
+                service_token, unit_name.encode("ascii")
+            )
+            fixture_helper = root / "proton-drive-desktop-fixture"
+            fixture_helper.write_bytes(fixture_helper_bytes)
+            fixture_helper.chmod(0o700)
+
+            lifecycle_runner = root / "run-lifecycle-hook"
+            lifecycle_runner.write_text(textwrap.dedent("""\
+                #!/bin/sh
+                umask 077
+                sentinel_name=PROTON_DRIVE_FIXTURE_SENTINEL
+                if [ "${1-}" = --scrubbed ]; then
+                    shift
+                    [ "$#" -eq 4 ] || exit 96
+                    hook_name=$1
+                    evidence=$2
+                    helper=$3
+                    entrypoint=$4
+                    /usr/bin/env | /usr/bin/cut -d= -f1 | /usr/bin/sort > \
+                        "$evidence/$hook_name.environment-names"
+                    if /usr/bin/grep -Fx -- "$sentinel_name" \
+                        "$evidence/$hook_name.environment-names" >/dev/null; then
+                        printf '%s\\n' false > "$evidence/$hook_name.sentinel-absent"
+                        exit 97
+                    fi
+                    printf '%s\\n' true > "$evidence/$hook_name.sentinel-absent"
+                    /usr/bin/env -i \
+                        HOME="$HOME" \
+                        LANG="$LANG" \
+                        PATH="$PATH" \
+                        XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+                        XDG_DATA_HOME="$XDG_DATA_HOME" \
+                        XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+                        "$helper" "$entrypoint" \
+                        > "$evidence/$hook_name.stdout" \
+                        2> "$evidence/$hook_name.stderr"
+                    hook_status=$?
+                    printf '%s\\n' "$hook_status" > "$evidence/$hook_name.status"
+                    exit "$hook_status"
+                fi
+                [ "$#" -eq 8 ] || exit 95
+                hook_name=$1
+                evidence=$2
+                fixture_home=$3
+                fixture_config=$4
+                fixture_data=$5
+                fixture_runtime=$6
+                helper=$7
+                entrypoint=$8
+                if [ "${PROTON_DRIVE_FIXTURE_SENTINEL+x}" = x ]; then
+                    printf '%s\\n' true > "$evidence/$hook_name.sentinel-present"
+                else
+                    printf '%s\\n' false > "$evidence/$hook_name.sentinel-present"
+                    exit 98
+                fi
+                exec /usr/bin/env -i \
+                    HOME="$fixture_home" \
+                    LANG=C.UTF-8 \
+                    PATH=/usr/bin:/bin \
+                    XDG_CONFIG_HOME="$fixture_config" \
+                    XDG_DATA_HOME="$fixture_data" \
+                    XDG_RUNTIME_DIR="$fixture_runtime" \
+                    "$0" --scrubbed "$hook_name" "$evidence" "$helper" "$entrypoint"
+            """))
+            lifecycle_runner.chmod(0o700)
+
+            information = mount.stat()
+            nonce = "12" * 32
+            mount_tag = "proton-drive-desktop-" + "34" * 32
+            common = {
+                "mount": str(mount),
+                "device": information.st_dev,
+                "inode": information.st_ino,
+                "created": True,
+                "nonce": nonce,
+                "mount_tag": mount_tag,
+            }
+            marker = private_runtime / "mountpoint.json"
+            phase = private_runtime / "mountpoint-phase.json"
+            marker.write_text(json.dumps(
+                {**common, "mount_id": "91"}, separators=(",", ":")
+            ))
+            phase.write_text(json.dumps(
+                {"phase": "cleanup-retained", **common}, separators=(",", ":")
+            ))
+            marker.chmod(0o600)
+            phase.chmod(0o600)
+            os.setxattr(
+                mount,
+                "user.proton-drive-desktop.identity",
+                nonce.encode("ascii"),
+            )
+            os.setxattr(mount, "user.keep", b"preserve-fixture-xattr")
+            before = real_manager_cleanup_retention_snapshot(
+                mount, marker, phase
+            )
+            if before["directory"]["contents"]:
+                raise RuntimeError("synthetic recovery mountpoint is not empty")
+            expected_xattrs = dict(before["directory"]["xattrs_hex"])
+            if expected_xattrs.pop("user.proton-drive-desktop.identity", None) != nonce.encode("ascii").hex():
+                raise RuntimeError("synthetic recovery mountpoint has the wrong product identity")
+
+            explicit_stop_environment = {
+                "DBUS_SESSION_BUS_ADDRESS": bus_address,
+                "HOME": str(home),
+                "LANG": "C.UTF-8",
+                "PATH": "/usr/bin:/bin",
+                "XDG_CONFIG_HOME": str(config_home),
+                "XDG_DATA_HOME": str(data_home),
+                "XDG_RUNTIME_DIR": str(fixture_runtime),
+            }
+            lifecycle_arguments = (
+                str(hooks), str(home), str(config_home), str(data_home),
+                str(fixture_runtime), str(fixture_helper),
+            )
+            start_pre_command = shlex.join([
+                str(lifecycle_runner), "start-pre", *lifecycle_arguments, "_prepare",
+            ])
+            post_stop_command = shlex.join([
+                str(lifecycle_runner), "post-stop", *lifecycle_arguments, "_post-stop",
+            ])
+            sentinel_name = "PROTON_DRIVE_FIXTURE_SENTINEL"
+            sentinel_value = "nonsecret-fixture-sentinel-7b36"
+            transient_command = [
+                "/usr/bin/systemd-run", "--user", f"--unit={unit_name}",
+                "--no-ask-password", "--no-pager", "--quiet",
+                "--expand-environment=no", "--service-type=oneshot",
+                f"--setenv={sentinel_name}={sentinel_value}",
+                "--property=CollectMode=inactive",
+                "--property=Restart=no", "--property=UMask=0077",
+                "--property=TimeoutStartSec=15s",
+                "--property=TimeoutStopSec=15s",
+                f"--property=ExecStartPre={start_pre_command}",
+                f"--property=ExecStopPost={post_stop_command}",
+                "/usr/bin/true",
+            ]
+            loaded = manager("show", unit_name, "--property=LoadState", "--value")
+            if loaded.returncode != 0 or loaded.stdout.strip() != "not-found":
+                raise RuntimeError(f"fixture unit name is already loaded: {unit_name}")
+
+            qualification = None
+            teardown = None
+            transient_created = False
+            referenced = False
+            reference_owner = None
+            try:
+                manager_operations.append(["start-transient-unit", unit_name])
+                cleanup_safe = False
+                launch_error = None
+                automatic_start = None
+                try:
+                    automatic_start = command_runner(
+                        transient_command,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        env=manager_environment,
+                        timeout=30,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    launch_error = error
+                launch_diagnostic = (
+                    str(launch_error) if launch_error is not None
+                    else f"exit {automatic_start.returncode}: {automatic_start.stderr.strip()}"
+                )
+                try:
+                    loaded_after_start = manager(
+                        "show", unit_name, "--property=LoadState", "--value"
+                    )
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise RuntimeError(
+                        f"{unit_name}: launch {launch_diagnostic}; unable to determine unit state: {error}; "
+                        f"fixture files retained at {root}"
+                    ) from error
+                if (
+                    loaded_after_start.returncode != 0
+                    or loaded_after_start.stdout.strip() not in ("loaded", "not-found")
+                ):
+                    raise RuntimeError(
+                        f"{unit_name}: launch {launch_diagnostic}; unable to determine transient fixture load state: "
+                        f"{loaded_after_start.stdout.strip()} {loaded_after_start.stderr.strip()}; "
+                        f"fixture files retained at {root}"
+                    )
+                transient_created = loaded_after_start.stdout.strip() == "loaded"
+                if not transient_created:
+                    if (
+                        isinstance(launch_error, subprocess.TimeoutExpired)
+                        or (automatic_start is not None and automatic_start.returncode != 0)
+                    ):
+                        raise RuntimeError(
+                            f"{unit_name}: launch outcome unresolved: {launch_diagnostic}; "
+                            f"fixture files retained at {root}; later checked unit cleanup is required"
+                        ) from launch_error
+                    cleanup_safe = True
+                    if launch_error is not None:
+                        raise RuntimeError(f"{unit_name}: transient fixture launch failed: {launch_error}") from launch_error
+                    raise RuntimeError(
+                        f"{unit_name}: transient fixture launch failed "
+                        f"(exit {automatic_start.returncode}): "
+                        + automatic_start.stderr.strip()
+                    )
+                owner_factory = (
+                    PersistentSystemdUnitReference
+                    if reference_owner_factory is None
+                    else reference_owner_factory
+                )
+                reference_owner = owner_factory()
+                manager_operations.append(["ref-unit", unit_name])
+                reference_returncode = reference_owner.call("RefUnit", unit_name)
+                if reference_returncode < 0:
+                    raise RuntimeError(
+                        f"{unit_name}: unable to reference transient fixture unit"
+                    )
+                referenced = True
+                manager_after_start = show_fixture_unit(unit_name)
+                require_unit_identity(manager_after_start, unit_name)
+                if launch_error is not None:
+                    raise RuntimeError(f"{unit_name}: transient fixture launch failed: {launch_error}") from launch_error
+                if automatic_start.returncode == 0:
+                    raise RuntimeError("fixture startup unexpectedly succeeded")
+                if (
+                    manager_after_start["ActiveState"] != "failed"
+                    or manager_after_start["SubState"] != "failed"
+                    or manager_after_start["Result"] != "exit-code"
+                    or manager_after_start["MainPID"] != "0"
+                    or manager_after_start["ControlPID"] != "0"
+                ):
+                    raise RuntimeError("transient fixture has the wrong failed state")
+                require_exec_result(
+                    manager_after_start, "ExecStartPre", lifecycle_runner, 1
+                )
+                require_exec_result(
+                    manager_after_start, "ExecStopPost", lifecycle_runner, 0
+                )
+                hook_evidence = {
+                    name: read_hook_evidence(hooks, name)
+                    for name in ("start-pre", "post-stop")
+                }
+                required_environment_names = {
+                    "HOME", "LANG", "PATH", "XDG_CONFIG_HOME",
+                    "XDG_DATA_HOME", "XDG_RUNTIME_DIR",
+                }
+                supported_shell_environment_names = {"PWD", "SHLVL", "_"}
+                for name in ("start-pre", "post-stop"):
+                    if hook_evidence[name]["sentinel_present"] != "true\n":
+                        raise RuntimeError(
+                            f"{sentinel_name} was absent before lifecycle scrub"
+                        )
+                    if hook_evidence[name]["sentinel_absent"] != "true\n":
+                        raise RuntimeError(
+                            f"{sentinel_name} reached a scrubbed lifecycle hook"
+                        )
+                    observed_environment_names = (
+                        hook_evidence[name]["environment_names"].splitlines()
+                    )
+                    observed_environment_name_set = set(observed_environment_names)
+                    if (
+                        len(observed_environment_names)
+                        != len(observed_environment_name_set)
+                        or not required_environment_names.issubset(
+                            observed_environment_name_set
+                        )
+                        or observed_environment_name_set
+                        - required_environment_names
+                        - supported_shell_environment_names
+                    ):
+                        raise RuntimeError(
+                            f"{name} lifecycle environment was not minimal"
+                        )
+                if (
+                    hook_evidence["start-pre"]["status"] != "1\n"
+                    or hook_evidence["start-pre"]["stdout"]
+                    or hook_evidence["start-pre"]["stderr"]
+                    != INTERRUPTED_CLEANUP_DIAGNOSTIC + "\n"
+                ):
+                    raise RuntimeError(
+                        "ExecStartPre did not reach interrupted cleanup exactly"
+                    )
+                if (
+                    hook_evidence["post-stop"]["status"] != "0\n"
+                    or hook_evidence["post-stop"]["stdout"]
+                    or hook_evidence["post-stop"]["stderr"]
+                ):
+                    raise RuntimeError("ExecStopPost produced an unexpected diagnostic")
+                after_failed_start = real_manager_cleanup_retention_snapshot(
+                    mount, marker, phase
+                )
+                if after_failed_start != before:
+                    raise RuntimeError(
+                        "failed automatic startup changed retained recovery evidence"
+                    )
+
+                manager_operations.append(["public-helper-stop", unit_name])
+                explicit_stop = command_runner(
+                    [str(fixture_helper), "stop"],
+                    cwd=root,
+                    env=explicit_stop_environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                if (
+                    explicit_stop.returncode != 0
+                    or explicit_stop.stdout != "stopped\n"
+                    or explicit_stop.stderr
+                ):
+                    raise RuntimeError(
+                        "isolated explicit stop failed: "
+                        + explicit_stop.stderr.strip()
+                    )
+                after_explicit_stop = real_manager_cleanup_retention_snapshot(
+                    mount, marker, phase
+                )
+                if (
+                    after_explicit_stop["marker"] is not None
+                    or after_explicit_stop["phase"] is not None
+                ):
+                    raise RuntimeError("explicit stop retained private recovery records")
+                before_directory = before["directory"]
+                after_directory = after_explicit_stop["directory"]
+                for key in ("device", "inode", "uid", "mode", "contents"):
+                    if after_directory[key] != before_directory[key]:
+                        raise RuntimeError(
+                            f"explicit stop changed directory {key}"
+                        )
+                if after_directory["xattrs_hex"] != expected_xattrs:
+                    raise RuntimeError("explicit stop changed retained non-product xattrs")
+                manager_after_stop = show_fixture_unit(unit_name)
+                require_unit_identity(manager_after_stop, unit_name)
+                if (
+                    manager_after_stop["ActiveState"] not in ("inactive", "failed")
+                    or manager_after_stop["MainPID"] != "0"
+                    or manager_after_stop["ControlPID"] != "0"
+                ):
+                    raise RuntimeError("explicit stop retained a fixture process")
+
+                qualification = {
+                    "automatic_start_returncode": automatic_start.returncode,
+                    "manager_after_start": manager_after_start,
+                    "hooks": hook_evidence,
+                    "before": before,
+                    "after_failed_start": after_failed_start,
+                    "explicit_stop": {
+                        "returncode": explicit_stop.returncode,
+                        "stdout": explicit_stop.stdout,
+                        "stderr": explicit_stop.stderr,
+                    },
+                    "after_explicit_stop": after_explicit_stop,
+                    "manager_after_explicit_stop": manager_after_stop,
+                }
+            finally:
+                try:
+                    if transient_created:
+                        teardown = checked_teardown(
+                            unit_name, reference_owner, referenced
+                        )
+                        cleanup_safe = True
+                finally:
+                    if reference_owner is not None:
+                        reference_owner.close()
+
+            if qualification is None or teardown is None:
+                raise RuntimeError("real user-manager qualification produced no receipt")
+            prohibited_operations = {"daemon-reload", "link", "show-environment"}
+            if any(
+                operation and operation[0] in prohibited_operations
+                for operation in manager_operations
+            ):
+                raise RuntimeError("fixture used a manager-wide or linked-unit operation")
+            for operation in manager_operations:
+                if operation[:1] in (
+                    ["stop"], ["reset-failed"], ["ref-unit"], ["unref-unit"],
+                    ["start-transient-unit"], ["public-helper-stop"],
+                ):
+                    if len(operation) != 2 or operation[1] != unit_name:
+                        raise RuntimeError("fixture operation targeted the wrong unit")
+                if operation[:1] == ["show"] and len(operation) > 1:
+                    if operation[1].endswith(".service") and operation[1] != unit_name:
+                        raise RuntimeError("fixture operation targeted the wrong unit")
+
+            receipt = {
+                "fixture": "proton-drive-cleanup-retention/v2",
+                "unit": unit_name,
+                "source_helper_sha256": hashlib.sha256(source_helper).hexdigest(),
+                "fixture_helper_sha256": hashlib.sha256(
+                    fixture_helper_bytes
+                ).hexdigest(),
+                "service_name_replacements": replacement_count,
+                "fixture_helper_change": "unique-test-unit-binding-only",
+                "transient_interface": "systemd-run/StartTransientUnit",
+                "sentinel": {
+                    "name": sentinel_name,
+                    "present_before_scrub": True,
+                    "absent_after_scrub": True,
+                },
+                "manager_operations": manager_operations,
+                **qualification,
+                "teardown": teardown,
+            }
+            receipt_path = evidence_directory / f"{unit_name}.json"
+            if receipt_path.exists() or receipt_path.is_symlink():
+                raise RuntimeError(f"refusing to overwrite evidence: {receipt_path}")
+            receipt_text = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+        finally:
+            alias_cleanup_error = None
+            if manager_socket_alias is not None:
+                try:
+                    alias_information = manager_socket_alias.lstat()
+                    if (
+                        not stat.S_ISLNK(alias_information.st_mode)
+                        or os.readlink(manager_socket_alias) != str(manager_socket)
+                    ):
+                        raise RuntimeError(
+                            "fixture manager socket alias changed unexpectedly"
+                        )
+                    manager_socket_alias.unlink()
+                except (OSError, RuntimeError) as error:
+                    alias_cleanup_error = error
+                    cleanup_safe = False
+            if cleanup_safe:
+                shutil.rmtree(temporary)
+            if alias_cleanup_error is not None:
+                raise RuntimeError(
+                    "fixture manager socket alias cleanup failed: "
+                    f"{alias_cleanup_error}; fixture files retained at {root}"
+                ) from alias_cleanup_error
+
+    descriptor, temporary_receipt_name = tempfile.mkstemp(
+        prefix=f".{receipt_path.name}.",
+        suffix=".tmp",
+        dir=evidence_directory,
+    )
+    temporary_receipt = pathlib.Path(temporary_receipt_name)
+    try:
+        with os.fdopen(descriptor, "w") as receipt_file:
+            descriptor = -1
+            receipt_file.write(receipt_text)
+            receipt_file.flush()
+            os.fchmod(receipt_file.fileno(), 0o600)
+        os.replace(temporary_receipt, receipt_path)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        with contextlib.suppress(FileNotFoundError):
+            temporary_receipt.unlink()
+        raise
+    return receipt_path
+
+
+class SyntheticUnitReferenceOwner:
+    def __init__(self, boundary):
+        self.boundary = boundary
+        self.calls = []
+        self.closed = False
+
+    def call(self, method, unit_name):
+        self.calls.append((method, unit_name))
+        if self.closed:
+            return -errno.ENOTCONN
+        if unit_name != self.boundary.unit:
+            raise AssertionError(f"wrong reference unit: {unit_name!r}")
+        if method == "RefUnit":
+            self.boundary.reference_connection = self
+            self.boundary.referenced = True
+            if self.boundary.fault == "reference-disconnect":
+                self.close()
+            return 0
+        if method == "UnrefUnit":
+            if self.boundary.fault == "teardown-release-exception":
+                raise OSError("constructed release exception")
+            if self.boundary.fault == "release":
+                return -errno.EIO
+            if (
+                self.boundary.reference_connection is not self
+                or not self.boundary.referenced
+            ):
+                return -errno.ENXIO
+            self.boundary.referenced = False
+            return 0
+        raise AssertionError(f"unexpected reference operation: {method!r}")
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        if self.boundary.reference_connection is self:
+            self.boundary.reference_connection = None
+            self.boundary.referenced = False
+
+
+class SyntheticRealManagerBoundary:
+    sentinel_name = "PROTON_DRIVE_FIXTURE_SENTINEL"
+    sentinel_value = "nonsecret-fixture-sentinel-7b36"
+    lifecycle_environment_names = (
+        "HOME",
+        "LANG",
+        "PATH",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_RUNTIME_DIR",
+    )
+
+    def __init__(self, fault=None):
+        self.fault = fault
+        self.calls = []
+        self.created = False
+        self.reset = False
+        self.referenced = False
+        self.reference_connection = None
+        self.reference_owners = []
+        self.state = "failed"
+        self.unit = None
+        self.launcher = None
+        self.hooks = None
+        self.mount = None
+        self.marker = None
+        self.phase = None
+        self.teardown_started = False
+        self.shell_environment_names = {}
+        self.helper_environment_names = {}
+
+    def open_reference_owner(self):
+        owner = SyntheticUnitReferenceOwner(self)
+        self.reference_owners.append(owner)
+        return owner
+
+    @staticmethod
+    def completed(arguments, returncode=0, stdout="", stderr=""):
+        return subprocess.CompletedProcess(
+            arguments, returncode, stdout=stdout, stderr=stderr
+        )
+
+    def _write_hook_evidence(self, command, status, diagnostic):
+        fields = shlex.split(command)
+        hook_name = fields[1]
+        self.launcher = fields[0]
+        self.hooks = pathlib.Path(fields[2])
+        data_home = pathlib.Path(fields[5])
+        fixture_runtime = pathlib.Path(fields[6])
+        self.mount = data_home / "proton-drive-desktop/files"
+        self.marker = fixture_runtime / "proton-drive-desktop/mountpoint.json"
+        self.phase = fixture_runtime / "proton-drive-desktop/mountpoint-phase.json"
+        if self.fault == "real-shell-environment":
+            helper_names = self.hooks / f"{hook_name}.helper-environment-names"
+            recording_helper = self.hooks / f"{hook_name}.recording-helper"
+            recording_helper.write_text(
+                "#!/usr/bin/python3\n"
+                "import os\n"
+                "import pathlib\n"
+                "import sys\n"
+                f"pathlib.Path({str(helper_names)!r}).write_text("
+                '"".join(f"{name}\\n" for name in sorted(os.environ)))\n'
+                + (
+                    "sys.stderr.write("
+                    + repr(INTERRUPTED_CLEANUP_DIAGNOSTIC + "\n")
+                    + ")\nraise SystemExit(1)\n"
+                    if status == 1
+                    else "raise SystemExit(0)\n"
+                )
+            )
+            recording_helper.chmod(0o700)
+            arguments = [
+                fields[0], *fields[1:7], str(recording_helper), fields[8]
+            ]
+            completed = subprocess.run(
+                arguments,
+                cwd=pathlib.Path(self.launcher).parent,
+                env={
+                    self.sentinel_name: self.sentinel_value,
+                    "ARBITRARY_INHERITED": "constructed-inherited-value",
+                    "PATH": "/usr/bin:/bin",
+                },
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if completed.returncode != status:
+                raise AssertionError(
+                    f"real lifecycle runner returned {completed.returncode}"
+                )
+            self.shell_environment_names[hook_name] = set(
+                (self.hooks / f"{hook_name}.environment-names")
+                .read_text()
+                .splitlines()
+            )
+            self.helper_environment_names[hook_name] = set(
+                helper_names.read_text().splitlines()
+            )
+            return
+        present = "true\n"
+        absent = "false\n" if self.fault == "sentinel-leak" else "true\n"
+        names = list(self.lifecycle_environment_names)
+        if self.fault == "sentinel-leak":
+            names.append(self.sentinel_name)
+        (self.hooks / f"{hook_name}.sentinel-present").write_text(present)
+        (self.hooks / f"{hook_name}.sentinel-absent").write_text(absent)
+        (self.hooks / f"{hook_name}.environment-names").write_text(
+            "".join(f"{name}\n" for name in sorted(names))
+        )
+        (self.hooks / f"{hook_name}.stdout").write_text("")
+        (self.hooks / f"{hook_name}.stderr").write_text(diagnostic)
+        (self.hooks / f"{hook_name}.status").write_text(f"{status}\n")
+
+    def _manager_properties(self):
+        identifier = (
+            "proton-drive-wrong-unit.service"
+            if self.fault == "wrong-unit"
+            else self.unit
+        )
+        active = "failed" if self.state == "failed" else "inactive"
+        substate = "failed" if self.state == "failed" else "dead"
+        result = "exit-code" if self.state == "failed" else "success"
+        main_pid = "4242" if self.fault == "process-remains" else "0"
+        return "\n".join((
+            f"Id={identifier}",
+            "LoadState=loaded",
+            "Transient=yes",
+            f"ActiveState={active}",
+            f"SubState={substate}",
+            f"Result={result}",
+            f"MainPID={main_pid}",
+            "ControlPID=0",
+            (
+                "ExecStartPre={ path=" + str(self.launcher)
+                + " ; argv[]=" + str(self.launcher)
+                + " start-pre ; code=exited ; status=1 }"
+            ),
+            (
+                "ExecStopPost={ path=" + str(self.launcher)
+                + " ; argv[]=" + str(self.launcher)
+                + " post-stop ; code=exited ; status=0 }"
+            ),
+        )) + "\n"
+
+    def __call__(self, arguments, **kwargs):
+        arguments = list(arguments)
+        self.calls.append(arguments)
+        if arguments == ["/usr/bin/rclone", "version"]:
+            if self.fault == "rclone-unavailable":
+                raise FileNotFoundError("constructed missing rclone")
+            version = (
+                b"rclone v0.0.0\n"
+                if self.fault == "wrong-rclone"
+                else RCLONE_VERSION_OUTPUT
+            )
+            return self.completed(arguments, stdout=version)
+
+        if arguments[:2] == ["/usr/bin/systemctl", "--user"]:
+            operation = arguments[2:]
+            if operation == ["show", "--property=Version", "--value"]:
+                return self.completed(arguments, stdout="257\n")
+            if "daemon-reload" in operation or "show-environment" in operation:
+                raise AssertionError(f"manager-wide operation: {operation!r}")
+            if (
+                self.unit is None
+                and operation[:1] == ["show"]
+                and operation[-2:] == ["--property=LoadState", "--value"]
+            ):
+                self.unit = operation[1]
+            if operation[:2] == ["show", self.unit]:
+                if self.teardown_started:
+                    if operation[-2:] == ["--property=LoadState", "--value"]:
+                        if self.fault == "teardown-collection-exception":
+                            raise OSError("constructed collection exception")
+                    elif self.fault == "teardown-show-failure":
+                        return self.completed(arguments, 1, stderr="constructed show failure")
+                    elif self.fault == "teardown-show-malformed":
+                        return self.completed(arguments, stdout="malformed")
+                    elif self.fault == "teardown-show-wrong-identity":
+                        return self.completed(arguments, stdout=self._manager_properties().replace(f"Id={self.unit}", "Id=wrong.service"))
+                    elif self.fault == "teardown-show-exception":
+                        raise OSError("constructed show exception")
+                if operation[-2:] == ["--property=LoadState", "--value"]:
+                    if self.created and self.fault == "launch-probe-unavailable":
+                        return self.completed(arguments, 1, stderr="constructed unavailable probe")
+                    if self.created and self.fault == "launch-probe-malformed":
+                        return self.completed(arguments, stdout="constructed malformed probe")
+                    if self.created and self.fault == "launch-probe-timeout":
+                        raise subprocess.TimeoutExpired(arguments, 10)
+
+                    if not self.created or (self.reset and not self.referenced):
+                        load_state = (
+                            "loaded" if self.fault == "collection" and self.reset
+                            else "not-found"
+                        )
+                        return self.completed(
+                            arguments, stdout=f"{load_state}\n"
+                        )
+                    return self.completed(arguments, stdout="loaded\n")
+                return self.completed(arguments, stdout=self._manager_properties())
+            if operation == ["stop", self.unit]:
+                self.teardown_started = True
+                if self.fault == "teardown-stop-exception":
+                    raise OSError("constructed stop exception")
+                if self.fault == "teardown-stop-timeout":
+                    raise subprocess.TimeoutExpired(arguments, 10)
+                if not self.created:
+                    return self.completed(arguments, 1, stderr="constructed absent unit")
+                if self.fault == "manager-stop":
+                    return self.completed(arguments, 1, stderr="constructed stop fault")
+                if self.fault not in ("stop-retains-failure", "reset-retains-failure"):
+                    self.state = "inactive"
+                return self.completed(arguments)
+            if operation == ["reset-failed", self.unit]:
+                if self.fault == "teardown-reset-exception":
+                    raise OSError("constructed reset exception")
+                if self.fault == "reset-failed":
+                    return self.completed(arguments, 1, stderr="constructed reset fault")
+                self.reset = True
+                if self.fault != "reset-retains-failure":
+                    self.state = "inactive"
+                return self.completed(arguments)
+            raise AssertionError(f"wrong or unexpected manager operation: {operation!r}")
+
+        if arguments[0] == "/usr/bin/systemd-run":
+            self.unit = next(
+                value.removeprefix("--unit=")
+                for value in arguments if value.startswith("--unit=")
+            )
+            if self.fault == "launch-rejected":
+                return self.completed(arguments, 1, stderr="constructed launcher rejection")
+            if self.fault == "launch-exception-before-creation":
+                raise OSError("constructed launch exception")
+            if self.fault == "launch-timeout-before-creation":
+                raise subprocess.TimeoutExpired(arguments, 30)
+
+            properties = [
+                value.removeprefix("--property=")
+                for value in arguments if value.startswith("--property=")
+            ]
+            pre = next(
+                value.removeprefix("ExecStartPre=")
+                for value in properties if value.startswith("ExecStartPre=")
+            )
+            post = next(
+                value.removeprefix("ExecStopPost=")
+                for value in properties if value.startswith("ExecStopPost=")
+            )
+            pre_diagnostic = (
+                "constructed prerequisite failure\n"
+                if self.fault == "wrong-diagnostic"
+                else INTERRUPTED_CLEANUP_DIAGNOSTIC + "\n"
+            )
+            if self.fault == "launch-timeout-delayed-creation":
+                self.pending_creation = (pre, post, pre_diagnostic)
+                raise subprocess.TimeoutExpired(arguments, 30)
+            if self.fault == "launch-response-lost-delayed-creation":
+                self.pending_creation = (pre, post, pre_diagnostic)
+                return self.completed(
+                    arguments, 1, stderr="constructed connection lost after submission"
+                )
+            self._write_hook_evidence(pre, 1, pre_diagnostic)
+            self._write_hook_evidence(post, 0, "")
+            self.created = True
+            if self.fault == "launch-timeout-after-creation":
+                raise subprocess.TimeoutExpired(arguments, 30, stderr="constructed launcher timeout")
+            return self.completed(arguments, 1, stderr="constructed expected start failure")
+
+        if self.unit and pathlib.Path(arguments[0]).name == "proton-drive-desktop-fixture":
+            if self.fault == "explicit-stop":
+                return self.completed(
+                    arguments, 1, stderr="constructed explicit-stop fault\n"
+                )
+            self.marker.unlink()
+            self.phase.unlink()
+            os.removexattr(
+                self.mount,
+                "user.proton-drive-desktop.identity",
+                follow_symlinks=False,
+            )
+            if self.fault not in ("stop-retains-failure", "reset-retains-failure"):
+                self.state = "inactive"
+            return self.completed(arguments, stdout="stopped\n")
+
+        raise AssertionError(f"unexpected command: {arguments!r}")
+
+
+@unittest.skipUnless(sys.platform == "linux", "Linux user-manager fixture model")
+class RealUserManagerCleanupRetentionFixtureTests(unittest.TestCase):
+    def run_synthetic_fixture(self, fault=None):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = pathlib.Path(temporary.name)
+        runtime = root / "run"
+        evidence = root / "evidence"
+        runtime.mkdir(mode=0o700)
+        manager_directory = runtime / "systemd"
+        manager_directory.mkdir(mode=0o700)
+        manager_socket_path = manager_directory / "private"
+        manager_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        manager_socket.bind(str(manager_socket_path))
+        os.chmod(manager_socket_path, 0o600)
+        self.addCleanup(manager_socket.close)
+        boundary = SyntheticRealManagerBoundary(fault)
+        boundary.manager_socket = manager_socket_path
+        environment = mock.patch.dict(
+            os.environ,
+            {"XDG_RUNTIME_DIR": str(runtime)},
+            clear=True,
+        )
+        environment.start()
+        self.addCleanup(environment.stop)
+        return evidence, boundary
+
+    def test_private_runtime_manager_socket_alias_is_narrow_and_temporary(self):
+        evidence, boundary = self.run_synthetic_fixture()
+        source_before = boundary.manager_socket.lstat()
+        alias_observations = []
+        disposal_observations = []
+        remove_tree = shutil.rmtree
+
+        def observe_command(arguments, **kwargs):
+            if pathlib.Path(arguments[0]).name == "proton-drive-desktop-fixture":
+                alias = boundary.marker.parent.parent / "systemd/private"
+                alias_information = alias.stat()
+                alias_observations.append({
+                    "is_symlink": alias.is_symlink(),
+                    "target": os.readlink(alias),
+                    "target_identity": (
+                        alias_information.st_dev,
+                        alias_information.st_ino,
+                    ),
+                })
+            return boundary(arguments, **kwargs)
+
+        def observe_disposal(path, *args, **kwargs):
+            path = pathlib.Path(path)
+            fixture_root = pathlib.Path(boundary.launcher).parent
+            if path == fixture_root:
+                alias = boundary.marker.parent.parent / "systemd/private"
+                disposal_observations.append({
+                    "alias_absent": not alias.exists() and not alias.is_symlink(),
+                    "source_is_socket": stat.S_ISSOCK(
+                        boundary.manager_socket.lstat().st_mode
+                    ),
+                })
+            return remove_tree(path, *args, **kwargs)
+
+        with mock.patch.object(shutil, "rmtree", observe_disposal):
+            receipt_path = run_real_user_manager_cleanup_retention(
+                evidence,
+                command_runner=observe_command,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+
+        self.assertTrue(receipt_path.is_file())
+        self.assertEqual(1, len(alias_observations))
+        self.assertEqual(True, alias_observations[0]["is_symlink"])
+        self.assertEqual(
+            str(boundary.manager_socket), alias_observations[0]["target"]
+        )
+        self.assertEqual(
+            (source_before.st_dev, source_before.st_ino),
+            alias_observations[0]["target_identity"],
+        )
+        self.assertEqual(
+            [{"alias_absent": True, "source_is_socket": True}],
+            disposal_observations,
+        )
+        source_after = boundary.manager_socket.lstat()
+        self.assertEqual(
+            (source_before.st_dev, source_before.st_ino),
+            (source_after.st_dev, source_after.st_ino),
+        )
+
+    def test_additional_unrelated_xattr_is_preserved_against_the_baseline(self):
+        for change in (None, "remove", "alter", "retain-product"):
+            with self.subTest(change=change):
+                evidence, boundary = self.run_synthetic_fixture()
+                set_xattr = os.setxattr
+                def with_extra_attribute(path, name, value, *args, **kwargs):
+                    set_xattr(path, name, value, *args, **kwargs)
+                    if name == "user.keep":
+                        set_xattr(path, "user.additional", b"additional-fixture-value")
+                def observe_command(arguments, **kwargs):
+                    result = boundary(arguments, **kwargs)
+                    if pathlib.Path(arguments[0]).name == "proton-drive-desktop-fixture":
+                        if change == "remove":
+                            os.removexattr(boundary.mount, "user.additional")
+                        elif change == "alter":
+                            set_xattr(boundary.mount, "user.additional", b"changed-value")
+                        elif change == "retain-product":
+                            set_xattr(boundary.mount, "user.proton-drive-desktop.identity", b"12" * 32)
+                    return result
+                with mock.patch.object(os, "setxattr", side_effect=with_extra_attribute):
+                    if change is None:
+                        receipt_path = run_real_user_manager_cleanup_retention(
+                            evidence, command_runner=observe_command,
+                            reference_owner_factory=boundary.open_reference_owner,
+                        )
+                        receipt = json.loads(receipt_path.read_text())
+                        before = receipt["before"]["directory"]["xattrs_hex"]
+                        after = receipt["after_explicit_stop"]["directory"]["xattrs_hex"]
+                        self.assertEqual(b"additional-fixture-value".hex(), before["user.additional"])
+                        self.assertEqual(before["user.additional"], after["user.additional"])
+                        self.assertNotIn("user.proton-drive-desktop.identity", after)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "changed retained non-product xattrs"):
+                            run_real_user_manager_cleanup_retention(
+                                evidence, command_runner=observe_command,
+                                reference_owner_factory=boundary.open_reference_owner,
+                            )
+                        self.assertEqual([], list(evidence.glob("*.json")))
+
+    def test_stopped_failed_unit_is_reset_before_reference_release(self):
+        evidence, boundary = self.run_synthetic_fixture("stop-retains-failure")
+        receipt_path = run_real_user_manager_cleanup_retention(
+            evidence, command_runner=boundary,
+            reference_owner_factory=boundary.open_reference_owner,
+        )
+        receipt = json.loads(receipt_path.read_text())
+        self.assertEqual("failed", receipt["manager_after_explicit_stop"]["ActiveState"])
+        self.assertEqual("failed", receipt["teardown"]["after_stop"]["ActiveState"])
+        self.assertEqual("inactive", receipt["teardown"]["after_reset"]["ActiveState"])
+        self.assertEqual("0", receipt["teardown"]["after_reset"]["MainPID"])
+        self.assertEqual("0", receipt["teardown"]["after_reset"]["ControlPID"])
+        self.assertEqual("not-found", receipt["teardown"]["collected_load_state"])
+        self.assertTrue(all(owner.closed for owner in boundary.reference_owners))
+        self.assertFalse(pathlib.Path(boundary.launcher).exists())
+
+    def test_unsuccessful_state_reset_cannot_publish_a_receipt(self):
+        evidence, boundary = self.run_synthetic_fixture("reset-retains-failure")
+        with self.assertRaisesRegex(RuntimeError, "did not become inactive after reset"):
+            run_real_user_manager_cleanup_retention(
+                evidence, command_runner=boundary,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+        self.assertEqual([], list(evidence.glob("*.json")))
+        self.assertTrue(pathlib.Path(boundary.launcher).exists())
+        self.assertTrue(all(owner.closed for owner in boundary.reference_owners))
+
+    def test_rejected_launcher_keeps_its_diagnostic_without_stopping_an_absent_unit(self):
+        evidence, boundary = self.run_synthetic_fixture("launch-rejected")
+        with self.assertRaisesRegex(RuntimeError, "constructed launcher rejection"):
+            run_real_user_manager_cleanup_retention(
+                evidence,
+                command_runner=boundary,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+        self.assertFalse(boundary.created)
+        self.assertNotIn(["/usr/bin/systemctl", "--user", "stop", boundary.unit], boundary.calls)
+        self.assertEqual([], list(evidence.glob("*.json")))
+
+    def test_timed_out_launcher_cleans_its_created_unit_before_disposing_files(self):
+        evidence, boundary = self.run_synthetic_fixture("launch-timeout-after-creation")
+        runner = boundary
+        stopped_with_files_present = []
+        def observe_stop(arguments, **kwargs):
+            if arguments == ["/usr/bin/systemctl", "--user", "stop", boundary.unit]:
+                stopped_with_files_present.append(pathlib.Path(boundary.launcher).exists())
+            return runner(arguments, **kwargs)
+        with self.assertRaises((RuntimeError, subprocess.TimeoutExpired)):
+            run_real_user_manager_cleanup_retention(
+                evidence, command_runner=observe_stop,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+        self.assertEqual([True], stopped_with_files_present)
+        self.assertTrue(boundary.reset)
+        self.assertFalse(boundary.referenced)
+        self.assertTrue(all(owner.closed for owner in boundary.reference_owners))
+        self.assertEqual([], list(evidence.glob("*.json")))
+
+    def test_unresolved_launch_probe_preserves_files_and_names_the_launch_failure(self):
+        evidence, boundary = self.run_synthetic_fixture("launch-probe-unavailable")
+        with self.assertRaises(RuntimeError) as failure:
+            run_real_user_manager_cleanup_retention(
+                evidence, command_runner=boundary,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+        self.assertIn(boundary.unit, str(failure.exception))
+        self.assertTrue(pathlib.Path(boundary.launcher).exists(), "unresolved unit still needs its fixture files")
+        self.assertIn("constructed expected start failure", str(failure.exception))
+        self.assertIn("constructed unavailable probe", str(failure.exception))
+        self.assertEqual([], list(evidence.glob("*.json")))
+        self.assertNotIn(["/usr/bin/systemctl", "--user", "stop", boundary.unit], boundary.calls)
+
+    def test_unavailable_launch_outcome_does_not_invent_creation_or_collection(self):
+        for fault in ("launch-probe-malformed", "launch-probe-timeout"):
+            with self.subTest(fault=fault):
+                evidence, boundary = self.run_synthetic_fixture(fault)
+                with self.assertRaises(RuntimeError) as failure:
+                    run_real_user_manager_cleanup_retention(
+                        evidence, command_runner=boundary,
+                        reference_owner_factory=boundary.open_reference_owner,
+                    )
+                self.assertIn(boundary.unit, str(failure.exception))
+                self.assertIn("constructed expected start failure", str(failure.exception))
+                self.assertIn("fixture files retained at", str(failure.exception))
+                self.assertTrue(pathlib.Path(boundary.launcher).exists())
+                self.assertNotIn(["/usr/bin/systemctl", "--user", "stop", boundary.unit], boundary.calls)
+                self.assertEqual([], list(evidence.glob("*.json")))
+
+    def test_launch_exceptions_before_creation_preserve_failure_without_teardown(self):
+        for fault in ("launch-exception-before-creation",):
+            with self.subTest(fault=fault):
+                evidence, boundary = self.run_synthetic_fixture(fault)
+                with self.assertRaises(RuntimeError) as failure:
+                    run_real_user_manager_cleanup_retention(
+                        evidence, command_runner=boundary,
+                        reference_owner_factory=boundary.open_reference_owner,
+                    )
+                self.assertIn(boundary.unit, str(failure.exception))
+                self.assertIn("transient fixture launch failed", str(failure.exception))
+                self.assertFalse(boundary.created)
+                self.assertNotIn(["/usr/bin/systemctl", "--user", "stop", boundary.unit], boundary.calls)
+                self.assertEqual([], list(evidence.glob("*.json")))
+                self.assertEqual(
+                    [boundary.manager_socket.parent],
+                    list((evidence.parent / "run").iterdir()),
+                )
+                self.assertTrue(stat.S_ISSOCK(boundary.manager_socket.lstat().st_mode))
+
+    def test_unresolved_launch_preserves_inputs_for_late_creation(self):
+        for fault in (
+            "launch-timeout-before-creation", "launch-timeout-delayed-creation",
+            "launch-response-lost-delayed-creation",
+        ):
+            with self.subTest(fault=fault):
+                evidence, boundary = self.run_synthetic_fixture(fault)
+                negative_probe = []
+                launched = []
+                def observe_command(arguments, **kwargs):
+                    if arguments[0] == "/usr/bin/systemd-run":
+                        launched.append(list(arguments))
+                    result = boundary(arguments, **kwargs)
+                    if (launched and arguments == ["/usr/bin/systemctl", "--user", "show",
+                                                   boundary.unit, "--property=LoadState", "--value"]):
+                        negative_probe.append(result.stdout.strip())
+                    return result
+                with self.assertRaises(RuntimeError) as failure:
+                    run_real_user_manager_cleanup_retention(
+                        evidence, command_runner=observe_command,
+                        reference_owner_factory=boundary.open_reference_owner,
+                    )
+                self.assertEqual(["not-found"], negative_probe)
+                self.assertFalse(boundary.created)
+                pre = next(value.removeprefix("--property=ExecStartPre=")
+                           for value in launched[0] if value.startswith("--property=ExecStartPre="))
+                fields = shlex.split(pre)
+                launcher = pathlib.Path(fields[0])
+                helper = pathlib.Path(fields[7])
+                self.assertTrue(launcher.is_file(), "late unit creation still needs its lifecycle runner")
+                self.assertTrue(helper.is_file(), "late unit creation still needs its helper")
+                self.assertIn(boundary.unit, str(failure.exception))
+                self.assertIn("launch outcome unresolved", str(failure.exception))
+                self.assertIn(str(launcher.parent), str(failure.exception))
+                self.assertEqual([], list(evidence.glob("*.json")))
+                self.assertFalse(boundary.teardown_started)
+                self.assertFalse(boundary.reset)
+                if fault in (
+                    "launch-timeout-delayed-creation", "launch-response-lost-delayed-creation"
+                ):
+                    # Deliver the original queued creation only after the negative
+                    # probe and the fixture's return. This is not a launcher retry.
+                    delayed_pre, delayed_post, diagnostic = boundary.pending_creation
+                    boundary._write_hook_evidence(delayed_pre, 1, diagnostic)
+                    boundary._write_hook_evidence(delayed_post, 0, "")
+                    boundary.created = True
+                    self.assertTrue(boundary.hooks.joinpath("post-stop.status").is_file())
+                    self.assertTrue(launcher.is_file())
+                    self.assertTrue(helper.is_file())
+                    self.assertEqual([], list(evidence.glob("*.json")))
+
+    def test_teardown_failures_name_the_unit_and_keep_unresolved_files(self):
+        cases = {
+            "teardown-show-failure": "unable to read transient fixture unit state",
+            "teardown-show-malformed": "manager properties are malformed",
+            "teardown-show-wrong-identity": "manager returned properties for the wrong unit",
+            "teardown-stop-exception": "constructed stop exception",
+            "teardown-stop-timeout": "timed out",
+            "teardown-show-exception": "constructed show exception",
+            "teardown-reset-exception": "constructed reset exception",
+            "teardown-release-exception": "constructed release exception",
+            "teardown-collection-exception": "constructed collection exception",
+        }
+        for fault, diagnostic in cases.items():
+            with self.subTest(fault=fault):
+                evidence, boundary = self.run_synthetic_fixture(fault)
+                with self.assertRaises((RuntimeError, OSError, subprocess.TimeoutExpired)) as failure:
+                    run_real_user_manager_cleanup_retention(
+                        evidence, command_runner=boundary,
+                        reference_owner_factory=boundary.open_reference_owner,
+                    )
+                self.assertIn(boundary.unit, str(failure.exception))
+                self.assertIn(diagnostic, str(failure.exception))
+                self.assertTrue(pathlib.Path(boundary.launcher).exists())
+                self.assertEqual([], list(evidence.glob("*.json")))
+                self.assertTrue(all(owner.closed for owner in boundary.reference_owners))
+
+    def test_only_exact_interrupted_cleanup_diagnostic_qualifies(self):
+        evidence, boundary = self.run_synthetic_fixture()
+
+        receipt_path = run_real_user_manager_cleanup_retention(
+            evidence,
+            command_runner=boundary,
+            reference_owner_factory=boundary.open_reference_owner,
+        )
+        receipt = json.loads(receipt_path.read_text())
+
+        self.assertEqual(
+            INTERRUPTED_CLEANUP_DIAGNOSTIC + "\n",
+            receipt["hooks"]["start-pre"]["stderr"],
+        )
+        self.assertEqual("1\n", receipt["hooks"]["start-pre"]["status"])
+        self.assertEqual("", receipt["hooks"]["post-stop"]["stderr"])
+        self.assertEqual("0\n", receipt["hooks"]["post-stop"]["status"])
+        self.assertIn("status=1", receipt["manager_after_start"]["ExecStartPre"])
+        self.assertIn("status=0", receipt["manager_after_start"]["ExecStopPost"])
+
+    def test_temporary_root_disposal_failure_refuses_a_final_receipt(self):
+        evidence, boundary = self.run_synthetic_fixture()
+        temporary_directory = tempfile.TemporaryDirectory
+
+        class DisposalFailure:
+            def __init__(self, *args, **kwargs):
+                self.temporary = temporary_directory(*args, **kwargs)
+
+            def __enter__(self):
+                return self.temporary.__enter__()
+
+            def __exit__(self, *args):
+                self.temporary.__exit__(*args)
+                raise OSError("constructed temporary-root disposal failure")
+
+        with mock.patch.object(tempfile, "TemporaryDirectory", DisposalFailure):
+            with self.assertRaisesRegex(
+                OSError, "constructed temporary-root disposal failure"
+            ):
+                run_real_user_manager_cleanup_retention(
+                    evidence,
+                    command_runner=boundary,
+                    reference_owner_factory=boundary.open_reference_owner,
+                )
+
+        self.assertEqual([], list(evidence.glob("*.json")))
+
+    def test_receipt_publication_observes_a_disposed_temporary_root(self):
+        evidence, boundary = self.run_synthetic_fixture()
+        replace = os.replace
+        publications = []
+
+        def observe_publication(source, destination):
+            source = pathlib.Path(source)
+            destination = pathlib.Path(destination)
+            fixture_root = pathlib.Path(boundary.launcher).parent
+            publications.append({
+                "root_absent": not fixture_root.exists(),
+                "source_parent": source.parent,
+                "destination_parent": destination.parent,
+                "source_mode": stat.S_IMODE(source.stat().st_mode),
+            })
+            return replace(source, destination)
+
+        with mock.patch.object(os, "replace", observe_publication):
+            receipt_path = run_real_user_manager_cleanup_retention(
+                evidence,
+                command_runner=boundary,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+
+        self.assertEqual([receipt_path], list(evidence.glob("*.json")))
+        self.assertEqual(0o600, stat.S_IMODE(receipt_path.stat().st_mode))
+        self.assertEqual(1, len(publications))
+        self.assertEqual(
+            {
+                "root_absent": True,
+                "source_parent": evidence,
+                "destination_parent": evidence,
+                "source_mode": 0o600,
+            },
+            publications[0],
+        )
+
+    def test_one_reference_owner_spans_recovery_and_releases_its_own_reference(self):
+        evidence, boundary = self.run_synthetic_fixture()
+
+        receipt_path = run_real_user_manager_cleanup_retention(
+            evidence,
+            command_runner=boundary,
+            reference_owner_factory=boundary.open_reference_owner,
+        )
+        receipt = json.loads(receipt_path.read_text())
+
+        self.assertEqual(1, len(boundary.reference_owners))
+        owner = boundary.reference_owners[0]
+        self.assertEqual(
+            [
+                ("RefUnit", receipt["unit"]),
+                ("UnrefUnit", receipt["unit"]),
+            ],
+            owner.calls,
+        )
+        self.assertTrue(owner.closed)
+        self.assertLess(
+            receipt["manager_operations"].index(["ref-unit", receipt["unit"]]),
+            receipt["manager_operations"].index(
+                ["public-helper-stop", receipt["unit"]]
+            ),
+        )
+        self.assertLess(
+            receipt["manager_operations"].index(
+                ["public-helper-stop", receipt["unit"]]
+            ),
+            receipt["manager_operations"].index(["unref-unit", receipt["unit"]]),
+        )
+
+    def test_reference_owner_disconnect_refuses_receipt_after_checked_cleanup(self):
+        evidence, boundary = self.run_synthetic_fixture("reference-disconnect")
+
+        with self.assertRaisesRegex(RuntimeError, "reference release failed"):
+            run_real_user_manager_cleanup_retention(
+                evidence,
+                command_runner=boundary,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+
+        self.assertEqual([], list(evidence.glob("*.json")))
+        self.assertEqual(1, len(boundary.reference_owners))
+        self.assertTrue(boundary.reference_owners[0].closed)
+        self.assertTrue(boundary.reset)
+        self.assertIn(
+            ["/usr/bin/systemctl", "--user", "stop", boundary.unit],
+            boundary.calls,
+        )
+
+    def test_generated_lifecycle_runner_scrubs_shell_and_helper_environments(self):
+        evidence, boundary = self.run_synthetic_fixture("real-shell-environment")
+
+        receipt_path = run_real_user_manager_cleanup_retention(
+            evidence,
+            command_runner=boundary,
+            reference_owner_factory=boundary.open_reference_owner,
+        )
+
+        required = set(boundary.lifecycle_environment_names)
+        shell_names = required | {"PWD", "SHLVL", "_"}
+        for hook_name in ("start-pre", "post-stop"):
+            with self.subTest(hook=hook_name):
+                self.assertEqual(
+                    shell_names, boundary.shell_environment_names[hook_name]
+                )
+                self.assertEqual(
+                    required, boundary.helper_environment_names[hook_name]
+                )
+                self.assertNotIn(
+                    boundary.sentinel_name,
+                    boundary.shell_environment_names[hook_name],
+                )
+                self.assertNotIn(
+                    "ARBITRARY_INHERITED",
+                    boundary.shell_environment_names[hook_name],
+                )
+        self.assertTrue(receipt_path.is_file())
+        self.assertIn(
+            ["/usr/bin/systemctl", "--user", "reset-failed", boundary.unit],
+            boundary.calls,
+        )
+
+    def test_constructed_sentinel_leak_is_rejected_without_its_value(self):
+        evidence, boundary = self.run_synthetic_fixture("sentinel-leak")
+
+        with self.assertRaisesRegex(
+            RuntimeError, boundary.sentinel_name
+        ) as failure:
+            run_real_user_manager_cleanup_retention(
+                evidence,
+                command_runner=boundary,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+
+        retained_text = str(failure.exception)
+        for path in evidence.rglob("*") if evidence.exists() else ():
+            if path.is_file() and not path.is_symlink():
+                retained_text += path.read_text(errors="replace")
+        self.assertNotIn(boundary.sentinel_value, retained_text)
+        self.assertEqual([], list(evidence.glob("*.json")))
+
+    def test_transient_fixture_never_reloads_or_links_manager_units(self):
+        evidence, boundary = self.run_synthetic_fixture()
+
+        receipt_path = run_real_user_manager_cleanup_retention(
+            evidence,
+            command_runner=boundary,
+            reference_owner_factory=boundary.open_reference_owner,
+        )
+        receipt = json.loads(receipt_path.read_text())
+
+        flattened = [argument for call in boundary.calls for argument in call]
+        self.assertNotIn("/usr/bin/busctl", flattened)
+        self.assertNotIn("daemon-reload", flattened)
+        self.assertNotIn("show-environment", flattened)
+        self.assertNotIn("link", flattened)
+        self.assertEqual(
+            "systemd-run/StartTransientUnit", receipt["transient_interface"]
+        )
+        for operation in receipt["manager_operations"]:
+            if operation[0] in {"stop", "reset-failed"}:
+                self.assertEqual([operation[0], receipt["unit"]], operation)
+            elif operation[0] == "show" and operation[1].endswith(".service"):
+                self.assertEqual(receipt["unit"], operation[1])
+
+    def test_constructed_wrong_unit_properties_cannot_qualify(self):
+        evidence, boundary = self.run_synthetic_fixture("wrong-unit")
+
+        with self.assertRaisesRegex(RuntimeError, "wrong unit"):
+            run_real_user_manager_cleanup_retention(
+                evidence,
+                command_runner=boundary,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+
+        self.assertEqual([], list(evidence.glob("*.json")))
+
+    def test_constructed_wrong_rclone_version_cannot_produce_a_receipt(self):
+        calls = []
+
+        def command_runner(arguments, **kwargs):
+            calls.append(list(arguments))
+            if arguments == ["/usr/bin/rclone", "version"]:
+                return subprocess.CompletedProcess(
+                    arguments, 0, stdout=b"rclone v0.0.0\n"
+                )
+            self.fail(f"manager operation followed wrong rclone: {arguments!r}")
+
+        evidence, boundary = self.run_synthetic_fixture()
+        with self.assertRaisesRegex(
+            RuntimeError, "rclone 1.75.1 is unavailable"
+        ):
+            run_real_user_manager_cleanup_retention(
+                evidence, command_runner=command_runner,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+
+        self.assertEqual([["/usr/bin/rclone", "version"]], calls)
+        self.assertFalse(evidence.exists())
+
+    def test_constructed_unavailable_rclone_cannot_produce_a_receipt(self):
+        evidence, boundary = self.run_synthetic_fixture("rclone-unavailable")
+
+        with self.assertRaisesRegex(
+            RuntimeError, "rclone 1.75.1 is unavailable"
+        ):
+            run_real_user_manager_cleanup_retention(
+                evidence,
+                command_runner=boundary,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+
+        self.assertEqual(
+            [["/usr/bin/rclone", "version"]], boundary.calls
+        )
+        self.assertFalse(evidence.exists())
+
+    def test_constructed_prerequisite_diagnostic_cannot_qualify(self):
+        evidence, boundary = self.run_synthetic_fixture("wrong-diagnostic")
+
+        with self.assertRaisesRegex(
+            RuntimeError, "did not reach interrupted cleanup exactly"
+        ):
+            run_real_user_manager_cleanup_retention(
+                evidence,
+                command_runner=boundary,
+                reference_owner_factory=boundary.open_reference_owner,
+            )
+
+        self.assertEqual([], list(evidence.glob("*.json")))
+
+    def test_each_constructed_teardown_fault_refuses_a_receipt(self):
+        expected = {
+            "explicit-stop": "isolated explicit stop failed",
+            "manager-stop": "teardown stop failed",
+            "process-remains": "retained a process after stop",
+            "reset-failed": "failure reset failed",
+            "release": "reference release failed",
+            "collection": "was not collected",
+        }
+        for fault, diagnostic in expected.items():
+            with self.subTest(constructed_fault=fault):
+                evidence, boundary = self.run_synthetic_fixture(fault)
+
+                with self.assertRaisesRegex(RuntimeError, diagnostic):
+                    run_real_user_manager_cleanup_retention(
+                        evidence,
+                        command_runner=boundary,
+                        reference_owner_factory=boundary.open_reference_owner,
+                    )
+
+                self.assertEqual([], list(evidence.glob("*.json")))
+
+    def test_documented_real_manager_command_rejects_relative_evidence(self):
+        guide = (ROOT / "docs/PROTON_DRIVE.md").read_text()
+        procedure = guide.split(
+            "### Qualify cleanup retention with a real user manager", 1
+        )[1].split("Baloo's [settings schema]", 1)[0]
+        documented_command = re.search(
+            r"python3 tests/test_proton_drive_desktop\.py \\\n"
+            r"  --real-user-manager-cleanup-retention \"\$evidence_dir\"",
+            procedure,
+        )
+        self.assertIsNotNone(documented_command)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(pathlib.Path(__file__).resolve()),
+                    "--real-user-manager-cleanup-retention",
+                    "relative-evidence",
+                ],
+                cwd=root,
+                env={"PYTHONDONTWRITEBYTECODE": "1"},
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+
+            self.assertEqual(1, result.returncode)
+            self.assertEqual("", result.stdout)
+            self.assertEqual("evidence directory must be absolute\n", result.stderr)
+            self.assertFalse((root / "relative-evidence").exists())
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--real-user-manager-cleanup-retention":
+        try:
+            retained_receipt = run_real_user_manager_cleanup_retention(
+                sys.argv[2]
+            )
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            print(error, file=sys.stderr)
+            raise SystemExit(1)
+        print(retained_receipt)
+        raise SystemExit(0)
     unittest.main()
