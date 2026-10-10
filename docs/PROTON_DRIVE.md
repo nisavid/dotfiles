@@ -424,7 +424,15 @@ reports.
      exit 1
    fi
 
-   balooctl6 config add excludeFolders "$proton_desktop_root"
+   # Match Baloo's indented entries, with or without a trailing slash.
+   baloo_exclusions=$(balooctl6 config list excludeFolders)
+   baloo_newline='
+   '
+   case "$baloo_newline$baloo_exclusions$baloo_newline" in
+     *"$baloo_newline    $proton_desktop_root$baloo_newline"*) ;;
+     *"$baloo_newline    $proton_desktop_root/$baloo_newline"*) ;;
+     *) balooctl6 config add excludeFolders "$proton_desktop_root" ;;
+   esac
    balooctl6 config list excludeFolders
    ```
 
