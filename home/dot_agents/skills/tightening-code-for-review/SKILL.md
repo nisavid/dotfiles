@@ -9,7 +9,9 @@ description: Use when performing comprehensive code reviews of a current diff, p
 
 Before a non-trivial change is marked ready for review, complete at least one full tightening pass. A full pass includes both low-level and high-level phases below, plus their clean review loops. The goal is to reduce reader burden without hiding behavior changes inside cleanup.
 
-This skill complements `reviewing-before-finalizing`: use that skill for choosing review strength, and use this skill for reviewability, bloat, overengineering, and architecture tightening.
+The governing repository and operator review policy determines review strength and completion. Tricritical's `review` and `loop` supply independent review and iteration; this skill supplies the complementary reviewability, bloat, overengineering, and architecture checks.
+
+The invoking task's top-level review owner coordinates the review loop. When carrying out a bounded review or revision assignment, including a critic, adjudicator, reviser, or external-feedback role, apply only the requested tightening checks and return the findings or revision through that invocation's contract. Do not start another review or loop from that role. A standalone tightening owner may delegate the scoped passes below and invoke Tricritical's `loop` at the top level.
 
 The operator request, current mode, and higher-priority tool constraints decide whether edits are allowed. In review-only or read-only contexts, report proposed fixes instead of changing files.
 
@@ -19,7 +21,7 @@ For reuse bloat, do not stop at exact duplicated lines. Look for similar code th
 
 In read-only contexts, this produces a tightening report, not a completed code-tightening revision. Report-only acceptance means the tightening review is complete; it does not mean the code has been tightened. Do not claim the code has been tightened until accepted edits are applied and verified.
 
-In report-only Ralph review, unresolved valid findings remain pending decisions or blockers. A report-only cycle can complete the review artifact, but it cannot honestly claim a clean or tightened revision unless the latest cycle has no findings.
+In report-only review, unresolved valid findings remain pending decisions or blockers. A report-only cycle can complete the review artifact, but it cannot honestly claim a clean or tightened revision unless the latest cycle has no findings.
 
 This is not a replacement for ordinary correctness, security, product, or regression review. For open-ended architecture discovery without a current diff or closeout target, use `improve-codebase-architecture` directly.
 
@@ -47,10 +49,10 @@ Do not use this as a general architecture audit when there is no scoped change s
 | Reuse | Is this code repeating behavior that should be shared or deleted? | Search for exact duplicates, near-duplicates, existing generic facilities, and underused abstractions. |
 | Code smells | Which small smells increase reader burden or diff size? | Check pass-throughs, branchy modes, speculative options, repeated translation, inert handling, and noisy tests. |
 | React/Next | Are React constructs carrying unnecessary work or surface area? | Check state/effects, memoization, client boundaries, imports, subscriptions, component boundaries, and design literals. |
-| Low-level loop | Did the revision introduce or reveal new bloat? | Run Ralph cycles until the latest pass is clean. |
+| Low-level loop | Did the revision introduce or reveal new bloat? | The top-level owner runs Tricritical's loop until the current scope has a clean latest pass. |
 | High-level | Did this change add or reinforce shallow modules or poor locality? | Review architecture introduced or amplified by the diff. |
 | Alternative-shape check | What simpler architecture would still serve current stories? | Prototype enough of each plausible variant to estimate module, seam, complexity, and LOC impact. |
-| High-level loop | Are there new architecture items after revisions? | Run Ralph cycles until the latest pass is clean. |
+| High-level loop | Are there new architecture items after revisions? | The top-level owner runs Tricritical's loop until the current scope has a clean latest pass. |
 | Report | What remains and what was handled? | Summarize findings, decisions, evidence, and next-step options. |
 
 ## Reuse And Debloating Checks
@@ -134,7 +136,7 @@ Verify implemented cleanup by inspecting the resulting diff for unintended behav
 
 Collect report-bound findings in a conversation-visible summary. When writes are permitted, also use a scratch file outside the repo, such as `$TMPDIR/tightening-code-for-review-<timestamp>.md`, with sections for starting diffstat, fixed, discarded, deferred, and pending items. Tell later reviewers about already-collected items so they do not duplicate them.
 
-Then use `ralph-review-until-clean` for this low-level pass. Previous findings count as resolved for the loop only after they are fixed, discarded with evidence, intentionally deferred with a gating condition, or recorded as a pending operator decision. Give each new reviewer the current report so the latest cycle can focus on new findings.
+Return this pass's findings and any verified revision to the top-level review owner for Tricritical's `loop`. Keep valid in-scope findings open until fixed or explicitly decided under the governing policy; a pending operator decision or an incomplete execution does not establish a clean revision. Record out-of-scope deferrals with their gating conditions. The owner binds the current report and applicable prior dispositions for the next cycle, while keeping the selected critics independent under Tricritical's contract.
 
 ## High-Level Pass
 
@@ -173,7 +175,7 @@ Triage with `receiving-code-review`:
 
 Verify implemented architecture improvements with checks that match the changed contract: acceptance tests, schema or codegen checks, package smoke tests, build, typecheck, lint, migration or deploy checks, and runtime-script verification where relevant. For agent-facing docs or skills, include frontmatter discovery, link or reference checks, and pressure-scenario verification. If a relevant check is skipped, report why.
 
-Append report-bound items to the same summary and scratch file when available. Then use `ralph-review-until-clean` for this high-level pass with the same resolved-item rule as the low-level loop.
+Append report-bound items to the same summary and scratch file when available. Return this pass's findings and any verified revision to the top-level review owner for Tricritical's `loop`, with the same completion and independence rules as the low-level pass.
 
 After the high-level loop is clean, record the ending diffstat for the same review boundary. Compare it against the starting diffstat so the final report shows how the tightening changed the size and shape of the diff.
 
@@ -216,4 +218,4 @@ Ask whether to compose a concrete handling plan. If high-level proposals would c
 | Assuming every generated schema, DTO, adapter, or helper is a real boundary | Keep only boundaries with current contract value; challenge pass-through glue introduced by the diff. |
 | Letting reviewers repeat known items | Share the temporary report file with each new reviewer. |
 | Turning cleanup into unbounded refactoring | Implement only valid, in-scope, low-risk cleanup; report or defer the rest. |
-| Ending after one revised pass | Ralph means the latest labeled cycle has no findings. |
+| Ending after one revised pass | The owning review loop needs a clean latest pass for every selected scope on the final revision. |
