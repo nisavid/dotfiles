@@ -11505,9 +11505,9 @@ def run_real_user_manager_cleanup_retention(
                     or loaded_after_start.stdout.strip() not in ("loaded", "not-found")
                 ):
                     raise RuntimeError(
-                        f"{unit_name}: launch {launch_diagnostic}; unable to determine transient fixture load state: "
-                        f"{loaded_after_start.stdout.strip()} {loaded_after_start.stderr.strip()}; "
-                        f"fixture files retained at {root}"
+                        f"{unit_name}: launch {launch_diagnostic}; "
+                        f"LoadState probe did not establish transient fixture state; "
+                        f"fixture files retained at {root}; later checked unit cleanup is required"
                     )
                 transient_created = loaded_after_start.stdout.strip() == "loaded"
                 if not transient_created:
@@ -12006,9 +12006,18 @@ class SyntheticRealManagerBoundary:
                         raise OSError("constructed show exception")
                 if operation[-2:] == ["--property=LoadState", "--value"]:
                     if self.created and self.fault == "launch-probe-unavailable":
-                        return self.completed(arguments, 1, stderr="constructed unavailable probe")
+                        return self.completed(
+                            arguments,
+                            1,
+                            stdout="constructed unavailable probe stdout",
+                            stderr="constructed unavailable probe stderr",
+                        )
                     if self.created and self.fault == "launch-probe-malformed":
-                        return self.completed(arguments, stdout="constructed malformed probe")
+                        return self.completed(
+                            arguments,
+                            stdout="constructed malformed probe stdout",
+                            stderr="constructed malformed probe stderr",
+                        )
                     if self.created and self.fault == "launch-probe-timeout":
                         raise subprocess.TimeoutExpired(arguments, 10)
 
@@ -12303,8 +12312,13 @@ class RealUserManagerCleanupRetentionFixtureTests(unittest.TestCase):
             )
         self.assertIn(boundary.unit, str(failure.exception))
         self.assertTrue(pathlib.Path(boundary.launcher).exists(), "unresolved unit still needs its fixture files")
-        self.assertIn("constructed expected start failure", str(failure.exception))
-        self.assertIn("constructed unavailable probe", str(failure.exception))
+        failure_text = str(failure.exception)
+        self.assertIn("constructed expected start failure", failure_text)
+        self.assertIn("LoadState probe did not establish transient fixture state", failure_text)
+        self.assertIn("fixture files retained at", failure_text)
+        self.assertIn("later checked unit cleanup is required", failure_text)
+        self.assertNotIn("constructed unavailable probe stdout", failure_text)
+        self.assertNotIn("constructed unavailable probe stderr", failure_text)
         self.assertEqual([], list(evidence.glob("*.json")))
         self.assertNotIn(["/usr/bin/systemctl", "--user", "stop", boundary.unit], boundary.calls)
 
@@ -12317,9 +12331,15 @@ class RealUserManagerCleanupRetentionFixtureTests(unittest.TestCase):
                         evidence, command_runner=boundary,
                         reference_owner_factory=boundary.open_reference_owner,
                     )
-                self.assertIn(boundary.unit, str(failure.exception))
-                self.assertIn("constructed expected start failure", str(failure.exception))
-                self.assertIn("fixture files retained at", str(failure.exception))
+                failure_text = str(failure.exception)
+                self.assertIn(boundary.unit, failure_text)
+                self.assertIn("constructed expected start failure", failure_text)
+                self.assertIn("fixture files retained at", failure_text)
+                if fault == "launch-probe-malformed":
+                    self.assertIn("LoadState probe did not establish transient fixture state", failure_text)
+                    self.assertIn("later checked unit cleanup is required", failure_text)
+                    self.assertNotIn("constructed malformed probe stdout", failure_text)
+                    self.assertNotIn("constructed malformed probe stderr", failure_text)
                 self.assertTrue(pathlib.Path(boundary.launcher).exists())
                 self.assertNotIn(["/usr/bin/systemctl", "--user", "stop", boundary.unit], boundary.calls)
                 self.assertEqual([], list(evidence.glob("*.json")))
