@@ -993,7 +993,8 @@ class IncidentTests(unittest.TestCase):
         self.assertEqual([len(record["events"]) for record in self.records()], [4])
         self.assertTrue(self.records()[0]["finalized"])
         shutil.rmtree(self.root / "incidents")
-        # Left open by a collector that stopped mid-burst; the next one resumes it, with or without recovery.
+        # Left open by a collector that stopped mid-burst; the next one resumes it when it starts (recover). Without
+        # that, the rest of the burst still joins the one stored record, which waits for a start to be finalized.
         for recover in (False, True):
             first = self.incidents()
             first.handle(entries[0])
@@ -1003,9 +1004,10 @@ class IncidentTests(unittest.TestCase):
             for entry in entries[1:]:
                 second.handle(entry)
             second.finalize_due(self.t0 + 61)
+            second.flush()
             records = self.records()
             self.assertEqual([len(record["events"]) for record in records], [4])
-            self.assertTrue(records[0]["finalized"])
+            self.assertEqual(records[0]["finalized"], recover)
             shutil.rmtree(self.root / "incidents")
 
     def test_a_record_left_open_is_finalized_by_the_next_collector(self) -> None:
@@ -1092,7 +1094,7 @@ class IncidentTests(unittest.TestCase):
         # process's row in every OOM report's task table and at the start of each of its segfault lines.
         names = ("oom-killer-test", "oom_reaper_test", "out of memory!")
         kernel = {"_TRANSPORT": "kernel", "_BOOT_ID": "b" * 32}
-        memcg = "/user.slice/user-1001.slice/user@1001.service/app.slice/probe.scope"
+        memcg = f"/user.slice/user-{UID + 1}.slice/user@{UID + 1}.service/app.slice/probe.scope"
         recognized = [
             journal_entry(self.t0, f"{names[0]} invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, "
                                    "oom_score_adj=200", **kernel),
@@ -1173,6 +1175,8 @@ class IncidentTests(unittest.TestCase):
         with mock.patch.object(mt, "MAX_RECORD_BYTES", size - 1):
             incidents = self.incidents()
             incidents.recover(self.t0 + 1)  # neither resumed nor finalized
+            incidents.handle(entries[0])  # its own opening entry, read again, opens nothing in its place
+            self.assertEqual((path.read_bytes(), incidents.bytes_written), (before, 0))
             incidents.handle(entries[1])  # nothing to join
             for entry in entries[2:]:  # the next opener opens a record of its own
                 incidents.handle(entry)
@@ -1217,9 +1221,9 @@ class IncidentTests(unittest.TestCase):
         incidents.handle(self.opener(120))
         self.assertEqual(self.stored(), [(120.0, 1, False)])
         incidents.handle(self.opener(1))  # too late to join the first record, which is gone
-        self.assertIsNone(incidents.open_record)
+        self.assertIsNotNone(incidents.open_record)  # the newer record stays open
         self.assertFalse(incidents.unwritten)
-        self.assertEqual(self.stored(), [(120.0, 1, True)])
+        self.assertEqual(self.stored(), [(120.0, 1, False)])
         incidents.handle(self.opener(240))
         self.assertFalse(incidents.unwritten)
         self.assertEqual(self.stored(), [(240.0, 1, False)])
@@ -1291,6 +1295,205 @@ class IncidentTests(unittest.TestCase):
         resuming.handle(self.joiner(241))  # joins the record that was resumed
         resuming.flush()
         self.assertEqual(self.stored(), [(240.0, 2, False)])
+
+    def files(self) -> dict[str, bytes]:
+        return {path.name: path.read_bytes() for path in sorted((self.root / "incidents").glob("*.json"))}
+
+    def events(self) -> list[list[float]]:
+        """Each stored record's event times after t0."""
+        return [[round(event["t"] - self.t0, 6) for event in record["events"]] for record in self.records()]
+
+    def assert_each_event_is_in_the_record_it_opened_or_followed(self) -> None:
+        """No event is in two records, and every record's first event is the one it is named and opened for."""
+        records = self.records()
+        keys = [mt.event_key(event) for record in records for event in record["events"]]
+        self.assertEqual(len(keys), len(set(keys)))
+        for record in records:
+            self.assertEqual((record["events"][0]["t"], mt.record_opened(record["id"])),
+                             (record["opened"], record["opened"]))
+
+    def two_close_kills(self) -> tuple[list[dict], dict[str, bytes]]:
+        """The entries of two kills 61 s apart with a line of the first one 2 s before the second, which is within
+        the grace period of both first events, after one and before the other; and the record files that one read
+        of them leaves."""
+        entries = [self.opener(0), self.joiner(3), self.joiner(59), self.opener(61), self.joiner(62)]
+        once = self.incidents()
+        for entry in entries:
+            once.handle(entry)
+        once.flush()
+        once.finalize_due(self.t0 + 122)
+        self.assertEqual((self.events(), [record["finalized"] for record in self.records()]),
+                         ([[0.0, 3.0, 59.0], [61.0, 62.0]], [True, True]))
+        self.assert_each_event_is_in_the_record_it_opened_or_followed()
+        return entries, self.files()
+
+    def test_entries_read_again_leave_two_close_kills_as_they_were_read_once(self) -> None:
+        entries, control = self.two_close_kills()
+        # Read again from the start by a later collector, with a tick's write after every entry.
+        again = self.incidents()
+        again.recover(self.t0 + 300)
+        for entry in entries:
+            again.handle(entry)
+            again.flush()
+        self.assertEqual((self.files(), again.bytes_written), (control, 0))
+
+    def test_entries_read_again_after_a_stop_without_the_last_write_change_no_other_record(self) -> None:
+        entries, control = self.two_close_kills()
+        first, second = control
+        # The position was saved after the second entry; the later ones changed the records, in memory and on
+        # disk, and the collector died before its next write. It restarts 30 s into the second record's grace
+        # period and reads again every entry after the saved position.
+        shutil.rmtree(self.root / "incidents")
+        stopped = self.incidents()
+        for entry in entries[:2]:
+            stopped.handle(entry)
+        stopped.flush()
+        for entry in entries[2:]:
+            stopped.handle(entry)
+        left = self.files()
+        self.assertEqual(self.events(), [[0.0, 3.0, 59.0], [61.0]])
+        restarted = self.incidents()
+        restarted.recover(self.t0 + 91)
+        for entry in entries[2:]:
+            restarted.handle(entry)
+        restarted.flush()
+        self.assertEqual(self.files()[first], left[first])
+        self.assertEqual(self.events(), [[0.0, 3.0, 59.0], [61.0, 62.0]])
+        self.assert_each_event_is_in_the_record_it_opened_or_followed()
+        restarted.finalize_due(self.t0 + 122)
+        self.assertEqual(self.files(), control)
+
+    def test_a_line_before_a_kill_is_no_more_part_of_its_record_when_read_again(self) -> None:
+        # A line that opens nothing, 5 s before a kill, belongs to no record. Read again once the kill's record
+        # exists, it still belongs to none: the record's first event is after it.
+        entries = [self.joiner(-5), self.opener(0), self.joiner(2)]
+        for restart in (10, 300):  # inside the record's grace period, where it is resumed, and after it
+            with self.subTest(restart=restart):
+                shutil.rmtree(self.root / "incidents", ignore_errors=True)
+                once = self.incidents()
+                for entry in entries:
+                    once.handle(entry)
+                once.flush()
+                once.finalize_due(self.t0 + restart)
+                before = self.files()
+                self.assertEqual(self.events(), [[0.0, 2.0]])
+                again = self.incidents()
+                again.recover(self.t0 + restart)
+                for entry in entries:
+                    again.handle(entry)
+                    again.flush()
+                self.assertEqual(self.files(), before)
+
+    def test_entries_read_again_do_not_move_an_event_of_a_deleted_record_into_the_kept_one(self) -> None:
+        # Room for one record, two kills 94 s apart, and a line of the first one 44 s before the second. The second
+        # kill's record is the one kept.
+        entries = [self.opener(0), self.joiner(50), self.opener(94)]
+        once = self.incidents(max_files=1)
+        for entry in entries:
+            once.handle(entry)
+        once.flush()
+        once.finalize_due(self.t0 + 155)
+        before = self.files()
+        self.assertEqual(self.stored(), [(94.0, 1, True)])
+        again = self.incidents(max_files=1)
+        again.recover(self.t0 + 300)
+        for entry in entries:
+            again.handle(entry)
+            again.flush()
+        self.assertEqual(self.files(), before)
+
+    def add_fast_samples(self, *offsets: float) -> None:
+        store = mt.SampleStore(self.root / "samples", 86400 * 30, 1 << 30)
+        for offset in offsets:
+            store.append(fast_record(self.t0 + offset))
+        store.close()
+
+    def test_a_kill_older_than_every_kept_record_read_again_does_not_close_the_open_record(self) -> None:
+        # Room for one record. The collector stops 10 s after a kill and restarts 2 s later, with the kill's record
+        # still in its grace period. With `replayed`, it then reads again, from a position older than every kept
+        # record, the opener of an earlier kill whose record the cap deleted.
+        def following(kill: int, replayed: bool) -> list[float]:
+            """When, after the kill at t0 + kill, the fast samples in its finalized record were taken."""
+            shutil.rmtree(self.root / "incidents", ignore_errors=True)
+            stopped = self.incidents(max_files=1)
+            stopped.handle(self.opener(0))
+            stopped.handle(self.opener(kill))
+            self.add_fast_samples(kill + 10)
+            restarted = self.incidents(max_files=1)
+            restarted.recover(self.t0 + kill + 12)
+            if replayed:
+                restarted.handle(self.opener(0))  # its record is written, finalized, and deleted at once
+                self.assertEqual(self.stored(), [(kill, 1, False)])
+                self.assertEqual(restarted.open_record.data["opened"], self.t0 + kill)
+            self.add_fast_samples(*range(kill + 20, kill + 61, 10))
+            restarted.finalize_due(self.t0 + kill + 59)
+            self.assertEqual(self.stored(), [(kill, 1, False)])  # open until its grace period has passed
+            restarted.finalize_due(self.t0 + kill + 61)
+            [record] = self.records()
+            self.assertTrue(record["finalized"])
+            return [sample["t"] - record["opened"] for sample in record["following"]["fast"]]
+
+        control = following(200, replayed=False)
+        self.assertEqual(control, [10, 20, 30, 40, 50, 60])
+        self.assertEqual(following(400, replayed=True), control)
+
+    def test_the_grace_period_is_exact_to_the_microsecond_for_held_and_stored_records(self) -> None:
+        def at(microseconds: int, entry: dict) -> dict:
+            return entry | {"__REALTIME_TIMESTAMP": str(int(self.t0) * 1_000_000 + microseconds)}
+
+        # A kill whose first event is not on a whole second, a line exactly 60 s after it, a line one microsecond
+        # later, which belongs to no record, and a second kill 40 s after that.
+        first, last, late, second = 333_881, 60_333_881, 60_333_882, 100_333_882
+        entries = [at(first, self.opener(0)), at(last, self.joiner(0)), at(late, self.joiner(0)),
+                   at(second, self.opener(0))]
+        expected = [[0.333881, 60.333881], [100.333882]]
+        once = self.incidents()
+        for entry in entries:  # the first record is the open one, held, as its two lines are read
+            once.handle(entry)
+        once.flush()
+        once.finalize_due(self.t0 + 200)
+        before = self.files()
+        self.assertEqual(self.events(), expected)
+        self.assert_each_event_is_in_the_record_it_opened_or_followed()
+
+        # Read again with both records stored and neither held: the opener's own entry and the line at exactly
+        # 60 s find their record and change nothing, and the line after it still belongs to none.
+        again = self.incidents()
+        again.recover(self.t0 + 300)
+        for entry in entries:
+            again.handle(entry)
+            self.assertFalse(again.unwritten)
+            again.flush()
+        self.assertEqual((self.files(), again.bytes_written), (before, 0))
+
+        # A line not seen before, stamped exactly 60 s after the first event, joins the stored first record.
+        detail = journal_entry(self.t0, "another late detail", _SYSTEMD_UNIT="systemd-oomd.service")
+        again.handle(at(last, detail))
+        again.handle(at(late, detail))
+        again.flush()
+        self.assertEqual([len(record["events"]) for record in self.records()], [3, 1])
+        self.assertEqual(self.events(), [[0.333881, 60.333881, 60.333881], [100.333882]])
+        self.assert_each_event_is_in_the_record_it_opened_or_followed()
+
+    def test_an_entry_stamped_before_a_record_it_arrives_after_does_not_join_that_record(self) -> None:
+        # journalctl delivers entries in the order journald received them, and the collector goes by the time
+        # journald received them, so only a wall clock that stepped back delivers an entry stamped before the first
+        # event of a record that exists already. The rule treats it as it treats the same entry read again in a
+        # replay; it does not make one record of a kill whose entries the clock stepped back between.
+        incidents = self.incidents()
+        incidents.handle(self.opener(0))
+        incidents.handle(self.joiner(-5))  # a line that opens nothing, stamped before the first event: not kept
+        incidents.flush()
+        self.assertEqual(self.events(), [[0.0]])
+        incidents.handle(self.opener(-3))  # an opener stamped before it: a record of its own, finalized at once
+        self.assertEqual(self.stored(), [(-3.0, 1, True), (0.0, 1, False)])
+        self.assertEqual(incidents.open_record.data["opened"], self.t0)  # and the open record stays open
+        incidents.handle(self.joiner(-1))  # after the older record's first event and before the open record's
+        incidents.handle(self.joiner(2))
+        incidents.flush()
+        self.assertEqual(self.events(), [[-3.0, -1.0], [0.0, 2.0]])
+        self.assertEqual(self.stored(), [(-3.0, 2, True), (0.0, 2, False)])
+        self.assert_each_event_is_in_the_record_it_opened_or_followed()
 
 
 # A follow call (--follow) prints FAKE_JOURNAL_ENTRIES after FAKE_JOURNAL_DELAY and lingers for

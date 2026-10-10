@@ -225,15 +225,26 @@ kernel lines in an unrecognized format) is not kept and is counted in
 event is not remembered, so reading it again, as the catch-up after a restart
 can, counts it again.
 
-Entries within 60 s of a record's first entry join that record, even if the
-record was closed on an earlier tick or by an earlier collector process, so a
-kill read in pieces or replayed after a restart makes one record. Each record
-holds:
+An entry joins the newest record whose first entry is at or before it, if it is
+no more than 60 s after that first entry, even if the record was closed on an
+earlier tick or by an earlier collector process; it never joins a record whose
+first entry is after it. Only the entry's time and the records' first entries
+decide this, so an entry read again joins the record it joined the first time,
+and a kill read in pieces or replayed after a restart makes one record. The
+times are journald's receipt times, and `journalctl` delivers entries in that
+order, each later than the one before it in this host's journal, so only a wall
+clock that stepped back delivers an entry stamped before the first entry of a
+record that already exists, or two entries with one time. An entry stamped
+before is handled like one read again (a line that opens nothing is not kept,
+and an opener gets a record of its own, finalized at once), so a kill whose
+entries the step falls between can be left in two records; a line that opens
+nothing, delivered just before an opener with the same time, is kept only if it
+is read again. Each record holds:
 
 | Field | Contents |
 |---|---|
 | `id` | UTC time of the first event and its kind, also the file name |
-| `opened` | Unix time of the first event, in seconds |
+| `opened` | Unix time of the first event, in seconds; no event of the record is earlier |
 | `events` | The journal events, in order, at most 500 |
 | `dropped_events` | How many new events the record did not keep because they would have gone over a cap |
 | `window.fast`, `window.slow` | Every sample from the 15 minutes before the first event: T1–T4 and T8, and the per-cgroup and T9 detail |
@@ -253,7 +264,8 @@ never reads one larger than 8 MiB, more than ten times a genuine record, so
 that parsing one stays well inside the unit's `MemoryMax=128M` (a parsed record
 takes about 4.7 times its file size at the peak). A larger record is left as it
 is, never joined, resumed or finalized, until the 200-record cap deletes it; an
-entry that would have joined it is handled as if it were absent.
+entry that would have joined it is handled as if it were absent, except that
+its own first entry, read again, opens nothing in its place.
 
 The record cap (`--max-incidents`, 200 by default) counts every record in
 `incidents/`, one that is still open included. The collector enforces it as

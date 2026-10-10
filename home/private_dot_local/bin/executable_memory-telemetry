@@ -990,6 +990,11 @@ class SampleStore:
 RECORD_STAMP = "%Y%m%dT%H%M%S.%fZ"
 
 
+def record_stamp(t: float) -> str:
+    """A first-event time as it starts a kill record's file name, to the microsecond; names sort by it."""
+    return datetime.fromtimestamp(t, timezone.utc).strftime(RECORD_STAMP)
+
+
 def record_opened(name: str) -> float | None:
     """The first-event time encoded in a kill record's file name."""
     try:
@@ -997,6 +1002,21 @@ def record_opened(name: str) -> float | None:
             tzinfo=timezone.utc).timestamp()
     except ValueError:
         return None
+
+
+def newest_record(names: list[str], stamp: str | None = None) -> tuple[str, float] | None:
+    """The file name and first-event time of the newest kill record among `names`; with a stamp, of the newest one
+    whose first event is at or before it. Names are compared as text, and only the chosen one is parsed."""
+    records = (name for name in names if name.endswith(".json") and (stamp is None or name[: len(stamp)] <= stamp))
+    for name in sorted(records, reverse=True):
+        if (opened := record_opened(name)) is not None:
+            return name, opened
+    return None
+
+
+def microseconds(t: float) -> int:
+    """A journal time as the whole microseconds journald stamped, so that two of them compare exactly."""
+    return round(t * 1_000_000)
 
 
 def journal_text(value: Any) -> str:
@@ -1095,10 +1115,18 @@ class HeldRecord:
 class Incidents:
     """T7 kill records. Each one keeps its journal events, the preceding window of
     samples, the T9 top contributors, and the fast samples of the grace period
-    after it opened. Events within the grace period of a record's first event join
-    that record, even when it was closed on an earlier tick or by an earlier
-    collector process, so a kill read in pieces or replayed after a restart still
-    makes one record.
+    after it opened.
+
+    One rule, written in record_for, decides which record an event belongs to,
+    from the event's own time and the records' first events alone: the newest
+    record whose first event is at or before the event, if the event is no more
+    than the grace period after that first event. An event joins that record even
+    when it was closed on an earlier tick or by an earlier collector process, and
+    never a record whose first event is after it, so an entry read again, in any
+    grouping, joins the record it joined the first time: a kill read in pieces or
+    replayed after a restart still makes one record, and a replay moves no event
+    into another record. An opener that belongs to no record starts one (open).
+    The open record is always the newest record in the directory.
 
     One record's cost is bounded whatever the journal delivers. It is written, and
     synced to disk, when it opens and when it is finalized; joining events change
@@ -1126,8 +1154,8 @@ class Incidents:
         self.grace = grace
         self.max_files = max_files
         self.uid = os.getuid() if uid is None else uid
-        self.open_record: HeldRecord | None = None  # the record events join until its grace period has passed
-        self.late: HeldRecord | None = None  # a finalized record that late events joined, until the next flush
+        self.open_record: HeldRecord | None = None  # the newest record, until its grace period has passed
+        self.late: HeldRecord | None = None  # a stored record that late events joined, until the next flush
         self.bytes_written = 0
         self.ignored = 0  # kill messages not from the managers, or with a repeated MESSAGE_ID; counted and dropped
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1146,70 +1174,86 @@ class Incidents:
         if classified is None:
             return
         event, opener = classified
-        for held in (self.open_record, self.late):
-            if held is not None and abs(event["t"] - held.data["opened"]) <= self.grace:
-                self.add(held, event)
-                return
-        recent = self.recent(event["t"])
-        if recent is not None:
-            if recent.data.get("finalized"):
-                self.hold_late(recent)
-            else:  # left open by an earlier collector process
-                self.finalize()
-                self.open_record = recent
-            self.add(recent, event)
+        held = self.record_for(event["t"])
+        if held is not None:
+            if held is not self.open_record and held is not self.late:
+                self.hold_late(held)
+            self.add(held, event)
         elif opener:
-            self.finalize()
             self.open(event)
 
-    def held_paths(self) -> set[Path]:
-        return {held.path for held in (self.open_record, self.late) if held is not None}
+    def record_for(self, t: float) -> HeldRecord | None:
+        """The record an event at time t belongs to: the newest record whose first event is at or before t, if t is
+        no more than the grace period after that first event (0 <= t - first event <= grace). None if there is no
+        such record, or if it cannot be read.
 
-    def recent(self, t: float) -> HeldRecord | None:
-        """The newest stored record whose first event is within the grace period of t, unless it is held already or
-        cannot be read."""
-        best: tuple[float, Path] | None = None
-        for path in self.directory.glob("*.json"):
-            opened = record_opened(path.name)
-            if opened is not None and abs(t - opened) <= self.grace and (best is None or opened > best[0]):
-                best = (opened, path)
-        if best is None or best[1] in self.held_paths():
+        This is the only place the rule is written, and it goes by nothing but t and the records' first events:
+        not by which records are held, the order entries arrive in, or a record's `finalized` flag. First events
+        are taken from the file names, which sort by them, and compared in whole microseconds. The open record is
+        the newest record there is, so an event at or after its first event is settled without listing the
+        directory; any other event costs one listing and one parsed name, and the record is read only if it is not
+        held."""
+        stamp = record_stamp(t)
+        found = None
+        if self.open_record is not None:  # the newest record: if it is at or before t, no other one is nearer
+            found = newest_record([self.open_record.path.name], stamp)
+        if found is None:
+            found = newest_record(os.listdir(self.directory), stamp)
+        if found is None or microseconds(t) - microseconds(found[1]) > self.grace * 1_000_000:
             return None
-        data = load_json(best[1], MAX_RECORD_BYTES)
+        path = self.directory / found[0]
+        for held in (self.open_record, self.late):
+            if held is not None and held.path == path:
+                return held
+        data = load_json(path, MAX_RECORD_BYTES)
         if data is None or not isinstance(data.get("events"), list) or not isinstance(data.get("opened"), (int, float)):
             return None
-        return HeldRecord.of(best[1], data)
+        return HeldRecord.of(path, data)
 
     def hold_late(self, held: HeldRecord) -> None:
-        """Keep a finalized record in memory while late events join it, one at a time."""
+        """Keep a stored record that is not the open one in memory while late events join it, one at a time,
+        whatever its `finalized` flag says."""
         if self.late is not None and self.late.unwritten:
             self.write_held(self.late)
         self.late = held
 
     def recover(self, now: float) -> None:
-        """Finalize records an earlier collector process left open; resume the newest still in its grace period.
+        """Finalize records an earlier collector process left open; resume the newest record if it is one of them
+        and still in its grace period.
 
         The record cap is enforced first, since a lowered --max-incidents or an earlier version can leave more
         records than it allows: recovery creates no record, so the count stays within the cap afterwards, and a
         record about to be deleted is neither read nor finalized."""
         self.prune()
-        for path in sorted(self.directory.glob("*.json")):
+        records = sorted(self.directory.glob("*.json"))
+        newest = newest_record([path.name for path in records])
+        for path in records:
             data = load_json(path, MAX_RECORD_BYTES)
             if data is None or data.get("finalized") or not isinstance(data.get("opened"), (int, float)):
                 continue
-            if now - data["opened"] > self.grace:
-                self.finish(data, path)
-            elif isinstance(data.get("events"), list):
-                self.finalize()
+            if (newest is not None and path.name == newest[0] and now - data["opened"] <= self.grace
+                    and isinstance(data.get("events"), list)):
                 self.open_record = HeldRecord.of(path, data)
+            else:
+                self.finish(data, path)
 
     def open(self, event: Record) -> None:
+        """Start the record of an opener that belongs to no record.
+
+        The newest record by name becomes the open record, written unfinalized, once the open record before it is
+        finalized: that one is older, and this first event is past its grace period. A record older than a stored
+        one, which an entry read out of order starts, or one read again after the cap deleted its record, is
+        written once, finalized, and never held open, and the open record stays open. If a file already has the
+        record's name, it is a stored record of this kill that could not be read: it stays as it is, and nothing
+        is opened."""
         opened = event["t"]
-        stamp = datetime.fromtimestamp(opened, timezone.utc).strftime(RECORD_STAMP)
-        identifier = f"{stamp}-{event['kind']}"
+        identifier = f"{record_stamp(opened)}-{event['kind']}"
+        path = self.directory / f"{identifier}.json"
+        if path.exists():
+            return
+        newest = newest_record(os.listdir(self.directory))
         samples = read_samples(self.samples, opened - self.window, opened)
         slow = [sample for sample in samples if sample.get("kind") == "slow"]
-        path = self.directory / f"{identifier}.json"
         data = {
             "schema": f"{SCHEMA}/incident",
             "id": identifier,
@@ -1226,8 +1270,12 @@ class Incidents:
             "t9": t9_growth(slow),
             "following": None,
         }
-        self.write(data, path)
-        self.open_record = HeldRecord.of(path, data)
+        if newest is not None and newest[0] > path.name:
+            self.finish(data, path)
+        else:
+            self.finalize()
+            self.write(data, path)
+            self.open_record = HeldRecord.of(path, data)
         self.prune()  # the new record counts, and is itself deleted if it is older than every record kept
 
     def add(self, held: HeldRecord, event: Record) -> None:
