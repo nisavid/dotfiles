@@ -177,18 +177,90 @@ def publish_mount_record(mount, runtime, mount_id, created):
     marker.chmod(0o600)
 
 
-def invoke_credential(environment, **kwargs):
+def invoke_credential(
+    environment, launch_tag=TEST_MOUNT_TAG, **kwargs
+):
     read_descriptor, write_descriptor = os.pipe()
     try:
-        return invoke(
-            ["_credential", TEST_MOUNT_TAG],
+        result = invoke(
+            ["_credential", launch_tag],
             environment,
             stdout_descriptor=write_descriptor,
             **kwargs,
         )
-    finally:
         os.close(write_descriptor)
+        write_descriptor = None
+        pipe_output = bytearray()
+        while True:
+            chunk = os.read(read_descriptor, 8192)
+            if not chunk:
+                break
+            pipe_output.extend(chunk)
+    finally:
+        if write_descriptor is not None:
+            os.close(write_descriptor)
         os.close(read_descriptor)
+    code, redirected_output, error = result
+    if pipe_output and redirected_output:
+        raise AssertionError("credential output used two stdout paths")
+    output = bytes(pipe_output) or redirected_output.encode("utf-8")
+    return code, output.decode("utf-8"), error
+
+
+@contextlib.contextmanager
+def synthetic_credential_subprocess(secret):
+    with tempfile.TemporaryDirectory(
+        prefix="proton-credential-subprocess-",
+        dir=pathlib.Path.home(),
+    ) as temporary:
+        root = pathlib.Path(temporary)
+        config_parent = root / "config/rclone"
+        mount = root / "data/proton-drive-desktop/files"
+        runtime = root / "run/proton-drive-desktop"
+        config_parent.mkdir(parents=True, mode=0o700)
+        config = config_parent / "proton-drive.conf"
+        config.write_text("encrypted-placeholder")
+        config.chmod(0o600)
+        publish_mount_record(mount, runtime, "720", False)
+
+        busctl = root / "busctl"
+        busctl.write_text(
+            "#!/usr/bin/python3\n"
+            "print('{\"type\":\"s\",\"data\":[\":1.27\"]}')\n"
+        )
+        busctl.chmod(0o700)
+        secret_tool = root / "secret-tool"
+        secret_hex = (secret + bytes([10])).hex()
+        secret_tool.write_text(
+            "#!/usr/bin/python3\n"
+            "import os\n"
+            f"os.write(1, bytes.fromhex({secret_hex!r}))\n"
+        )
+        secret_tool.chmod(0o700)
+
+        helper_source = PROGRAM.read_bytes()
+        for original, replacement in (
+            (b"/usr/bin/busctl", os.fsencode(busctl)),
+            (b"/usr/bin/secret-tool", os.fsencode(secret_tool)),
+        ):
+            if helper_source.count(original) != 1:
+                raise AssertionError(
+                    f"synthetic command seam is not unique: {original!r}"
+                )
+            helper_source = helper_source.replace(original, replacement)
+        helper = root / "proton-drive-desktop"
+        helper.write_bytes(helper_source)
+        helper.chmod(0o700)
+        environment = {
+            "HOME": str(root),
+            "LANG": "C.UTF-8",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "XDG_CONFIG_HOME": str(root / "config"),
+            "XDG_DATA_HOME": str(root / "data"),
+            "XDG_RUNTIME_DIR": str(root / "run"),
+        }
+        yield helper, environment
 
 
 class SyntheticDirectoryXattrs:
@@ -5496,6 +5568,49 @@ class PublicCommandTests(unittest.TestCase):
                     "forked pipe holder survived producer cleanup",
                 )
 
+    def test_credential_subprocess_preserves_non_ascii_bytes_under_ascii_stdio(self):
+        fixture_secret = "credential-clé-雪".encode("utf-8")
+        with synthetic_credential_subprocess(fixture_secret) as (helper, environment):
+            completed = subprocess.run(
+                [str(helper), "_credential", TEST_MOUNT_TAG],
+                env={**environment, "PYTHONIOENCODING": "ascii"},
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+
+        self.assertEqual(0, completed.returncode)
+        self.assertEqual(fixture_secret + b"\n", completed.stdout)
+        self.assertEqual(b"", completed.stderr)
+
+    def test_credential_subprocess_reports_fixed_closed_pipe_failure(self):
+        fixture_secret = b"closed-pipe-fixture-canary"
+        with synthetic_credential_subprocess(fixture_secret) as (helper, environment):
+            read_descriptor, write_descriptor = os.pipe()
+            os.close(read_descriptor)
+            try:
+                process = subprocess.Popen(
+                    [str(helper), "_credential", TEST_MOUNT_TAG],
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=write_descriptor,
+                    stderr=subprocess.PIPE,
+                )
+            finally:
+                os.close(write_descriptor)
+            try:
+                _, error = process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+                raise
+
+        self.assertEqual(1, process.returncode)
+        self.assertEqual(b"credential unavailable\n", error)
+        self.assertNotIn(fixture_secret, error)
+
     def test_credential_helper_qualifies_kwallet_and_looks_up_exact_config_id(self):
         with tempfile.TemporaryDirectory(prefix="proton config ") as temporary:
             root = pathlib.Path(temporary)
@@ -6840,19 +6955,13 @@ class PublicCommandTests(unittest.TestCase):
                     start_new_session=True,
                 )
 
-            credential_read, credential_write = os.pipe()
-            try:
-                credential_result = invoke(
-                    ["_credential", ownership["mount_tag"]],
-                    environment,
-                    run=external,
-                    popen=secret_tool,
-                    opened=opened,
-                    stdout_descriptor=credential_write,
-                )
-            finally:
-                os.close(credential_write)
-                os.close(credential_read)
+            credential_result = invoke_credential(
+                environment,
+                launch_tag=ownership["mount_tag"],
+                run=external,
+                popen=secret_tool,
+                opened=opened,
+            )
             self.assertEqual(
                 (0, "dot-segment-secret\n", ""), credential_result
             )

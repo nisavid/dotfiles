@@ -1355,11 +1355,13 @@ def require_credential_launch(resolved, launch_tag):
 
 def require_credential_pipe():
     try:
-        information = os.fstat(sys.stdout.fileno())
+        descriptor = sys.stdout.fileno()
+        information = os.fstat(descriptor)
     except (OSError, ValueError, io.UnsupportedOperation):
         raise OperationError("credential unavailable") from None
     if not stat.S_ISFIFO(information.st_mode):
         raise OperationError("credential unavailable")
+    return descriptor
 
 
 def terminate_credential_process(process):
@@ -1416,8 +1418,20 @@ def acquire_credential_output(command):
         process.stdout.close()
 
 
+def write_credential_output(descriptor, secret):
+    pending = memoryview(secret + b"\n")
+    while pending:
+        try:
+            written = os.write(descriptor, pending)
+        except OSError:
+            raise OperationError("credential unavailable") from None
+        if written <= 0:
+            raise OperationError("credential unavailable")
+        pending = pending[written:]
+
+
 def credential(resolved, launch_tag):
-    require_credential_pipe()
+    output_descriptor = require_credential_pipe()
     require_credential_launch(resolved, launch_tag)
     validate_config(resolved)
     qualified_owner = bus_owner("org.freedesktop.secrets")
@@ -1443,7 +1457,7 @@ def credential(resolved, launch_tag):
     ):
         raise OperationError("credential unavailable")
     try:
-        value = secret.decode("utf-8")
+        secret.decode("utf-8")
     except UnicodeDecodeError:
         raise OperationError("credential unavailable") from None
     if (
@@ -1451,7 +1465,7 @@ def credential(resolved, launch_tag):
         or bus_owner("org.kde.ksecretd") != qualified_owner
     ):
         raise OperationError("credential service unavailable")
-    print(value)
+    write_credential_output(output_descriptor, secret)
     return 0
 
 
