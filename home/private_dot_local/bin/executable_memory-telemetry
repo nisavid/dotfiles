@@ -1108,7 +1108,15 @@ class Incidents:
     MAX_RECORD_EVENTS events, at most MAX_UNRECOGNIZED_EVENTS of them kernel lines
     in an unrecognized format, and counts any other new event in `dropped_events`.
     A stored record larger than MAX_RECORD_BYTES is never read: it is not joined,
-    resumed or finalized, and it stays until the record cap deletes it."""
+    resumed or finalized, and it stays until the record cap deletes it.
+
+    The directory keeps the newest max_files records by name, which is by first
+    event; a record that is still open, or that late events joined, counts like
+    any other. Only prune deletes records, and it runs wherever the count can be
+    over the cap: after each record is created, and once at start (recover). A
+    record older than the newest max_files is deleted along with any change that
+    was waiting in memory for it, so a record opened while max_files newer ones
+    exist is deleted at once."""
 
     def __init__(self, directory: Path, samples: Path, window: float, grace: float, max_files: int,
                  uid: int | None = None) -> None:
@@ -1179,7 +1187,12 @@ class Incidents:
         self.late = held
 
     def recover(self, now: float) -> None:
-        """Finalize records an earlier collector process left open; resume the newest still in its grace period."""
+        """Finalize records an earlier collector process left open; resume the newest still in its grace period.
+
+        The record cap is enforced first, since a lowered --max-incidents or an earlier version can leave more
+        records than it allows: recovery creates no record, so the count stays within the cap afterwards, and a
+        record about to be deleted is neither read nor finalized."""
+        self.prune()
         for path in sorted(self.directory.glob("*.json")):
             data = load_json(path, MAX_RECORD_BYTES)
             if data is None or data.get("finalized") or not isinstance(data.get("opened"), (int, float)):
@@ -1215,6 +1228,7 @@ class Incidents:
         }
         self.write(data, path)
         self.open_record = HeldRecord.of(path, data)
+        self.prune()  # the new record counts, and is itself deleted if it is older than every record kept
 
     def add(self, held: HeldRecord, event: Record) -> None:
         """Join an event to a held record, in memory. A duplicate changes nothing, and a new event over a cap is
@@ -1249,7 +1263,6 @@ class Incidents:
         if self.open_record is not None:
             self.finish(self.open_record.data, self.open_record.path)
         self.open_record = None
-        self.prune()
 
     def finish(self, data: Record, path: Path) -> None:
         opened = data["opened"]
@@ -1266,13 +1279,21 @@ class Incidents:
         self.bytes_written += write_json_atomic(path, data, durable=True)
 
     def prune(self) -> None:
-        held = self.held_paths()
-        records = sorted(path for path in self.directory.glob("*.json") if path not in held)
+        """Delete the oldest records by name over max_files, counting every record, held ones included. A held
+        record that is deleted is no longer held, so nothing writes it back and its unwritten change goes with it.
+        One that could not be deleted stays held, and the next prune tries again."""
+        records = sorted(self.directory.glob("*.json"))
         for path in records[: max(0, len(records) - self.max_files)]:
             try:
                 path.unlink()
-            except OSError:
+            except FileNotFoundError:
                 pass
+            except OSError:
+                continue  # still there, so still held
+            if self.open_record is not None and self.open_record.path == path:
+                self.open_record = None
+            if self.late is not None and self.late.path == path:
+                self.late = None
 
 
 class Journal:

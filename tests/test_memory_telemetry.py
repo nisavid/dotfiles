@@ -655,6 +655,33 @@ class CollectorTests(FixtureCase):
             collector.tick(0.0)
         self.assertEqual((journal.handled, written()), ("s=e2", [3]))
 
+    def test_an_entry_whose_record_the_cap_deleted_does_not_hold_the_saved_position_back(self) -> None:
+        collector = self.collector("--max-incidents", "1")
+        journal, incidents = collector.journal, self.state / "incidents"
+        t0 = time.time() - 600
+        kill = "x.scope: A process of this unit has been killed by the OOM killer."
+
+        def stored() -> list[tuple[float, int]]:
+            records = [json.loads(path.read_text()) for path in sorted(incidents.glob("*.json"))]
+            return [(round(record["opened"] - t0, 3), len(record["events"])) for record in records]
+
+        collector.handle(journal_entry(t0, kill, MESSAGE_ID=mt.MESSAGE_UNIT_OOM, **SYSTEM_MANAGER)
+                         | {"__CURSOR": "s=e0"})
+        collector.tick(0.0)  # the record's grace period has passed, so this finalizes it
+        collector.handle(journal_entry(t0 + 1, "a late detail", _SYSTEMD_UNIT="systemd-oomd.service")
+                         | {"__CURSOR": "s=e1"})  # joins the finalized record in memory
+        self.assertTrue(collector.incidents.unwritten)
+        self.assertEqual((journal.handled, stored()), ("s=e0", [(0.0, 1)]))
+        # The next kill's record is the one the cap keeps. The older record is deleted with the event that was
+        # waiting to be written, so nothing is left to write and the position moves past both entries.
+        collector.handle(journal_entry(t0 + 240, kill, MESSAGE_ID=mt.MESSAGE_UNIT_OOM, **SYSTEM_MANAGER)
+                         | {"__CURSOR": "s=e2"})
+        self.assertFalse(collector.incidents.unwritten)
+        self.assertEqual((journal.handled, stored()), ("s=e2", [(240.0, 1)]))
+        collector.tick(0.0)
+        self.assertEqual((self.state / "journal.cursor").read_text().strip(), "s=e2")
+        self.assertEqual(stored(), [(240.0, 1)])  # and the tick's write did not bring the deleted record back
+
 
 def fast_record(t: float, available: int = 30) -> dict:
     return {"schema": mt.SCHEMA, "kind": "fast", "t": t, "t1": {"mem_available_kib": available}}
@@ -1155,6 +1182,115 @@ class IncidentTests(unittest.TestCase):
         self.assertEqual([[event["kind"] for event in record["events"]] for record in records],
                          [["oomd-kill"], ["oomd-kill", "unit-oomd-kill"]])
         self.assertEqual([record["finalized"] for record in records], [False, True])
+
+    def opener(self, offset: float) -> dict:
+        return self.kill_message(self.t0 + offset, mt.MESSAGE_UNIT_OOM, **SYSTEM_MANAGER)
+
+    def joiner(self, offset: float) -> dict:
+        return journal_entry(self.t0 + offset, "a late detail", _SYSTEMD_UNIT="systemd-oomd.service")
+
+    def stored(self) -> list[tuple[float, int, bool]]:
+        """Each stored record's first-event time after t0, its number of events, and whether it is finalized."""
+        return [(record["opened"] - self.t0, len(record["events"]), record["finalized"]) for record in self.records()]
+
+    def test_the_record_cap_counts_a_record_that_is_still_open(self) -> None:
+        offsets = [0.0, 120.0, 240.0, 360.0]
+        for cap in (1, 2):
+            with self.subTest(cap=cap):
+                shutil.rmtree(self.root / "incidents", ignore_errors=True)
+                incidents = self.incidents(max_files=cap)
+                for index, offset in enumerate(offsets):
+                    incidents.handle(self.opener(offset))  # the record it opens is not finalized until the next one
+                    newest = offsets[: index + 1][-cap:]
+                    self.assertEqual(self.stored(), [(kept, 1, kept != offset) for kept in newest])
+                incidents.flush()  # as a stopping collector does
+                self.assertEqual([opened for opened, _, _ in self.stored()], offsets[-cap:])
+                restarted = self.incidents(max_files=cap)
+                restarted.recover(self.t0 + 600)
+                restarted.finalize_due(self.t0 + 600)
+                self.assertEqual(self.stored(), [(kept, 1, True) for kept in offsets[-cap:]])
+
+    def test_a_record_the_cap_deletes_is_not_written_back_by_what_was_held_in_memory(self) -> None:
+        # With room for one record, a kill older than the stored one opens a record that is deleted at once.
+        incidents = self.incidents(max_files=1)
+        incidents.handle(self.opener(0))
+        incidents.handle(self.opener(120))
+        self.assertEqual(self.stored(), [(120.0, 1, False)])
+        incidents.handle(self.opener(1))  # too late to join the first record, which is gone
+        self.assertIsNone(incidents.open_record)
+        self.assertFalse(incidents.unwritten)
+        self.assertEqual(self.stored(), [(120.0, 1, True)])
+        incidents.handle(self.opener(240))
+        self.assertFalse(incidents.unwritten)
+        self.assertEqual(self.stored(), [(240.0, 1, False)])
+        incidents.flush()
+        self.assertEqual(self.stored(), [(240.0, 1, False)])
+
+        # With room for two, a late event joins the older finalized record in memory; the next kill's record then
+        # pushes that record out, with the event that was waiting to be written.
+        shutil.rmtree(self.root / "incidents")
+        incidents = self.incidents(max_files=2)
+        incidents.handle(self.opener(0))
+        incidents.handle(self.opener(120))
+        incidents.handle(self.joiner(1))
+        self.assertTrue(incidents.unwritten)
+        self.assertEqual(self.stored(), [(0.0, 1, True), (120.0, 1, False)])
+        incidents.handle(self.opener(240))
+        self.assertFalse(incidents.unwritten)
+        self.assertEqual(self.stored(), [(120.0, 1, True), (240.0, 1, False)])
+        incidents.flush()
+        incidents.handle(self.joiner(2))  # nothing is left for a later event to join either
+        incidents.flush()
+        self.assertEqual(self.stored(), [(120.0, 1, True), (240.0, 1, False)])
+
+    def test_a_late_joined_record_among_the_newest_keeps_its_unwritten_events(self) -> None:
+        incidents = self.incidents(max_files=2)
+        incidents.handle(self.opener(0))
+        incidents.handle(self.opener(120))
+        incidents.finalize_due(self.t0 + 181)
+        incidents.handle(self.joiner(121))  # joins the newest record, finalized, in memory
+        incidents.handle(self.opener(240))  # the cap deletes the oldest record, not the one that is held
+        self.assertTrue(incidents.unwritten)
+        self.assertEqual(self.stored(), [(120.0, 1, True), (240.0, 1, False)])
+        incidents.flush()
+        self.assertFalse(incidents.unwritten)
+        self.assertEqual(self.stored(), [(120.0, 2, True), (240.0, 1, False)])
+
+    def test_a_record_that_could_not_be_deleted_stays_held_until_the_next_prune(self) -> None:
+        incidents = self.incidents(max_files=2)
+        incidents.handle(self.opener(0))
+        incidents.handle(self.opener(120))
+        incidents.handle(self.joiner(1))  # held in memory with the oldest record, which the next kill pushes out
+        with mock.patch.object(Path, "unlink", side_effect=PermissionError):
+            incidents.handle(self.opener(240))
+        self.assertTrue(incidents.unwritten)  # the record is still there, and so is its change
+        incidents.flush()
+        self.assertEqual(self.stored(), [(0.0, 2, True), (120.0, 1, True), (240.0, 1, False)])
+        incidents.handle(self.opener(360))
+        self.assertEqual(self.stored(), [(240.0, 1, True), (360.0, 1, False)])
+
+    def test_a_start_enforces_the_record_cap_before_it_recovers_records(self) -> None:
+        # A lowered --max-incidents, or an earlier version, can leave more records than the cap allows.
+        def leave_three_open() -> None:
+            shutil.rmtree(self.root / "incidents", ignore_errors=True)
+            for offset in (0.0, 120.0, 240.0):
+                self.incidents(max_files=3).handle(self.opener(offset))  # each by a collector that then stopped
+            self.assertEqual(self.stored(), [(0.0, 1, False), (120.0, 1, False), (240.0, 1, False)])
+
+        leave_three_open()
+        finalizing = self.incidents(max_files=1)
+        finalizing.recover(self.t0 + 600)  # every grace period has passed
+        self.assertEqual(self.stored(), [(240.0, 1, True)])
+        [kept] = (self.root / "incidents").glob("*.json")
+        self.assertEqual(finalizing.bytes_written, kept.stat().st_size)  # the deleted records were not finalized first
+
+        leave_three_open()
+        resuming = self.incidents(max_files=1)
+        resuming.recover(self.t0 + 250)  # the newest record is still in its grace period
+        self.assertEqual((self.stored(), resuming.bytes_written), ([(240.0, 1, False)], 0))
+        resuming.handle(self.joiner(241))  # joins the record that was resumed
+        resuming.flush()
+        self.assertEqual(self.stored(), [(240.0, 2, False)])
 
 
 # A follow call (--follow) prints FAKE_JOURNAL_ENTRIES after FAKE_JOURNAL_DELAY and lingers for

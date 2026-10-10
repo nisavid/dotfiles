@@ -82,7 +82,8 @@ uses the defaults.
 Retention keeps samples for 30 days and at most 512 MiB in total, deleting the
 oldest hour first; the open hour is never deleted. At the measured volume (see
 [Measured cost](#measured-cost)), the 30-day bound is the one that applies to
-samples. `incidents/` keeps the newest 200 kill records; at an estimated
+samples. `incidents/` keeps the newest 200 kill records, a record that is still
+open included (see [Kill records](#kill-records)); at an estimated
 0.7–0.8 MB each, that is up to about 150 MB more. One record's size and write
 cost stay bounded whatever the journal delivers: it keeps at most 500 journal
 events (see [Kill records](#kill-records)), and it is written only a few times
@@ -253,6 +254,13 @@ that parsing one stays well inside the unit's `MemoryMax=128M` (a parsed record
 takes about 4.7 times its file size at the peak). A larger record is left as it
 is, never joined, resumed or finalized, until the 200-record cap deletes it; an
 entry that would have joined it is handled as if it were absent.
+
+The record cap (`--max-incidents`, 200 by default) counts every record in
+`incidents/`, one that is still open included. The collector enforces it as
+each record is created and once at each start, deleting the oldest by first
+event; a record opened while that many newer ones exist is deleted at once.
+Late events that had joined a deleted record and were not written yet go with
+it, and their entries no longer hold the saved journal position back.
 
 ## Reading the shared counters (#403)
 
