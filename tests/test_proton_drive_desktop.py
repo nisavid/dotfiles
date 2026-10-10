@@ -3783,7 +3783,9 @@ class PublicCommandTests(unittest.TestCase):
                     )
 
                     self.assertEqual(
-                        (1, "", "mountpoint ownership record is invalid\n"),
+                        (1, "inconsistent/foreign state\n", "")
+                        if command == "status"
+                        else (1, "", "mountpoint ownership record is invalid\n"),
                         result,
                     )
                     self.assertEqual(marker_before, marker.read_bytes())
@@ -3820,6 +3822,84 @@ class PublicCommandTests(unittest.TestCase):
                             for action in actions
                         )
                     )
+
+    def test_status_classifies_malformed_retained_records_without_mutation(self):
+        malformed = ("{", "null", "42", "[]", '{"unsupported": true}')
+        for filename in ("mountpoint.json", "mountpoint-phase.json"):
+            for contents in malformed:
+                for late_arrival in (False, True):
+                    with self.subTest(
+                        filename=filename, contents=contents,
+                        late_arrival=late_arrival,
+                    ), tempfile.TemporaryDirectory() as temporary:
+                        root = pathlib.Path(temporary)
+                        mount = root / "data/proton-drive-desktop/files"
+                        runtime = root / "run/proton-drive-desktop"
+                        mount.mkdir(parents=True, mode=0o700)
+                        runtime.mkdir(parents=True, mode=0o700)
+                        os.setxattr(mount, "user.keep", b"preserve")
+                        before = mount.stat()
+                        record = runtime / filename
+                        if not late_arrival:
+                            record.write_text(contents)
+                        reads = 0
+                        actions = []
+
+                        def external(arguments, **kwargs):
+                            actions.append(arguments)
+                            self.assertEqual(
+                                ["/usr/bin/systemctl", "--user", "show"],
+                                arguments[:3],
+                            )
+                            return subprocess.CompletedProcess(
+                                arguments, 0,
+                                stdout="ActiveState=inactive\nSubState=dead\n"
+                                       "Result=success\n",
+                            )
+
+                        def opened(name, *args, **kwargs):
+                            nonlocal reads
+                            if name == "/proc/self/mountinfo":
+                                return io.StringIO("")
+                            if pathlib.Path(name) == record:
+                                reads += 1
+                                if late_arrival and reads == 2:
+                                    record.write_text(contents)
+                            return io.open(name, *args, **kwargs)
+
+                        def unexpected_process(*args, **kwargs):
+                            self.fail("status must not launch a process")
+
+                        result = invoke(
+                            ["status"],
+                            {
+                                "HOME": temporary,
+                                "XDG_CONFIG_HOME": str(root / "config"),
+                                "XDG_DATA_HOME": str(root / "data"),
+                                "XDG_RUNTIME_DIR": str(root / "run"),
+                            },
+                            run=external, opened=opened,
+                            popen=unexpected_process,
+                            execve=unexpected_process,
+                        )
+                        self.assertEqual(
+                            (1, "inconsistent/foreign state\n", ""), result
+                        )
+                        self.assertEqual(contents.encode(), record.read_bytes())
+                        self.assertEqual([record], list(runtime.iterdir()))
+                        self.assertEqual([], list(mount.iterdir()))
+                        after = mount.stat()
+                        self.assertEqual(
+                            (before.st_dev, before.st_ino, before.st_mode),
+                            (after.st_dev, after.st_ino, after.st_mode),
+                        )
+                        self.assertEqual(
+                            ["user.keep"], os.listxattr(mount)
+                        )
+                        self.assertEqual(b"preserve", os.getxattr(mount, "user.keep"))
+                        self.assertTrue(actions)
+                        if late_arrival:
+                            self.assertEqual(2, reads)
 
     def test_status_rechecks_detachment_and_reports_unfinished_cleanup(self):
         with tempfile.TemporaryDirectory() as temporary:

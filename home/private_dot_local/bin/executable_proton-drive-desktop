@@ -1782,11 +1782,14 @@ def main(argv):
     if argv[0] == "inspect-recovery":
         return inspect_recovery(resolved)
     if argv[0] == "status":
-        message, result = public_status(resolved)
-        if message == "stopped" and (
-            read_marker(resolved, missing_ok=True) is not None
-            or read_phase(resolved) is not None
-        ):
+        try:
+            message, result = public_status(resolved)
+            if message == "stopped" and (
+                read_marker(resolved, missing_ok=True) is not None
+                or read_phase(resolved) is not None
+            ):
+                message, result = "inconsistent/foreign state", 1
+        except OperationError:
             message, result = "inconsistent/foreign state", 1
         print(message)
         return result
