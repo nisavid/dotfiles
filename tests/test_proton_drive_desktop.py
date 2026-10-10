@@ -4984,7 +4984,28 @@ class PublicCommandTests(unittest.TestCase):
                 dolphin.assert_not_called()
 
     def test_mount_exec_uses_fixed_read_only_arguments_and_scrubbed_environment(self):
-        with tempfile.TemporaryDirectory(prefix="proton drive ") as temporary:
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch("os.fstat", REAL_FSTAT))
+            self.assertIs(os.fstat, REAL_FSTAT)
+            home = pathlib.Path.home().resolve()
+            temporary_root = pathlib.Path("/tmp").resolve()
+            self.assertNotEqual(temporary_root, home)
+            self.assertNotIn(temporary_root, home.parents)
+            private_parent = pathlib.Path(
+                stack.enter_context(
+                    tempfile.TemporaryDirectory(prefix=".pd-", dir=home)
+                )
+            )
+            private_parent.chmod(0o700)
+            private_information = private_parent.lstat()
+            self.assertTrue(stat.S_ISDIR(private_information.st_mode))
+            self.assertEqual(os.getuid(), private_information.st_uid)
+            self.assertEqual(
+                0o700, stat.S_IMODE(private_information.st_mode)
+            )
+            temporary = stack.enter_context(tempfile.TemporaryDirectory(
+                prefix="p ", dir=private_parent,
+            ))
             root = pathlib.Path(temporary)
             copied_program = root / "bin with spaces/proton-drive-desktop"
             copied_program.parent.mkdir()
