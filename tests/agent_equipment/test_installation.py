@@ -40,6 +40,7 @@ PACKAGE_NAMES = (
     "authorization.py",
     "canonical.py",
     "discovery.py",
+    "execution_authority.py",
     "inventory.py",
     "model.py",
     "plan_action_set.py",
