@@ -249,8 +249,8 @@ is read again. Each record holds:
 | `dropped_events` | How many new events the record did not keep because they would have gone over a cap |
 | `window.fast`, `window.slow` | Every sample from the 15 minutes before the first event: T1–T4 and T8, and the per-cgroup and T9 detail |
 | `t9.latest` | The latest T9 attribution before the kill |
-| `t9.growth` | The classes and trees whose anonymous plus swapped memory grew most. Each is measured from the earliest window sample that knows its size: one that lists it, or one whose list for its cgroup is complete (no `(rest)`), where it had nothing. Each item has `cgroup`, `section` (`classes` or `trees`), `exe` and `role` or `tree`, `anon_swap_kib` (its size now), `growth_kib`, `since` (the time of the sample it is measured from) and `new` (`true` when it had nothing then) |
-| `t9.entered` | Classes and trees whose size no earlier window sample knows, because the sample lacked their cgroup (not yet watched, or its processes unreadable) or folded them into `(rest)`. Listed with the same identifying fields and `anon_swap_kib`, and no growth figure |
+| `t9.growth` | The classes and trees whose anonymous plus swapped memory grew most. Only window samples from the latest sample's boot are compared, because sizes from another boot belong to other processes. Each is measured from the earliest of those samples that knows its size: one that lists it, or one whose list for its cgroup is complete (no `(rest)`), where it had nothing. Each item has `cgroup`, `section` (`classes` or `trees`), `exe` and `role` or `tree`, `anon_swap_kib` (its size now), `growth_kib`, `since` (the time of the sample it is measured from) and `new` (`true` when it had nothing then) |
+| `t9.entered` | Classes and trees whose size no earlier window sample of that boot knows, because the sample lacked their cgroup (not yet watched, or its processes unreadable) or folded them into `(rest)`. Listed with the same identifying fields and `anon_swap_kib`, and no growth figure |
 | `following.fast` | Fast samples from the 60 s after the first event |
 | `finalized` | `true` once the 60 s have passed and the following samples are in. A collector that stops within the 60 s finalizes the record when it next starts. |
 
@@ -406,10 +406,17 @@ records. It then follows from the newest entry the pass read. The same
 catch-up runs whenever `journalctl` is restarted. If the saved position has
 been rotated away, the pass starts from the oldest entry the journal still has
 (as observed with systemd 262), and the collector replays everything since
-without duplicating existing records. A position `journalctl` rejects as
-malformed, by exiting at once with an error and no output, makes the collector
-start again from the journal's end. The journal's own retention depends on an
-unmanaged journald setting.
+without duplicating existing records. A position `journalctl` refuses as
+malformed makes the collector start again from the journal's end. The
+collector recognizes the refusal by exit status 1, no entry received, and
+`journalctl`'s own message ("Failed to seek to cursor") on the catch-up pass's
+standard error; it keeps nothing else from that output. A pass that fails any
+other way (for example a signal, status 127, or another error) keeps the saved
+position and runs again from it after the usual 30 s. Recognition rests on
+`journalctl`'s English wording, verified on systemd 262 only. If another version
+words the refusal differently, a malformed saved position is retried every 30 s,
+showing as `exited: 1`, until `journal.cursor` is deleted. The journal's own
+retention depends on an unmanaged journald setting.
 
 The saved position is that of the last entry the collector finished handling,
 not of the last one it read, and an entry is finished only once every

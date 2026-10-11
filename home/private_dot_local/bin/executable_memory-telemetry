@@ -32,6 +32,7 @@ import selectors
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import zlib
 from collections import defaultdict
@@ -124,6 +125,8 @@ MAX_RECORD_EVENTS = 500
 MAX_UNRECOGNIZED_EVENTS = 50
 MAX_RECORD_BYTES = 8 * 1024 * 1024
 JOURNAL_RESTART_DELAY = 30.0
+# What journalctl prints when it cannot use the cursor it was given (sd_journal_seek_cursor failed).
+CURSOR_REFUSED = b"Failed to seek to cursor"
 TOP_ENTRIES = 20
 TOP_SWAP_HOLDERS = 10
 
@@ -801,6 +804,8 @@ def t9_growth(slow: list[Record]) -> Record:
     true when the entry had nothing then. An entry whose size only the latest sample
     knows goes into `entered` with its current size and no growth figure."""
     samples = [sample for sample in slow if isinstance(sample.get("t9"), dict)]
+    # Sizes from another boot are those of other processes: measure within the latest sample's boot only.
+    samples = [sample for sample in samples if sample.get("boot") == samples[-1].get("boot")]
     if not samples:
         return {"from": None, "to": None, "latest": None, "growth": [], "entered": []}
     first, last = samples[0], samples[-1]
@@ -1369,10 +1374,10 @@ class Journal:
         self.saved_cursor = self.cursor
         self.bytes_written = 0
         self.process: subprocess.Popen[bytes] | None = None
+        self.errors: Any = None  # the catch-up child's error output, while it runs
         self.selector = selectors.DefaultSelector()
         self.buffer = b""
         self.state = "starting"
-        self.started = 0.0
         self.catching_up = False
         self.caught_up = False
         self.received = False
@@ -1385,17 +1390,22 @@ class Journal:
         position = ["--after-cursor", self.cursor] if self.cursor else ["--lines=0"]
         follow = [] if self.catching_up else ["--follow"]
         try:
+            # Only a catch-up child's errors are kept: it ends by itself, and what it says tells a refused
+            # cursor from any other failure. An unnamed file in the state directory never blocks the child.
+            if self.catching_up:
+                self.errors = tempfile.TemporaryFile(dir=self.cursor_path.parent)
             self.process = subprocess.Popen(
                 [self.command, *follow, "--output=json", "--no-pager", "--quiet", *position, *JOURNAL_MATCHES],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=self.errors if self.errors is not None else subprocess.DEVNULL,
             )
         except OSError as error:
+            self.cursor_refused()
             self.state = f"unavailable: {type(error).__name__}"
             self.restart_at = time.monotonic() + JOURNAL_RESTART_DELAY
             return
         assert self.process.stdout is not None
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
-        self.started = time.monotonic()
         self.received = False
         self.state = "catching up" if self.catching_up else "following"
 
@@ -1435,16 +1445,18 @@ class Journal:
         self.selector.unregister(self.process.stdout)
         self.process.stdout.close()
         status = self.end_child(exiting=True)
+        refused = self.cursor_refused()
         self.buffer = b""
         if self.catching_up:
             if status == 0:  # read everything after the saved position; follow from here at once
                 self.caught_up = True
                 self.restart_at = time.monotonic()
                 return
-            # journalctl rejects a malformed cursor by exiting at once with an error and no output; start
-            # again from the end. A well-formed cursor older than the journal's retention replays from the
+            # journalctl refuses a malformed cursor by exiting with status 1, its own message and no output;
+            # start again from the end. Any other failure keeps the cursor, and the next start catches up
+            # from it again. A well-formed cursor older than the journal's retention replays from the
             # oldest entry.
-            if not self.received and time.monotonic() - self.started < 10:
+            if status == 1 and refused and not self.received:
                 self.cursor = None
         self.caught_up = False  # the next start catches up from the cursor again
         self.state = f"exited: {status}"
@@ -1470,6 +1482,20 @@ class Journal:
         except subprocess.TimeoutExpired:
             process.kill()
             return process.wait()
+
+    def cursor_refused(self) -> bool:
+        """Whether the catch-up child that just ended said it could not use its cursor. Closes the child's
+        error output; nothing of it is recorded."""
+        errors, self.errors = self.errors, None
+        if errors is None:
+            return False
+        try:
+            errors.seek(0)
+            return CURSOR_REFUSED in errors.read(4096)
+        except OSError:
+            return False
+        finally:
+            errors.close()
 
     def mark_handled(self, entry: Record) -> None:
         """Note that `entry` has been handled, so a restart may resume after it."""
@@ -1505,6 +1531,7 @@ class Journal:
                 self.selector.unregister(self.process.stdout)
                 self.process.stdout.close()
             self.end_child()
+        self.cursor_refused()
 
 
 # Commands --------------------------------------------------------------------

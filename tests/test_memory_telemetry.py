@@ -814,6 +814,21 @@ class GrowthTests(unittest.TestCase):
         self.assertEqual(sorted((item["cgroup"], item["tree"]) for item in growth["entered"]),
                          [("folded.scope", "c[3]"), ("last.service", "(no agent)")])
 
+    def test_growth_is_measured_within_the_latest_samples_boot(self) -> None:
+        window = self.window({"app.service": ({"claude[1]": 100}, False)},
+                             {"app.service": ({"claude[1]": 700}, False)},
+                             {"app.service": ({"claude[1]": 700, "codex[2]": 5}, False)})
+        for record, boot in zip(window, ("before", "after", "after")):
+            record["boot"] = boot
+        growth = mt.t9_growth(window)
+        self.assertEqual((growth["from"], growth["to"]), (2, 3))
+        self.assertEqual({item["tree"]: (item["growth_kib"], item["since"], item["new"]) for item in growth["growth"]},
+                         {"claude[1]": (0, 2, False), "codex[2]": (5, 2, True)})
+        # Only the latest sample is from this boot: nothing earlier knows any size.
+        growth = mt.t9_growth(window[:2])
+        self.assertEqual((growth["from"], growth["growth"]), (2, []))
+        self.assertEqual([item["tree"] for item in growth["entered"]], ["claude[1]"])
+
     def test_report_marks_new_and_entered_items(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary)
@@ -1509,10 +1524,17 @@ with open(log, "a") as handle:
 with open(log) as handle:
     call = len(handle.readlines()) - 1
 if "--after-cursor" in argv and not argv[argv.index("--after-cursor") + 1].startswith("s="):
+    sys.stderr.write("Failed to seek to cursor: Invalid argument\n")  # journalctl 262's own words
     sys.exit(1)  # like journalctl, refuse a malformed cursor at once and print nothing
 follow = "--follow" in argv
 plans = json.loads(os.environ.get("FAKE_JOURNAL_PLAN", "[]"))
 plan = plans[call] if call < len(plans) else {{}}
+if "fail" in plan:  # end at once without output: a signal number below zero, an exit status otherwise
+    sys.stderr.write(plan.get("stderr", ""))
+    sys.stderr.flush()
+    if plan["fail"] < 0:
+        os.kill(os.getpid(), -plan["fail"])
+    sys.exit(plan["fail"])
 time.sleep(plan.get("delay", float(os.environ.get("FAKE_JOURNAL_DELAY", "1.0")) if follow else 0))
 t = int(time.time() * 1e6)
 entries = plan.get("entries", json.loads(os.environ.get("FAKE_JOURNAL_ENTRIES" if follow else "FAKE_JOURNAL_CATCH_UP",
@@ -1830,6 +1852,31 @@ class RunTests(FixtureCase):
         self.assertEqual(self.drain(journal, calls=5), [])
         self.assertIsNone(journal.cursor)
         self.assertEqual(journal.state, "exited: 1")
+
+    def test_a_catch_up_that_fails_for_another_reason_keeps_its_cursor(self) -> None:
+        self.state.mkdir()
+        cursor_path = self.state / "journal.cursor"
+        entries = [{"MESSAGE": "after the failures", "__CURSOR": "s=new"}]
+        failures = [{"fail": 1, "stderr": "Failed to open journal: Too many open files\n"},
+                    {"fail": -signal.SIGKILL}, {"fail": 127}, {"fail": 1}]
+        self.journal_environment(FAKE_JOURNAL_PLAN=json.dumps(failures + [{"entries": entries}, {"entries": []}]))
+        cursor_path.write_text("s=old\n")
+        with mock.patch.object(mt, "JOURNAL_RESTART_DELAY", 0.0):
+            journal = mt.Journal(str(self.fake), cursor_path)
+            states = []
+            for calls in range(1, len(failures) + 1):
+                self.assertEqual(self.drain(journal, calls=calls), [])
+                states.append(journal.state)
+                self.assertEqual(journal.cursor, "s=old")
+            self.assertEqual(states, ["exited: 1", "exited: -9", "exited: 127", "exited: 1"])
+            self.assertEqual([entry["MESSAGE"] for entry in self.drain(journal, calls=len(failures) + 2)],
+                             ["after the failures"])
+        calls = self.journal_calls()
+        for call in calls[:len(failures) + 1]:  # every catch-up starts from the saved position
+            self.assertEqual(call["argv"][:5], ["--output=json", "--no-pager", "--quiet", "--after-cursor", "s=old"])
+        self.assertEqual(calls[-1]["argv"][:6], ["--follow", "--output=json", "--no-pager", "--quiet",
+                                                 "--after-cursor", "s=new"])
+        self.assertEqual(list(self.state.iterdir()), [cursor_path])  # the error output leaves no file
 
     def test_the_saved_position_never_passes_an_entry_that_was_not_handled(self) -> None:
         self.state.mkdir()
