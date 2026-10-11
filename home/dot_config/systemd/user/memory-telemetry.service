@@ -1,0 +1,56 @@
+# Observe-only memory telemetry for agent workloads (nisavid/dotfiles#420).
+#
+# ~/.local/bin/memory-telemetry samples the host-memory signals T1-T9 from
+# nisavid/dotfiles#404 every 10 s, with cgroup and per-process detail every 60
+# s, and keeps its own record in ~/.local/state/memory-telemetry: hourly sample
+# segments, latest.json with the newest counters, and one kill record per
+# systemd-oomd or kernel OOM kill it reads from the journal. It reads /proc,
+# /sys, the oomd configuration and the journal, writes only that directory, and
+# never kills, signals, moves or reconfigures anything else. It raises no
+# alarms. docs/MEMORY_TELEMETRY.md in the dotfiles repository describes the
+# record, the cadence and the measured cost.
+#
+# Inspect:   systemctl --user status memory-telemetry.service
+# Summary:   memory-telemetry report
+#
+# chezmoi manages this unit, the default.target.wants symlink that enables it,
+# and ~/.local/bin/memory-telemetry. It does not start or restart the unit. An
+# existing run_after script (run_after_activate-proton-pass-provider-ready)
+# reloads the user manager on every Linux apply, so the unit is then loaded and
+# enabled. It starts the next time the user manager starts: at the next boot where
+# lingering keeps the manager running between logins (Linger=yes), at the next
+# login elsewhere. To start it now, or after an apply that changes it:
+#   systemctl --user daemon-reload && systemctl --user restart memory-telemetry.service
+# To turn it off for good, first stop and disable it while its files still
+# exist (disable needs the unit file):
+#   systemctl --user disable --now memory-telemetry.service
+# then delete its chezmoi source files or ignore their targets in
+# home/.chezmoiignore, delete the live files, and run:
+#   systemctl --user daemon-reload
+# The record stays in ~/.local/state/memory-telemetry until deleted.
+
+[Unit]
+Description=Observe-only memory telemetry for agent workloads
+Documentation=https://github.com/nisavid/dotfiles/blob/main/docs/MEMORY_TELEMETRY.md
+
+[Service]
+Type=exec
+ExecStart="%h/.local/bin/memory-telemetry" run
+Restart=on-failure
+RestartSec=30
+StateDirectory=memory-telemetry
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# Bounds on the collector itself. With its journalctl child it holds about 15
+# MiB of anonymous memory, plus mapped journal files the kernel can reclaim.
+# Keeping it out of swap keeps it sampling when swap is full.
+MemoryMax=128M
+MemorySwapMax=0
+TasksMax=16
+
+[Install]
+WantedBy=default.target
