@@ -415,8 +415,12 @@ other way (for example a signal, status 127, or another error) keeps the saved
 position and runs again from it after the usual 30 s. Recognition rests on
 `journalctl`'s English wording, verified on systemd 262 only. If another version
 words the refusal differently, a malformed saved position is retried every 30 s,
-showing as `exited: 1`, until `journal.cursor` is deleted. The journal's own
-retention depends on an unmanaged journald setting.
+showing as `exited: 1`, and nothing is read from the journal meanwhile, so no
+kill gets a record. That lasts until `journal.cursor` is deleted and the
+collector is then restarted
+(`systemctl --user restart memory-telemetry.service`), after which it follows
+from the journal's end. The journal's own retention depends on an unmanaged
+journald setting.
 
 The saved position is that of the last entry the collector finished handling,
 not of the last one it read, and an entry is finished only once every
