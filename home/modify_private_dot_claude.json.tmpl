@@ -3,7 +3,7 @@ set -euo pipefail
 
 command={{ joinPath .chezmoi.homeDir ".local/bin/secret-exec" | quote }}
 
-jq --arg command "$command" '
+jq --join-output --arg command "$command" '
   def local_server($existing; $args):
     (($existing // {}) + {command: $command, args: $args}) |
     del(.type, .url, .env, .env_vars, .headers, .http_headers, .bearer_token_env_var);
