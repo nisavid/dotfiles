@@ -82,7 +82,7 @@ Before authentication or transfer:
    only the redacted result, then delete the protected temporary output.
 
 Storage or persistence failures stop the operation. This procedure uses the
-existing interactive authentication route; it neither copies Hatchery's
+existing interactive authentication route; it neither copies this host's
 credentials to another machine nor establishes access before desktop login.
 
 ## Retain and retrieve the packet
