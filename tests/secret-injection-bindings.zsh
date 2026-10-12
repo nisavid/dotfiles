@@ -131,6 +131,8 @@ jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
 ' "$test_dir/claude-output.json" > /dev/null || fail 'Claude MCP bindings must use process-scoped launch profiles'
 ! rg -n 'context7-canary|firecrawl-canary|github-canary|greptile-canary|ambient-canary' "$test_dir/claude-output.json" >/dev/null || \
   fail 'Claude output must retire credential-bearing MCP URLs'
+[[ $(tail -c 1 "$test_dir/claude-output.json" | od -An -c | tr -d ' ') == '}' ]] ||
+  fail 'Claude output must end without a final newline, as Claude Code writes ~/.claude.json'
 
 settings_modifier=$test_dir/modify-claude-settings
 render_modifier home/dot_claude/modify_private_settings.json.tmpl "$settings_modifier"
