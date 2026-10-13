@@ -17,6 +17,10 @@ review_partial_name=review-before-shipping.tmpl
 review_partial="$source_root/.chezmoitemplates/$review_partial_name"
 claude_review_rule_template="$source_root/dot_claude/rules/review-before-shipping.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
+cold_archive_envelope_name=.private-cold-archive.md.age
+cold_archive_envelope="$source_root/$cold_archive_envelope_name"
+claude_cold_archive_rule_template="$source_root/dot_claude/rules/private_cold-archive.md.tmpl"
+cold_archive_include='{{ include ".private-cold-archive.md.age" | decrypt | trim }}'
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
 git_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-git-policy.XXXXXX")
@@ -27,17 +31,22 @@ claude_git_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-git-rule.XXXXXX")
 identity_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-identity-policy.XXXXXX")
 claude_review_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-review-rule.XXXXXX")
 review_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-review-policy.XXXXXX")
+claude_cold_archive_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-cold-archive-rule.XXXXXX")
+cold_archive_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-cold-archive-policy.XXXXXX")
 render_source_root=$source_root
 render_template=$template
 render_claude_rule_template=$claude_rule_template
 render_claude_git_rule_template=$claude_git_rule_template
 render_claude_review_rule_template=$claude_review_rule_template
+render_claude_cold_archive_rule_template=$claude_cold_archive_rule_template
 render_fixture=
 chmod 600 "$rendered"
 chmod 600 "$target_state"
 chmod 600 "$git_policy"
 chmod 600 "$pr_policy"
-trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
+chmod 600 "$claude_cold_archive_rule"
+chmod 600 "$cold_archive_policy"
+trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cold_archive_rule" "$cold_archive_policy"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -97,13 +106,35 @@ done
 [[ $(chezmoi -S "$source_root" target-path "$claude_review_rule_template") == "$HOME/.claude/rules/review-before-shipping.md" ]] ||
   fail "Claude review rule template targets the wrong file"
 
+[[ -f "$cold_archive_envelope" ]] || fail "cold-archive envelope is missing"
+[[ -f "$claude_cold_archive_rule_template" ]] || fail "Claude cold-archive rule template is missing"
+[[ $(mode_of "$claude_cold_archive_rule_template") == 644 ]] || fail "Claude cold-archive rule source template mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_cold_archive_rule_template") == "$HOME/.claude/rules/cold-archive.md" ]] ||
+  fail "Claude cold-archive rule template targets the wrong file"
+# Both harnesses take the instruction from the one envelope, and neither
+# source template carries any of it in plaintext.
+[[ $(<"$claude_cold_archive_rule_template") == "# Cold Archive"$'\n\n'"$cold_archive_include" ]] ||
+  fail "Claude cold-archive rule is not the heading plus the encrypted include"
+[[ $(awk '
+  $0 == "## Cold Archive" { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+' "$template") == $'\n'"$cold_archive_include" ]] ||
+  fail "Codex policy does not carry exactly the encrypted include in Cold Archive"
+[[ $(grep -Fc -- "$cold_archive_envelope_name" "$template") == 1 ]] ||
+  fail "Codex policy must include the cold-archive envelope exactly once"
+grep -Fq "home/$cold_archive_envelope_name" "$encryption_doc" ||
+  fail "encryption policy does not register the cold-archive envelope"
+grep -Fq 'mode-`0600` `~/.claude/rules/cold-archive.md` target' "$encryption_doc" ||
+  fail "encryption policy does not authorize the cold-archive rule target and mode"
+
 if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   render_fixture=$(mktemp -d "${TMPDIR:-/tmp}/global-agents-source.XXXXXX")
   chmod 700 "$render_fixture"
   mkdir -m 700 "$render_fixture/dot_codex"
   render_template="$render_fixture/dot_codex/private_AGENTS.md.tmpl"
   awk '
-    !($0 ~ /include[[:space:]]+"\.private-agents\.md\.age"[[:space:]]*\|[[:space:]]*decrypt/)
+    !($0 ~ /include[[:space:]]+"\.private-(agents|cold-archive)\.md\.age"[[:space:]]*\|[[:space:]]*decrypt/)
   ' "$template" > "$render_template"
   chmod 644 "$render_template"
   mkdir -m 700 "$render_fixture/.chezmoitemplates" "$render_fixture/dot_claude" "$render_fixture/dot_claude/rules"
@@ -123,6 +154,9 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$claude_git_rule_template" "$render_claude_git_rule_template"
   render_claude_review_rule_template="$render_fixture/dot_claude/rules/${claude_review_rule_template:t}"
   cp -p -- "$claude_review_rule_template" "$render_claude_review_rule_template"
+  render_claude_cold_archive_rule_template="$render_fixture/dot_claude/rules/${claude_cold_archive_rule_template:t}"
+  grep -Fv -- "$cold_archive_envelope_name" "$claude_cold_archive_rule_template" > "$render_claude_cold_archive_rule_template"
+  chmod 644 "$render_claude_cold_archive_rule_template"
   render_source_root=$render_fixture
 fi
 
@@ -414,6 +448,33 @@ review_harness_specific=(
 for phrase in $review_harness_specific; do
   ! grep -Fiq -- "$phrase" "$review_partial" || fail "review policy names a harness: $phrase"
 done
+
+chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/cold-archive.md" > "$claude_state"
+[[ $(jq -r '.[".claude/rules/cold-archive.md"].perm' "$claude_state") == 384 ]] ||
+  fail "Claude cold-archive rule target mode is not 0600"
+
+(
+  cd "$render_source_root"
+  chezmoi -S "$render_source_root" execute-template < "$render_claude_cold_archive_rule_template" > "$claude_cold_archive_rule"
+)
+awk '
+  $0 == "## Cold Archive" { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+' "$rendered" > "$cold_archive_policy"
+if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
+  # Without the identity, both harnesses keep the heading and nothing else.
+  [[ $(<"$claude_cold_archive_rule") == "# Cold Archive" ]] ||
+    fail "public Claude cold-archive rule carries text beyond its heading"
+  [[ $(<"$cold_archive_policy") != *[^[:space:]]* ]] ||
+    fail "public Codex policy carries cold-archive text"
+else
+  cold_archive=$(<"$cold_archive_policy")
+  cold_archive=${cold_archive#$'\n'}
+  [[ $cold_archive == *[^[:space:]]* ]] || fail "cold-archive instruction renders empty"
+  [[ $(<"$claude_cold_archive_rule") == "# Cold Archive"$'\n\n'"$cold_archive" ]] ||
+    fail "Claude cold-archive rule and Codex Cold Archive section differ"
+fi
 
 repo_agents_forbidden=(
   'ivan@nisavid.io'

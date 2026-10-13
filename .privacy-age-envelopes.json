@@ -10,6 +10,10 @@
       "sha256": "sha256:bc420d1b6ec371a1d0e12fe2b58d46a461eff93e7045a12e736cc7c638c1d5f0"
     },
     {
+      "path": "home/.private-cold-archive.md.age",
+      "sha256": "sha256:8f1a0ed395e51da1c0f1465397ff0d6ea152858218a04c731db0079d694314e6"
+    },
+    {
       "path": "home/.private-daybreak-account-bindings.md.age",
       "sha256": "sha256:f2e37471972a0159447024008221e672ea1e942f07840b21d99d05982d1ae62e"
     },
@@ -27,7 +31,7 @@
     },
     {
       "path": "home/.private-privacy-denylist.txt.age",
-      "sha256": "sha256:bd54f9493ba4af1e481b7792255bde2b58305d6b177d40a10fc4027aa72d8654"
+      "sha256": "sha256:c9c73a4db9c6ec7981b78d7340daf2dad04ed54454985a05adb0a2b5f19d6662"
     },
     {
       "path": "home/.private-secret-exec.toml.age",
