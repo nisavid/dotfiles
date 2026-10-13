@@ -408,6 +408,7 @@ class ExportCommandTests(unittest.TestCase):
         )
         (evidence / "RECEIPT.json").chmod(0o600)
         (evidence / "modes.tsv").write_bytes(buffers["modes_file"].encode())
+        (evidence / "modes.tsv").chmod(0o644)
 
         code, report = self.export()
 
