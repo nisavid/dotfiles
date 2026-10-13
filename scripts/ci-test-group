@@ -100,7 +100,11 @@ group_python_checks() {
     home/private_dot_local/lib/agent-equipment/agent_equipment \
     home/private_dot_local/bin/executable_agent-equipment
   python3 -m unittest tests/test_chezmoi_source_ownership.py
-  python3 -m unittest tests.test_provingkit_installations tests.test_provingkit_deployment
+  python3 -m unittest \
+    tests.test_provingkit_export \
+    tests.test_provingkit_installations \
+    tests.test_provingkit_recovery \
+    tests.test_provingkit_deployment
   python3 -m unittest tests.test_codex_quota_safeguard_deployment
   python3 -m unittest tests.test_proton_drive_desktop tests.test_proton_drive_desktop_deployment
   python3 -m unittest tests.test_memory_telemetry
