@@ -1,0 +1,141 @@
+{
+  "schema": "provingkit-installation-view-export-v1",
+  "producer": {
+    "repository": "https://github.com/nisavid/dotfiles",
+    "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "script_path": "home/private_dot_local/bin/executable_provingkit-installations",
+    "script_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "procedure_path": "docs/agent-equipment/provingkit-installations.md",
+    "procedure_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "selection": {
+    "sha256": "fcd922b5577662a2dd3af6b629dd48f9534d78a750210f0066e342bc54617d60",
+    "bytes": 1788,
+    "profile_name": "synthetic-export-example"
+  },
+  "source": {
+    "repository": "https://github.com/nisavid/provingkit",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "artifact_slate": [
+    "proseweaving"
+  ],
+  "input": {
+    "target": "agent-plugins",
+    "artifact_sha256": "c89469e88eb242777694bd24250f2d19d5089df64b80d1af53c4e8d124a884fa",
+    "receipt_sha256": "e9450d7be4ba48ac254b6e6e23173a26aaac651d12f67d9bad2ebc911090d321",
+    "modes_sha256": "9d4c06397a3df4bdca1a82b6ebfd9a9bd7d42eb03dabeab84578d226b9886d69",
+    "declared_archive_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "archive_bytes_measured": false
+  },
+  "payloads": {
+    "canonical": {
+      "root": "canonical",
+      "tree_sha256": "c89469e88eb242777694bd24250f2d19d5089df64b80d1af53c4e8d124a884fa",
+      "root_receipt_sha256": "e9450d7be4ba48ac254b6e6e23173a26aaac651d12f67d9bad2ebc911090d321",
+      "inventory": {
+        "files": [
+          {
+            "path": ".agents/plugins/marketplace.json",
+            "bytes": 58,
+            "sha256": "6c1882d048d49dc13381402e81b0ced2c5258e3bad6608d935a29a29bfef9461",
+            "mode": "0444"
+          },
+          {
+            "path": "RECEIPT.json",
+            "bytes": 794,
+            "sha256": "e9450d7be4ba48ac254b6e6e23173a26aaac651d12f67d9bad2ebc911090d321",
+            "mode": "0444"
+          }
+        ],
+        "directories": [
+          {
+            "path": ".",
+            "mode": "0555"
+          },
+          {
+            "path": ".agents",
+            "mode": "0555"
+          },
+          {
+            "path": ".agents/plugins",
+            "mode": "0555"
+          }
+        ]
+      },
+      "inventory_sha256": "cebda257991dbb2fb97c2f12a35fa015d57ab2db64db178a4a3fa3a2f2ed736a"
+    },
+    "local": {
+      "root": "agent-plugins-local",
+      "tree_sha256": "c45cbd6a79625bf76e9621e0285916f9c63a857da406a5663f0521c5a5b80401",
+      "root_receipt_sha256": "c8dfd509192754226856ac7d2562a7dba3a85e0068ba153ba3423bbfc9a74b75",
+      "inventory": {
+        "files": [
+          {
+            "path": ".agents/plugins/marketplace.json",
+            "bytes": 64,
+            "sha256": "a14afc90bf28deed282fddc542d7ca2a4ffabfb1aa0765d039d04627d72b7ad2",
+            "mode": "0444"
+          },
+          {
+            "path": "RECEIPT.json",
+            "bytes": 406,
+            "sha256": "c8dfd509192754226856ac7d2562a7dba3a85e0068ba153ba3423bbfc9a74b75",
+            "mode": "0444"
+          }
+        ],
+        "directories": [
+          {
+            "path": ".",
+            "mode": "0555"
+          },
+          {
+            "path": ".agents",
+            "mode": "0555"
+          },
+          {
+            "path": ".agents/plugins",
+            "mode": "0555"
+          }
+        ]
+      },
+      "inventory_sha256": "a845af3a29277cad5a1fc41517f4a8a85aa314ddc6159b6fee0ea8d40bca0402"
+    }
+  },
+  "evidence": {
+    "parent_receipt": {
+      "path": "evidence/parent-receipt.json",
+      "bytes": 794,
+      "sha256": "e9450d7be4ba48ac254b6e6e23173a26aaac651d12f67d9bad2ebc911090d321",
+      "mode": "0600"
+    },
+    "local_receipt": {
+      "path": "evidence/local-receipt.json",
+      "bytes": 406,
+      "sha256": "c8dfd509192754226856ac7d2562a7dba3a85e0068ba153ba3423bbfc9a74b75",
+      "mode": "0444"
+    },
+    "modes": {
+      "path": "evidence/modes.tsv",
+      "bytes": 65,
+      "sha256": "9d4c06397a3df4bdca1a82b6ebfd9a9bd7d42eb03dabeab84578d226b9886d69",
+      "mode": "0644"
+    }
+  },
+  "layout": {
+    "root_mode": "0755",
+    "evidence_directory_mode": "0755",
+    "manifest_mode": "0644"
+  },
+  "correspondence": {
+    "input_inventory_before_sha256": "cebda257991dbb2fb97c2f12a35fa015d57ab2db64db178a4a3fa3a2f2ed736a",
+    "input_inventory_after_sha256": "cebda257991dbb2fb97c2f12a35fa015d57ab2db64db178a4a3fa3a2f2ed736a",
+    "input_receipt_sha256": "e9450d7be4ba48ac254b6e6e23173a26aaac651d12f67d9bad2ebc911090d321",
+    "change": {
+      "path": ".agents/plugins/marketplace.json",
+      "field": "name",
+      "from": "provingkit",
+      "to": "provingkit-local"
+    }
+  }
+}

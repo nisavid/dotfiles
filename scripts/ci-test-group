@@ -100,7 +100,11 @@ group_python_checks() {
     home/private_dot_local/lib/agent-equipment/agent_equipment \
     home/private_dot_local/bin/executable_agent-equipment
   python3 -m unittest tests/test_chezmoi_source_ownership.py
-  python3 -m unittest tests.test_provingkit_installations tests.test_provingkit_deployment
+  python3 -m unittest \
+    tests.test_provingkit_export \
+    tests.test_provingkit_installations \
+    tests.test_provingkit_recovery \
+    tests.test_provingkit_deployment
   python3 -m unittest tests.test_codex_quota_safeguard_deployment
   python3 -m unittest tests.test_proton_drive_desktop tests.test_proton_drive_desktop_deployment
   python3 -m unittest tests.test_memory_telemetry
@@ -123,7 +127,8 @@ group_python_checks() {
     docs/agent-equipment/lock-v1.schema.json \
     docs/agent-equipment/captured-state-v1.schema.json \
     docs/agent-equipment/execution-authority-v1.schema.json \
-    docs/agent-equipment/plan-action-set-v1.schema.json
+    docs/agent-equipment/plan-action-set-v1.schema.json \
+    docs/agent-equipment/provingkit-export.schema.json
   uvx --from check-jsonschema==0.35.0 check-jsonschema \
     --base-uri "file://$PWD/docs/agent-equipment/adapter-contract-v1.schema.json" \
     --schemafile docs/agent-equipment/adapter-contract-v1.schema.json \
@@ -143,6 +148,9 @@ group_python_checks() {
   uvx --from check-jsonschema==0.35.0 check-jsonschema \
     --schemafile docs/agent-equipment/plan-action-set-v1.schema.json \
     tests/fixtures/agent-equipment/schema/valid-plan-action-set.json
+  uvx --from check-jsonschema==0.35.0 check-jsonschema \
+    --schemafile docs/agent-equipment/provingkit-export.schema.json \
+    tests/fixtures/provingkit-installations/export-example.json
   # The fixture deliberately exercises a native remove inverse.  Until
   # #115 supplies independently validated prepared authority, the
   # capture validator must reject that plan-only path.
