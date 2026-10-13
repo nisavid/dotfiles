@@ -1,0 +1,467 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:provingkit:installation-view-export:v1",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "provingkit-installation-view-export-v1"
+    },
+    "producer": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "const": "https://github.com/nisavid/dotfiles"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "script_path": {
+          "const": "home/private_dot_local/bin/executable_provingkit-installations"
+        },
+        "script_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "procedure_path": {
+          "const": "docs/agent-equipment/provingkit-installations.md"
+        },
+        "procedure_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "repository",
+        "commit",
+        "script_path",
+        "script_sha256",
+        "procedure_path",
+        "procedure_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "selection": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "profile_name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sha256",
+        "bytes",
+        "profile_name"
+      ],
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "const": "https://github.com/nisavid/provingkit"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        }
+      },
+      "required": [
+        "repository",
+        "commit"
+      ],
+      "additionalProperties": false
+    },
+    "artifact_slate": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "rolecasting",
+          "tricritical",
+          "versionkeeping",
+          "mergecraft",
+          "artifact-customs",
+          "proseweaving"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "input": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "const": "agent-plugins"
+        },
+        "artifact_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "modes_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "declared_archive_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "archive_bytes_measured": {
+          "const": false
+        }
+      },
+      "required": [
+        "target",
+        "artifact_sha256",
+        "receipt_sha256",
+        "modes_sha256",
+        "declared_archive_sha256",
+        "archive_bytes_measured"
+      ],
+      "additionalProperties": false
+    },
+    "payloads": {
+      "type": "object",
+      "properties": {
+        "canonical": {
+          "$ref": "#/$defs/canonical"
+        },
+        "local": {
+          "$ref": "#/$defs/local"
+        }
+      },
+      "required": [
+        "canonical",
+        "local"
+      ],
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "parent_receipt": {
+          "$ref": "#/$defs/parent_receipt"
+        },
+        "local_receipt": {
+          "$ref": "#/$defs/local_receipt"
+        },
+        "modes": {
+          "$ref": "#/$defs/modes"
+        }
+      },
+      "required": [
+        "parent_receipt",
+        "local_receipt",
+        "modes"
+      ],
+      "additionalProperties": false
+    },
+    "layout": {
+      "type": "object",
+      "properties": {
+        "root_mode": {
+          "const": "0755"
+        },
+        "evidence_directory_mode": {
+          "const": "0755"
+        },
+        "manifest_mode": {
+          "const": "0644"
+        }
+      },
+      "required": [
+        "root_mode",
+        "evidence_directory_mode",
+        "manifest_mode"
+      ],
+      "additionalProperties": false
+    },
+    "correspondence": {
+      "type": "object",
+      "properties": {
+        "input_inventory_before_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "input_inventory_after_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "input_receipt_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "change": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "const": ".agents/plugins/marketplace.json"
+            },
+            "field": {
+              "const": "name"
+            },
+            "from": {
+              "const": "provingkit"
+            },
+            "to": {
+              "const": "provingkit-local"
+            }
+          },
+          "required": [
+            "path",
+            "field",
+            "from",
+            "to"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "input_inventory_before_sha256",
+        "input_inventory_after_sha256",
+        "input_receipt_sha256",
+        "change"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "producer",
+    "selection",
+    "source",
+    "artifact_slate",
+    "input",
+    "payloads",
+    "evidence",
+    "layout",
+    "correspondence"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "file": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^0[0-7]{3}$"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "sha256",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "directory": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^0[0-7]{3}$"
+        }
+      },
+      "required": [
+        "path",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "inventory": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/file"
+          }
+        },
+        "directories": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/directory"
+          }
+        }
+      },
+      "required": [
+        "files",
+        "directories"
+      ],
+      "additionalProperties": false
+    },
+    "canonical": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "const": "canonical"
+        },
+        "tree_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "root_receipt_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "inventory": {
+          "$ref": "#/$defs/inventory"
+        },
+        "inventory_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "root",
+        "tree_sha256",
+        "root_receipt_sha256",
+        "inventory",
+        "inventory_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "local": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "const": "agent-plugins-local"
+        },
+        "tree_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "root_receipt_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "inventory": {
+          "$ref": "#/$defs/inventory"
+        },
+        "inventory_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "root",
+        "tree_sha256",
+        "root_receipt_sha256",
+        "inventory",
+        "inventory_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "parent_receipt": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "const": "evidence/parent-receipt.json"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^0[0-7]{3}$"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "sha256",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "local_receipt": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "const": "evidence/local-receipt.json"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^0[0-7]{3}$"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "sha256",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "modes": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "const": "evidence/modes.tsv"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^0[0-7]{3}$"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "sha256",
+        "mode"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

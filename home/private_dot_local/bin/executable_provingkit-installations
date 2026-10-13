@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Verify offline recovery artifacts or manage a selected Provingkit installation."""
+"""Export verified installation views, recover artifacts, or manage selected Provingkit plugins."""
 
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import io
 import json
@@ -279,6 +281,14 @@ def verify_artifact(home: Path, profile: dict, target: str) -> Path:
     evidence = (
         home / ".local/share/provingkit/evidence" / target / artifact["artifact_sha256"]
     )
+    return verify_artifact_paths(root, evidence, profile, target)
+
+
+def verify_artifact_paths(
+    root: Path, evidence: Path, profile: dict, target: str
+) -> Path:
+    """Verify the supplied payload against the original pinned receipt and modes."""
+    artifact = profile["artifacts"][target]
     actual = files(root)
     raw = (root / "RECEIPT.json").read_bytes()
     require(
@@ -891,32 +901,17 @@ def installation_view(root: Path, choice: dict):
         yield root
         return
     catalog_path = CATALOGS["agent-plugins"]
-    canonical = (root / catalog_path).read_bytes()
-    needle = b'"name":"provingkit"'
-    native_require(
-        canonical.count(needle) == 1, "unsupported canonical catalog encoding"
-    )
-    parent_bytes = (root / "RECEIPT.json").read_bytes()
-    parent = json.loads(parent_bytes)
+    try:
+        catalog, receipt = local_projection(
+            (root / catalog_path).read_bytes(), (root / "RECEIPT.json").read_bytes()
+        )
+    except ValueError as error:
+        raise Unavailable(str(error)) from error
     with tempfile.TemporaryDirectory(prefix="provingkit-alias-") as temporary:
         view = Path(temporary) / "view"
         shutil.copytree(root, view)
-        (view / catalog_path).write_bytes(
-            canonical.replace(needle, b'"name":"provingkit-local"', 1)
-        )
-        derived = {
-            "schema": "provingkit-local-marketplace-projection-v1",
-            "source_commit": parent["source"]["commit"],
-            "parent_receipt_sha256": digest(parent_bytes),
-            "change": {
-                "path": catalog_path,
-                "field": "name",
-                "from": "provingkit",
-                "to": "provingkit-local",
-            },
-            "plugin_slate": parent["plugin_slate"],
-        }
-        (view / "RECEIPT.json").write_text(json.dumps(derived, indent=2) + "\n")
+        (view / catalog_path).write_bytes(catalog)
+        (view / "RECEIPT.json").write_bytes(receipt)
         yield view
 
 
@@ -1646,13 +1641,528 @@ def cursor_status(home: Path, choice: dict, root: Path) -> dict:
     }
 
 
+def export_json(raw: bytes):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            require(key not in result, "duplicate export JSON field")
+            result[key] = value
+        return result
+
+    def finite(value):
+        raise ValueError("non-finite export JSON value: " + value)
+
+    return json.loads(
+        raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=finite
+    )
+
+
+def export_encoding(value: object) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def export_mode(path: Path, directory: bool = False) -> str:
+    observed = path.lstat().st_mode
+    require(
+        stat.S_ISDIR(observed) if directory else stat.S_ISREG(observed),
+        f"unsupported export input type: {path}",
+    )
+    mode = stat.S_IMODE(observed)
+    require(mode <= 0o777, f"unsupported export mode: {path}")
+    needed = 0o500 if directory else 0o400
+    require(mode & needed == needed, f"export input lacks owner access: {path}")
+    require(
+        os.access(path, os.R_OK | (os.X_OK if directory else 0)),
+        f"export input is inaccessible: {path}",
+    )
+    return format(mode, "04o")
+
+
+def export_file(path: Path, name: str) -> dict:
+    mode = export_mode(path)
+    raw = path.read_bytes()
+    return {"path": name, "bytes": len(raw), "sha256": digest(raw), "mode": mode}
+
+
+def export_inventory(root: Path) -> dict:
+    inventory = {"files": [], "directories": []}
+
+    def visit(path: Path, name: str):
+        name.encode("utf-8", "strict")
+        require(
+            name == "." or (relative(name) and "\\" not in name and "\0" not in name),
+            "invalid export inventory path",
+        )
+        if stat.S_ISDIR(path.lstat().st_mode):
+            inventory["directories"].append(
+                {"path": name, "mode": export_mode(path, True)}
+            )
+            for child in sorted(path.iterdir()):
+                visit(child, child.relative_to(root).as_posix())
+        else:
+            inventory["files"].append(export_file(path, name))
+
+    visit(root, ".")
+    for entries in inventory.values():
+        entries.sort(key=lambda item: item["path"])
+    return inventory
+
+
+def export_producer() -> tuple[dict, dict]:
+    script = Path(__file__).absolute()
+    checkout = script.parents[3]
+    paths = {
+        "script": "home/private_dot_local/bin/executable_provingkit-installations",
+        "procedure": "docs/agent-equipment/provingkit-installations.md",
+    }
+
+    def git(*arguments):
+        result = subprocess.run(
+            ["git", "-C", str(checkout), *arguments],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=True,
+        )
+        return result.stdout
+
+    require(
+        script == checkout / paths["script"],
+        "exporter must run from its source checkout",
+    )
+    commit = git("rev-parse", "--verify", "HEAD^{commit}").decode().strip()
+    require(is_digest(commit, 40), "invalid export producer commit")
+    record = {"repository": "https://github.com/nisavid/dotfiles", "commit": commit}
+    inputs = {}
+    for kind, name in paths.items():
+        path = checkout / name
+        inputs[kind] = export_file(path, name)
+        raw = path.read_bytes()
+        require(
+            raw == git("show", f"{commit}:{name}"),
+            "uncommitted export producer: " + name,
+        )
+        record[kind + "_path"] = name
+        record[kind + "_sha256"] = digest(raw)
+    return record, inputs
+
+
+def local_projection(catalog: bytes, parent_bytes: bytes) -> tuple[bytes, bytes]:
+    needle = b'"name":"provingkit"'
+    require(catalog.count(needle) == 1, "unsupported canonical catalog encoding")
+    parent = json.loads(parent_bytes)
+    derived = {
+        "schema": "provingkit-local-marketplace-projection-v1",
+        "source_commit": parent["source"]["commit"],
+        "parent_receipt_sha256": digest(parent_bytes),
+        "change": {
+            "path": CATALOGS["agent-plugins"],
+            "field": "name",
+            "from": "provingkit",
+            "to": "provingkit-local",
+        },
+        "plugin_slate": parent["plugin_slate"],
+    }
+    return (
+        catalog.replace(needle, b'"name":"provingkit-local"', 1),
+        (json.dumps(derived, indent=2) + "\n").encode(),
+    )
+
+
+def export_tree_digest(root: Path, inventory: dict) -> str:
+    framed = hashlib.sha256(b"provingkit-tree-v1\0")
+    for entry in inventory["files"]:
+        if entry["path"] == "RECEIPT.json":
+            continue
+        name = entry["path"].encode("utf-8")
+        data = (root / entry["path"]).read_bytes()
+        framed.update(
+            len(name).to_bytes(8, "big") + name + len(data).to_bytes(8, "big") + data
+        )
+    return framed.hexdigest()
+
+
+def export_copy(source: Path, destination: Path, inventory: dict) -> None:
+    destination.mkdir(mode=0o700)
+    destination.chmod(0o700)
+    for entry in inventory["directories"]:
+        if entry["path"] != ".":
+            (destination / entry["path"]).mkdir(mode=0o700)
+            (destination / entry["path"]).chmod(0o700)
+    for entry in inventory["files"]:
+        path = destination / entry["path"]
+        path.write_bytes((source / entry["path"]).read_bytes())
+        path.chmod(0o600)
+
+
+def export_restore(root: Path, inventory: dict) -> None:
+    for entry in inventory["files"]:
+        (root / entry["path"]).chmod(int(entry["mode"], 8))
+    for entry in sorted(
+        inventory["directories"],
+        key=lambda item: len(PurePosixPath(item["path"]).parts),
+        reverse=True,
+    ):
+        (root / entry["path"]).chmod(int(entry["mode"], 8))
+
+
+def export_manifest(
+    root: Path,
+    producer: dict,
+    selection_raw: bytes,
+    selection: dict,
+    before: dict,
+    after: dict,
+) -> dict:
+    profile = selection["profile"]
+    artifact = profile["artifacts"]["agent-plugins"]
+    payloads = {}
+    for key, name in (("canonical", "canonical"), ("local", "agent-plugins-local")):
+        payload = root / name
+        inventory = export_inventory(payload)
+        payloads[key] = {
+            "root": name,
+            "tree_sha256": export_tree_digest(payload, inventory),
+            "root_receipt_sha256": digest((payload / "RECEIPT.json").read_bytes()),
+            "inventory": inventory,
+            "inventory_sha256": digest(export_encoding(inventory)),
+        }
+    return {
+        "schema": "provingkit-installation-view-export-v1",
+        "producer": producer,
+        "selection": {
+            "sha256": digest(selection_raw),
+            "bytes": len(selection_raw),
+            "profile_name": selection["profile_name"],
+        },
+        "source": {"repository": REPOSITORY, "commit": profile["source"]["commit"]},
+        "artifact_slate": profile["artifact_slate"],
+        "input": {
+            "target": "agent-plugins",
+            "artifact_sha256": artifact["artifact_sha256"],
+            "receipt_sha256": artifact["receipt"]["sha256"],
+            "modes_sha256": artifact["modes"]["sha256"],
+            "declared_archive_sha256": artifact["archive"]["sha256"],
+            "archive_bytes_measured": False,
+        },
+        "payloads": payloads,
+        "evidence": {
+            key: export_file(root / "evidence" / name, "evidence/" + name)
+            for key, name in (
+                ("parent_receipt", "parent-receipt.json"),
+                ("local_receipt", "local-receipt.json"),
+                ("modes", "modes.tsv"),
+            )
+        },
+        "layout": {
+            "root_mode": "0755",
+            "evidence_directory_mode": "0755",
+            "manifest_mode": "0644",
+        },
+        "correspondence": {
+            "input_inventory_before_sha256": digest(export_encoding(before)),
+            "input_inventory_after_sha256": digest(export_encoding(after)),
+            "input_receipt_sha256": artifact["receipt"]["sha256"],
+            "change": {
+                "path": CATALOGS["agent-plugins"],
+                "field": "name",
+                "from": "provingkit",
+                "to": "provingkit-local",
+            },
+        },
+    }
+
+
+def export_readback(root: Path, raw: bytes) -> None:
+    require(
+        {path.name for path in root.iterdir()}
+        == {"canonical", "agent-plugins-local", "evidence", "EXPORT.json"},
+        "export layout differs",
+    )
+    require(
+        export_mode(root, True) == "0755"
+        and export_mode(root / "evidence", True) == "0755"
+        and export_mode(root / "EXPORT.json") == "0644",
+        "export container modes differ",
+    )
+    require(
+        {path.name for path in (root / "evidence").iterdir()}
+        == {"parent-receipt.json", "local-receipt.json", "modes.tsv"},
+        "export evidence layout differs",
+    )
+    observed = (root / "EXPORT.json").read_bytes()
+    export_json(observed)
+    require(observed == raw, "export manifest bytes differ")
+
+
+def export_installation_view(
+    selection_path: Path | None, home: Path | None, output: Path | None
+) -> tuple[int, dict]:
+    report = {
+        "schema": "provingkit-installation-view-export-result-v1",
+        "outcome": "not-published",
+        "output_directory": str(output.absolute()) if output else None,
+        "staging_directory": None,
+        "manifest_sha256": None,
+        "reason": "",
+    }
+    try:
+        require(
+            selection_path is not None and home is not None and output is not None,
+            "export-installation-view requires --selection, --artifact-home, and --output-directory",
+        )
+        require(platform.system() == "Linux", "export publication requires Linux")
+        libc = ctypes.CDLL(None, use_errno=True)
+        rename = libc.renameat2
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename.restype = ctypes.c_int
+        selection_input = export_file(selection_path, "selection")
+        selection_raw = selection_path.read_bytes()
+        require(
+            digest(selection_raw) == selection_input["sha256"],
+            "selection changed during input read",
+        )
+        selection = export_json(selection_raw)
+        profile = validate(selection)
+        require(
+            profile is not None and "agent-plugins" in profile["artifacts"],
+            "export requires a named canonical agent-plugins profile",
+        )
+        producer, producer_inputs = export_producer()
+        source = verify_artifact(home, profile, "agent-plugins")
+        artifact = profile["artifacts"]["agent-plugins"]
+        evidence = (
+            home
+            / ".local/share/provingkit/evidence/agent-plugins"
+            / artifact["artifact_sha256"]
+        )
+        before = export_inventory(source)
+        evidence_mode = export_mode(evidence, True)
+        evidence_inputs = {
+            name: export_file(evidence / name, name)
+            for name in ("RECEIPT.json", "modes.tsv")
+        }
+
+        def check_inputs():
+            require(
+                export_file(selection_path, "selection") == selection_input,
+                "export selection changed",
+            )
+            current_producer, current_inputs = export_producer()
+            require(
+                current_producer == producer and current_inputs == producer_inputs,
+                "export producer changed",
+            )
+            require(
+                export_mode(evidence, True) == evidence_mode,
+                "export evidence directory changed",
+            )
+            require(
+                {name: export_file(evidence / name, name) for name in evidence_inputs}
+                == evidence_inputs,
+                "export evidence changed",
+            )
+            current = export_inventory(source)
+            require(current == before, "export input changed")
+            return current
+
+        output = output.absolute()
+        resolved_output = output.resolve()
+        consumed = [
+            source,
+            evidence,
+            selection_path,
+            Path(__file__).absolute(),
+            Path(__file__).absolute().parents[3] / producer["procedure_path"],
+        ]
+        for path in consumed:
+            resolved = path.resolve()
+            require(
+                not (
+                    resolved_output.is_relative_to(resolved)
+                    or resolved.is_relative_to(resolved_output)
+                ),
+                "export output overlaps a consumed input",
+            )
+        if os.path.lexists(output):
+            report["outcome"] = "collision"
+            raise ValueError("export destination already exists")
+        stage = Path(tempfile.mkdtemp(prefix=".provingkit-export-", dir=output.parent))
+        report["staging_directory"] = str(stage)
+        stage.chmod(0o700)
+        canonical, local = stage / "canonical", stage / "agent-plugins-local"
+        export_copy(source, canonical, before)
+        export_copy(canonical, local, before)
+        catalog_path = CATALOGS["agent-plugins"]
+        catalog, receipt = local_projection(
+            (canonical / catalog_path).read_bytes(),
+            (canonical / "RECEIPT.json").read_bytes(),
+        )
+        (local / catalog_path).write_bytes(catalog)
+        (local / "RECEIPT.json").write_bytes(receipt)
+        retained = stage / "evidence"
+        retained.mkdir(mode=0o700)
+        retained.chmod(0o700)
+        for name, raw, mode in (
+            (
+                "parent-receipt.json",
+                (evidence / "RECEIPT.json").read_bytes(),
+                evidence_inputs["RECEIPT.json"]["mode"],
+            ),
+            (
+                "local-receipt.json",
+                receipt,
+                next(
+                    item["mode"]
+                    for item in before["files"]
+                    if item["path"] == "RECEIPT.json"
+                ),
+            ),
+            (
+                "modes.tsv",
+                (evidence / "modes.tsv").read_bytes(),
+                evidence_inputs["modes.tsv"]["mode"],
+            ),
+        ):
+            (retained / name).write_bytes(raw)
+            (retained / name).chmod(int(mode, 8))
+        retained.chmod(0o755)
+        export_restore(canonical, before)
+        export_restore(local, before)
+        stage.chmod(0o755)
+        after = check_inputs()
+        verify_artifact_paths(canonical, evidence, profile, "agent-plugins")
+        require(
+            export_inventory(canonical) == before, "canonical copy differs from input"
+        )
+        expected_local = deepcopy(before)
+        for entry in expected_local["files"]:
+            if entry["path"] in (catalog_path, "RECEIPT.json"):
+                data = catalog if entry["path"] == catalog_path else receipt
+                entry.update(bytes=len(data), sha256=digest(data))
+        require(
+            export_inventory(local) == expected_local,
+            "fixed local copy differs from transformation",
+        )
+        manifest = export_manifest(
+            stage, producer, selection_raw, selection, before, after
+        )
+        expected_evidence = {
+            "parent_receipt": dict(
+                evidence_inputs["RECEIPT.json"], path="evidence/parent-receipt.json"
+            ),
+            "modes": dict(evidence_inputs["modes.tsv"], path="evidence/modes.tsv"),
+            "local_receipt": {
+                "path": "evidence/local-receipt.json",
+                "bytes": len(receipt),
+                "sha256": digest(receipt),
+                "mode": next(
+                    entry["mode"]
+                    for entry in before["files"]
+                    if entry["path"] == "RECEIPT.json"
+                ),
+            },
+        }
+        require(
+            manifest["evidence"] == expected_evidence,
+            "retained export evidence differs from input",
+        )
+        manifest_raw = export_encoding(manifest)
+        (stage / "EXPORT.json").write_bytes(manifest_raw)
+        (stage / "EXPORT.json").chmod(0o644)
+        report["manifest_sha256"] = digest(manifest_raw)
+
+        def check_output(root):
+            export_readback(root, manifest_raw)
+            verify_artifact_paths(root / "canonical", evidence, profile, "agent-plugins")
+            require(export_inventory(root / "canonical") == before,
+                    "canonical export correspondence differs")
+            require(export_inventory(root / "agent-plugins-local") == expected_local,
+                    "local export correspondence differs")
+            require(export_manifest(root, producer, selection_raw, selection, before, after) == manifest,
+                    "export manifest correspondence differs")
+
+        check_output(stage)
+        check_inputs()
+        parent_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            identity = (stage.stat().st_dev, stage.stat().st_ino)
+            report["outcome"] = "publication-unknown"
+            result = rename(
+                parent_fd,
+                os.fsencode(stage.name),
+                parent_fd,
+                os.fsencode(output.name),
+                1,
+            )
+            if result != 0:
+                failure = ctypes.get_errno()
+
+                def observe(name):
+                    try:
+                        value = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                        return value.st_dev, value.st_ino
+                    except FileNotFoundError:
+                        return None
+
+                retained_stage = observe(stage.name)
+                destination = observe(output.name)
+                if retained_stage == identity:
+                    if destination is None:
+                        report["outcome"] = "not-published"
+                    elif failure == errno.EEXIST and destination != identity:
+                        report["outcome"] = "collision"
+                elif retained_stage is None and destination == identity:
+                    report["staging_directory"] = None
+                raise OSError(failure, "no-replacement export publication failed")
+            report["outcome"] = "published-unconfirmed"
+            report["staging_directory"] = None
+        finally:
+            os.close(parent_fd)
+        check_output(output)
+        check_inputs()
+        report["outcome"] = "confirmed"
+        report["reason"] = (
+            "canonical and fixed-local byte/mode correspondence verified; archive bytes unmeasured"
+        )
+        return 0, report
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        subprocess.SubprocessError,
+    ) as error:
+        report["reason"] = str(error)
+        return 1, report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog="Procedures in nisavid/dotfiles: docs/agent-equipment/provingkit-installations.md; import-artifacts: docs/agent-equipment/provingkit-recovery.md.",
     )
     parser.add_argument(
-        "command", choices=("validate", "status", "reconcile", "import-artifacts")
+        "command",
+        choices=(
+            "validate",
+            "status",
+            "reconcile",
+            "import-artifacts",
+            "export-installation-view",
+        ),
     )
     parser.add_argument(
         "--recovery", help="Name of an independently pinned recovery packet."
@@ -1663,12 +2173,28 @@ def main() -> int:
     parser.add_argument(
         "--selection",
         type=Path,
-        default=Path.home() / ".config/provingkit/selection-v1.json",
+        help="Projected selection; export-installation-view requires an explicit path.",
+    )
+    parser.add_argument(
+        "--artifact-home",
+        type=Path,
+        help="Explicit home containing acquired export artifacts.",
+    )
+    parser.add_argument(
+        "--output-directory", type=Path, help="New installation-view export directory."
     )
     parser.add_argument(
         "--json", action="store_true", help="Emit the JSON result (the default)."
     )
     args = parser.parse_args()
+    if args.command == "export-installation-view":
+        code, report = export_installation_view(
+            args.selection, args.artifact_home, args.output_directory
+        )
+        print(json.dumps(report))
+        return code
+    if args.selection is None:
+        args.selection = Path.home() / ".config/provingkit/selection-v1.json"
     try:
         selection = json.loads(args.selection.read_text())
         if args.command == "import-artifacts":

@@ -23,6 +23,22 @@ permit these local fixture URLs. Without it, both the command and chezmoi
 acquisition template require HTTPS. Keep the fixture setting out of host
 deployment environments.
 
+`export-example-buffers.json` and `export-example.json` retain the independently
+worked export-design example. Their commits, producer hashes, archive pin, and
+URLs are fictional; the selection, receipt, catalog, mode, and inventory hashes
+are reproducible from the literal buffers. The export tests materialize those
+buffers with actual read-only modes and compare the observed manifest, except
+its real synthetic-checkout producer binding, against that independent record.
+
+The exporter fixtures execute a byte-bound synthetic Git checkout in a disposable
+home. Filesystem-boundary faults construct late collisions, unsupported
+publication, failed readback, copied-byte changes, and an error after a real
+no-replacement move. Foreign-readable `0004` file and `0005` directory metadata
+are constructed while the actual files remain accessible; no test changes host
+ownership. These cases establish the CLI's bounded correspondence/refusal
+behavior. They do not qualify other filesystems, power-loss recovery, native
+harness behavior, authenticated execution, or installation-owner acceptance.
+
 To reproduce the artifact oracle with a public checkout containing the frozen
 producer commit:
 

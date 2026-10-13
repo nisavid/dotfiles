@@ -5,6 +5,9 @@ Provingkit artifacts through chezmoi. Use this procedure when preparing a new
 machine, changing selected plugin bytes, repairing a missing installation, or
 moving an ad hoc selection to a later preview or release.
 
+For an offline consumer that needs retained canonical and fixed local trees,
+use [Export an installation view](#export-an-installation-view).
+
 The producer establishes artifact materialization and observed native
 configuration. Interactive discovery, skill behavior, preview qualification,
 publication, live activation, and source retirement have separate acceptance
@@ -97,6 +100,88 @@ provingkit-installations status
 JSON; `--json` makes that choice explicit. `validate` checks the declaration,
 `status` reads current artifacts and client state, and `reconcile` performs the
 supported operations and observes the result again.
+
+## Export an installation view
+
+`export-installation-view` retains a verified canonical `agent-plugins` tree,
+its fixed `provingkit-local` derivative, and raw receipt/mode evidence for offline
+consumers. It reads acquired artifacts and an explicit projected selection;
+client commands, acquisition, registration, and installation are separate.
+
+1. Load this procedure from a reviewed immutable dotfiles checkout. Run that
+   checkout's script directly. The command binds both executing script and
+   procedure bytes to blobs at the checkout's current commit. Corresponding
+   bytes identify the producer; they do not authenticate execution or establish
+   that the commit was reviewed.
+2. Supply a complete `provingkit-installations-v1` selection with a named active
+   profile, a canonical `agent-plugins` target, and complete artifact, receipt,
+   mode, source, and ordered slate pins. Other declared targets receive selection
+   validation only. The artifact home must already contain the canonical tree
+   and its evidence in the content-addressed layout above. The command always
+   requires all three explicit paths and never reads the active host selection.
+3. Choose a new output directory with an existing parent, outside every consumed
+   input. Execute on Linux with libc and filesystem support for
+   `renameat2(RENAME_NOREPLACE)`. Preparation uses an owned writable sibling;
+   publication uses the open parent descriptor and refuses an existing leaf.
+
+```sh
+python3 "$reviewed_dotfiles_checkout/home/private_dot_local/bin/executable_provingkit-installations" \
+  export-installation-view \
+  --selection "$projected_selection" \
+  --artifact-home "$acquired_artifact_home" \
+  --output-directory "$new_export_directory"
+```
+
+Consumed files must be regular, actually readable, and owner-readable. Consumed
+directories must be real, actually readable/searchable, and owner-readable/searchable.
+Only ordinary modes `0000`–`0777` are eligible; the owner-access conditions further
+restrict that domain. They cover the selection, bound producer files, every
+payload file/directory including its root and receipt, and the original evidence
+root and consumed receipt/modes. Source ancestors require actual access but
+gain no inventory claim. Links, special files/bits, invalid UTF-8 names, and
+overlapping outputs are rejected before staging. `0444` files and `0555`
+directories are supported. Accepted modes remain exact; input modes never change.
+
+The output contains `canonical/`, `agent-plugins-local/`,
+`evidence/parent-receipt.json`, `evidence/local-receipt.json`, `evidence/modes.tsv`,
+and `EXPORT.json`. The local tree changes only the compact catalog's fixed name
+and root receipt, using the installer's maintained transformation. Complete
+inventories include empty directories, root receipts, bytes, and modes.
+The ordinary canonical verifier checks both staged and published copies against
+the original pinned evidence. The retained evidence is checked separately for
+exact bytes and modes; the local receipt remains a derived receipt.
+
+The closed [export schema](provingkit-export.schema.json) defines the record.
+Correspondence additionally requires the whole supplied selection-buffer digest,
+unchanged consumed inputs, identical canonical inventory, the fixed local delta,
+raw receipt/mode relationships, and complete layout/readback. Inventory digests
+hash UTF-8 JSON with sorted object keys, compact separators, literal Unicode,
+finite values, and no trailing newline. The separately named artifact tree digest
+uses `provingkit-tree-v1` and excludes only the root receipt. Directory and root
+receipt modes are preserved observations, not independently pinned baseline modes.
+The declared archive pin is retained with `archive_bytes_measured: false`:
+this operation receives extracted trees.
+
+Read the single JSON result and its exit status:
+
+| Outcome | Meaning and next action |
+| --- | --- |
+| `confirmed` (exit 0) | No-replacement publication succeeded and complete final readback corresponds. Retain the output and separately returned manifest digest. |
+| `collision` | Preserve the existing destination and any reported owned stage. Choose another destination only after inspecting this result. |
+| `not-published` | Pre-publication failure or positively observed refusal. Inspect the reason and any retained owned stage. |
+| `published-unconfirmed` | A successful move was reported, but readback failed or differed. Preserve the destination for diagnosis. |
+| `publication-unknown` | Completion remains uncertain. Inspect the reported original owned paths and destination before deciding what to do. |
+
+All failures exit nonzero and retain owned preparation. There is no overwrite,
+merge, compatibility fallback, blind retry, or automatic cleanup. Publication
+provides no power-loss durability or adversarial-isolation assurance.
+
+For a consumer handoff, record the reviewed producer/procedure revision,
+selection and artifact pins, actual result, manifest digest, raw receipt
+identities, and complete inventories. The consumer loads this procedure and
+verifies the observed invocation and its retained output before claiming use.
+Installation-owner acceptance, current admission, adoption, and retirement
+require their separate records; no export field supplies those decisions.
 
 ## Artifact and installation observations
 
@@ -326,7 +411,7 @@ after accepting its Versionkeeping replacement in the affected clients.
 Run the public fixtures and isolated chezmoi deployment checks:
 
 ```sh
-python3 -m unittest tests.test_provingkit_installations tests.test_provingkit_deployment
+python3 -m unittest tests.test_provingkit_installations tests.test_provingkit_deployment tests.test_provingkit_export
 zsh tests/platform-portability.zsh
 ```
 
