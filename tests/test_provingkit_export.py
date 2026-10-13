@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -201,6 +202,7 @@ class ExportCommandTests(unittest.TestCase):
             cwd=self.home,
             text=True,
             capture_output=True,
+            timeout=5,
         )
         self.assertTrue(result.stdout, result.stderr)
         return result.returncode, json.loads(result.stdout)
@@ -493,6 +495,40 @@ class ExportCommandTests(unittest.TestCase):
         code, report = self.export()
         self.assertNotEqual(code, 0)
         self.assertIsNone(report["staging_directory"])
+
+    def test_retained_evidence_fifos_are_rejected_before_staging(self) -> None:
+        artifact = self.selected["profile"]["artifacts"]["agent-plugins"]
+        evidence = (
+            self.home
+            / ".local/share/provingkit/evidence/agent-plugins"
+            / artifact["artifact_sha256"]
+        )
+        for name in ("RECEIPT.json", "modes.tsv"):
+            with self.subTest(name=name):
+                path = evidence / name
+                original = path.read_bytes()
+                original_mode = path.stat().st_mode & 0o777
+                path.unlink()
+                os.mkfifo(path, 0o600)
+                before = path.lstat()
+                try:
+                    code, report = self.export()
+                    self.assertNotEqual(code, 0)
+                    self.assertEqual(report["outcome"], "not-published")
+                    self.assertIsNone(report["staging_directory"])
+                    self.assertIsNone(report["manifest_sha256"])
+                    self.assertFalse(self.output.exists())
+                    self.assertEqual(list(self.base.glob(".provingkit-export-*")), [])
+                    after = path.lstat()
+                    self.assertTrue(stat.S_ISFIFO(after.st_mode))
+                    self.assertEqual(
+                        (after.st_dev, after.st_ino, after.st_mode),
+                        (before.st_dev, before.st_ino, before.st_mode),
+                    )
+                finally:
+                    path.unlink()
+                    path.write_bytes(original)
+                    path.chmod(original_mode)
 
     def test_selection_duplicate_fields_are_rejected_before_staging(self) -> None:
         raw = self.selection.read_bytes()

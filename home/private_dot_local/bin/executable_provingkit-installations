@@ -1940,8 +1940,8 @@ def export_installation_view(
             "export requires a named canonical agent-plugins profile",
         )
         producer, producer_inputs = export_producer()
-        source = verify_artifact(home, profile, "agent-plugins")
         artifact = profile["artifacts"]["agent-plugins"]
+        source = artifact_root(home, "agent-plugins", artifact)
         evidence = (
             home
             / ".local/share/provingkit/evidence/agent-plugins"
@@ -1953,6 +1953,7 @@ def export_installation_view(
             name: export_file(evidence / name, name)
             for name in ("RECEIPT.json", "modes.tsv")
         }
+        verify_artifact_paths(source, evidence, profile, "agent-plugins")
 
         def check_inputs():
             require(
@@ -2085,13 +2086,22 @@ def export_installation_view(
 
         def check_output(root):
             export_readback(root, manifest_raw)
-            verify_artifact_paths(root / "canonical", evidence, profile, "agent-plugins")
-            require(export_inventory(root / "canonical") == before,
-                    "canonical export correspondence differs")
-            require(export_inventory(root / "agent-plugins-local") == expected_local,
-                    "local export correspondence differs")
-            require(export_manifest(root, producer, selection_raw, selection, before, after) == manifest,
-                    "export manifest correspondence differs")
+            verify_artifact_paths(
+                root / "canonical", evidence, profile, "agent-plugins"
+            )
+            require(
+                export_inventory(root / "canonical") == before,
+                "canonical export correspondence differs",
+            )
+            require(
+                export_inventory(root / "agent-plugins-local") == expected_local,
+                "local export correspondence differs",
+            )
+            require(
+                export_manifest(root, producer, selection_raw, selection, before, after)
+                == manifest,
+                "export manifest correspondence differs",
+            )
 
         check_output(stage)
         check_inputs()
