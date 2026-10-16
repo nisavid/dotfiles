@@ -540,10 +540,17 @@ output=$(job_bash "check_each zsh_syntax ${(qq)scratch}/misjudged-negation.zsh $
 # When mktemp -d fails, zsh_syntax must fail the file without running zcompile,
 # which would otherwise write its output to /check.zwc. A failing mktemp
 # function stands in for the failure: a missing TMPDIR fails GNU mktemp, but
-# macOS mktemp falls back and succeeds.
-output=$(job_bash 'mktemp() { return 1; }; check_each zsh_syntax tests/claude-skill-sync.zsh') &&
+# macOS mktemp falls back and succeeds. A zsh function stands in for zsh and
+# records any call in a marker file, which a redirection on the call cannot
+# hide.
+output=$(job_bash "
+  mktemp() { return 1; }
+  zsh() { : >${(qq)scratch}/zsh-called; printf '%s\n' zsh-called; return 1; }
+  check_each zsh_syntax tests/claude-skill-sync.zsh
+") &&
   fail 'zsh_syntax must fail when mktemp -d fails'
-[[ $output == *'tests/claude-skill-sync.zsh: syntax check failed'* && $output != *check.zwc* ]] ||
+[[ $output == *'tests/claude-skill-sync.zsh: syntax check failed'* && $output != *check.zwc* &&
+  $output != *zsh-called* && ! -e $scratch/zsh-called ]] ||
   fail "zsh_syntax must stop when mktemp -d fails:"$'\n'"$output"
 # List each check_each call as its check, file count, first file and last file.
 syntax_lists=$(job_bash '
