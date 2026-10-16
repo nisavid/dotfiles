@@ -531,7 +531,7 @@ codex_question_wait='When asking Ivan a question, wait for his response by defau
 
 # One entry per paragraph of the partial.
 question_required=(
-  'Without the tool, as in a subagent or a headless run, hand the question back to your caller instead.'
+  'Write each option label as Ivan'"'"'s own answer, so a first-person label means Ivan acts ("I'"'"'ll merge it" means Ivan merges). Everywhere else in the question, write no "I", even for your own judgment, and name who acts: the agent by its name, Ivan as "you" ("The agent merges it", "You click Merge"). Without the tool, as in a subagent or a headless run, hand the question back to your caller instead.'
   'A mention in prose is not telling Ivan. Assume every response is lost in a near-constant stream of handoffs and dispatches unless the tool prompts him.'
   'Before ending any turn in a long-running role (foreman, orchestrator, coordinator), check your text for a question aimed at Ivan, a list of options, "your call", "let me know", "tell Ivan", or an item blocked on him. If you find one, call the tool before the turn ends.'
   "Obviously safe corrections within your own remit are the exception: make them; don't ask."
