@@ -537,6 +537,12 @@ print -r -- '! true' >"$scratch/misjudged-negation.zsh"
 print -r -- 'lines=("${(@f)$(<"$missing_dir/missing")}")' >"$scratch/misjudged-read.zsh"
 output=$(job_bash "check_each zsh_syntax ${(qq)scratch}/misjudged-negation.zsh ${(qq)scratch}/misjudged-read.zsh") ||
   fail "zsh_syntax must pass valid files that zsh -n misjudges:"$'\n'"$output"
+# When mktemp -d fails, zsh_syntax must fail the file without running zcompile,
+# which would otherwise write its output to /check.zwc.
+output=$(job_bash "TMPDIR=${(qq)scratch}/no-such-dir check_each zsh_syntax tests/claude-skill-sync.zsh") &&
+  fail 'zsh_syntax must fail when mktemp -d fails'
+[[ $output == *'tests/claude-skill-sync.zsh: syntax check failed'* && $output != *check.zwc* ]] ||
+  fail "zsh_syntax must stop when mktemp -d fails:"$'\n'"$output"
 # List each check_each call as its check, file count, first file and last file.
 syntax_lists=$(job_bash '
   check_each() {

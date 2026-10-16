@@ -62,7 +62,7 @@ bash_syntax() {
 # missing. zcompile only parses the file, so its status is the parse result.
 zsh_syntax() {
   local zwc_dir check_status=0
-  zwc_dir="$(mktemp -d)"
+  zwc_dir="$(mktemp -d)" || return
   zsh -f -c 'zcompile -U -- "$1" "$2"' zsh "$zwc_dir/check.zwc" "$1" ||
     check_status=$?
   rm -rf -- "$zwc_dir"
