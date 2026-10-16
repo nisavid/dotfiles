@@ -21,6 +21,7 @@ cold_archive_envelope_name=.private-cold-archive.md.age
 cold_archive_envelope="$source_root/$cold_archive_envelope_name"
 claude_cold_archive_rule_template="$source_root/dot_claude/rules/private_cold-archive.md.tmpl"
 cold_archive_include='{{ include ".private-cold-archive.md.age" | decrypt | trim }}'
+claude_question_rule_source="$source_root/dot_claude/rules/decisions-via-question-tool.md"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
 git_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-git-policy.XXXXXX")
@@ -128,6 +129,11 @@ grep -Fq "home/$cold_archive_envelope_name" "$encryption_doc" ||
 grep -Fq 'mode-`0600` `~/.claude/rules/cold-archive.md` target' "$encryption_doc" ||
   fail "encryption policy does not authorize the cold-archive rule target and mode"
 
+[[ -f "$claude_question_rule_source" ]] || fail "Claude question-tool rule is missing"
+[[ $(mode_of "$claude_question_rule_source") == 644 ]] || fail "Claude question-tool rule source mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_question_rule_source") == "$HOME/.claude/rules/decisions-via-question-tool.md" ]] ||
+  fail "Claude question-tool rule targets the wrong file"
+
 if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   render_fixture=$(mktemp -d "${TMPDIR:-/tmp}/global-agents-source.XXXXXX")
   chmod 700 "$render_fixture"
@@ -157,6 +163,7 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   render_claude_cold_archive_rule_template="$render_fixture/dot_claude/rules/${claude_cold_archive_rule_template:t}"
   grep -Fv -- "$cold_archive_envelope_name" "$claude_cold_archive_rule_template" > "$render_claude_cold_archive_rule_template"
   chmod 644 "$render_claude_cold_archive_rule_template"
+  cp -p -- "$claude_question_rule_source" "$render_fixture/dot_claude/rules/${claude_question_rule_source:t}"
   render_source_root=$render_fixture
 fi
 
@@ -475,6 +482,25 @@ else
   [[ $(<"$claude_cold_archive_rule") == "# Cold Archive"$'\n\n'"$cold_archive" ]] ||
     fail "Claude cold-archive rule and Codex Cold Archive section differ"
 fi
+
+chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/decisions-via-question-tool.md" > "$claude_state"
+[[ $(jq -r '.[".claude/rules/decisions-via-question-tool.md"].perm' "$claude_state") == 420 ]] ||
+  fail "Claude question-tool rule target mode is not 0644"
+# The rule names Claude Code's question tool, so no shared partial carries it;
+# pin its exact text here instead, one entry per paragraph.
+question_required=(
+  '# Decisions Via The Question Tool'
+  "Whenever you need Ivan's attention, call the \`AskUserQuestion\` tool in the same turn, after your prose status: for a decision or approval, a list of options, \"which do you want?\", a clarification, a blocker that needs him, \"tell Ivan\", or an action only he can take. Put the recommended option first and the facts in the option descriptions. Without the tool, as in a subagent or a headless run, hand the question back to your caller instead."
+  'A mention in prose is not telling Ivan. Assume every response is lost in a near-constant stream of handoffs and dispatches unless the tool prompts him.'
+  'Before ending any turn in a long-running role (foreman, orchestrator, coordinator), check your text for a question aimed at Ivan, a list of options, "your call", "let me know", "tell Ivan", or an item blocked on him. If you find one, call the tool before the turn ends.'
+  "Obviously safe corrections within your own remit are the exception: make them; don't ask."
+  'Ivan corrected this on 2026-09-29, 2026-10-02 (twice), and 2026-10-16; the memory alone did not prevent recurrence.'
+)
+for ((i = 1; i <= ${#question_required}; i++)); do
+  grep -Fq -- "$question_required[$i]" "$claude_question_rule_source" || fail "Claude question-tool rule is missing required paragraph $i"
+done
+[[ $(<"$claude_question_rule_source") == "${(pj:\n\n:)question_required}" ]] ||
+  fail "Claude question-tool rule is not exactly its settled paragraphs in order"
 
 repo_agents_forbidden=(
   'ivan@nisavid.io'
