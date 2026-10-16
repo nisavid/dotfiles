@@ -538,8 +538,10 @@ print -r -- 'lines=("${(@f)$(<"$missing_dir/missing")}")' >"$scratch/misjudged-r
 output=$(job_bash "check_each zsh_syntax ${(qq)scratch}/misjudged-negation.zsh ${(qq)scratch}/misjudged-read.zsh") ||
   fail "zsh_syntax must pass valid files that zsh -n misjudges:"$'\n'"$output"
 # When mktemp -d fails, zsh_syntax must fail the file without running zcompile,
-# which would otherwise write its output to /check.zwc.
-output=$(job_bash "TMPDIR=${(qq)scratch}/no-such-dir check_each zsh_syntax tests/claude-skill-sync.zsh") &&
+# which would otherwise write its output to /check.zwc. A failing mktemp
+# function stands in for the failure: a missing TMPDIR fails GNU mktemp, but
+# macOS mktemp falls back and succeeds.
+output=$(job_bash 'mktemp() { return 1; }; check_each zsh_syntax tests/claude-skill-sync.zsh') &&
   fail 'zsh_syntax must fail when mktemp -d fails'
 [[ $output == *'tests/claude-skill-sync.zsh: syntax check failed'* && $output != *check.zwc* ]] ||
   fail "zsh_syntax must stop when mktemp -d fails:"$'\n'"$output"
