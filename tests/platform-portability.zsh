@@ -182,9 +182,16 @@ grep -Fq -- \
   fail 'platform test groups do not anchor adapter schema references to the local file'
 
 age_boundary_workflow=$repo_root/.github/workflows/privacy-age-integrity.yml
+# The privacy scan also reads ignored files, and bytecode embeds this checkout's
+# absolute path, so the imports below must not cache bytecode in the tree.
+# Isolated mode ignores PYTHONDONTWRITEBYTECODE; -B still applies.
+bytecode_caches() {
+  print -rl -- "$repo_root"/**/__pycache__(N/)
+}
+bytecode_caches_before=$(bytecode_caches)
 admission_activation_marker=$(
   cd "$repo_root"
-  python3 -I -c 'import sys
+  python3 -I -B -c 'import sys
 sys.path.insert(0, ".")
 from scripts.privacy_age_integrity_gate import ADMISSION_ACTIVATION_MARKER
 sys.stdout.buffer.write(ADMISSION_ACTIVATION_MARKER.rstrip(b"\r\n"))'
@@ -256,7 +263,7 @@ done
   fail 'age admission allowed-signers configuration is missing'
 admission_signer_pattern=$(
   cd "$repo_root"
-  python3 -I -c 'import re, sys
+  python3 -I -B -c 'import re, sys
 sys.path.insert(0, ".")
 from scripts.privacy_age_admission import ADMISSION_NAMESPACE, ADMISSION_PRINCIPAL
 print(
@@ -267,6 +274,8 @@ print(
     + "\" ssh-[a-z0-9-]+ [A-Za-z0-9+/=]+( .*)?$"
 )'
 ) || fail 'cannot derive the age admission signer pattern'
+[[ $(bytecode_caches) == "$bytecode_caches_before" ]] ||
+  fail 'age admission derivations cached bytecode in the checkout'
 grep -Eq -- "$admission_signer_pattern" \
   "$repo_root/.github/age-admission/allowed_signers" ||
   fail 'age admission allowed-signers configuration lacks the owner principal'
