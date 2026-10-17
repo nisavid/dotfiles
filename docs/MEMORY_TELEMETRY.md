@@ -7,7 +7,9 @@ section 4(b), and keeps its own durable record. It exists because systemd-oomd
 has killed whole app scopes without warning
 ([incident record](https://github.com/nisavid/dotfiles/issues/404#issuecomment-6064101757)),
 and nobody could see beforehand which process trees were growing. It
-implements [#420](https://github.com/nisavid/dotfiles/issues/420).
+implements [#420](https://github.com/nisavid/dotfiles/issues/420), with the
+observe-only measurement extension for
+[#405](https://github.com/nisavid/dotfiles/issues/405).
 [#403](https://github.com/nisavid/dotfiles/issues/403) reads its shared
 counters instead of running a collector of its own.
 
@@ -19,23 +21,28 @@ start the unit; see [Operating it](#operating-it).
 
 It reads:
 
-- `/proc/meminfo`, `/proc/vmstat` and `/proc/pressure/{memory,io}`;
+- `/proc/meminfo`, `/proc/vmstat`, `/proc/pressure/{memory,io,cpu}`,
+  `/proc/stat`, `/proc/swaps`, `/proc/diskstats`, `/proc/zoneinfo`,
+  `/proc/buddyinfo`, and the dentry/inode state counters;
 - cgroup files under `/sys/fs/cgroup`: the user slice, the user manager's
   `app.slice` and `builds.slice`, the watched cgroups, and
-  `memory.swap.current` of every leaf cgroup under oomd's monitored roots;
+  memory and swap use of every leaf cgroup under its configured oomd roots,
+  with detailed accounting for the largest holders and inference services;
 - `/proc/<pid>/status` and the `/proc/<pid>/exe` link of each process in a
   watched cgroup;
 - `/sys/class/drm/card*/device/mem_info_*`;
-- oomd's configuration, for `SwapUsedLimit`; and
+- VM, zswap, MGLRU, and THP settings, kernel and boot identity, oomd's
+  configuration for `SwapUsedLimit`, and read-only `oomctl` snapshots; and
 - the journal, through `journalctl` children: after a restart, one that reads
   everything after its saved position, then one that follows.
 
 It writes only `~/.local/state/memory-telemetry`, created mode 0700 with files
 mode 0600.
 
-It never kills or signals a process other than its own `journalctl` children,
-which it stops on exit. It changes no cgroup, unit, oomd, sysctl or swap
-setting, unloads no model, and generates no load. It raises no alarms and sends
+It stops its own `journalctl` children on exit and bounds each read-only
+`oomctl` child with a three-second timeout. It never kills or signals another
+process. It changes no cgroup, unit, oomd, sysctl or swap setting, unloads
+no model, and starts no workload. It raises no alarms and sends
 no notifications: the threshold numbers (#404 choice 7) and the warning
 modality (#404 choice 8) are still open.
 
@@ -50,8 +57,9 @@ task names.
 
 | Sample | Every | Contents |
 |---|---|---|
-| fast | 10 s | T1, T2, T3 and T8, the shared counters, and T4 |
-| slow | 60 s (every 6th fast sample) | Per-cgroup T3–T6, the oomd swap-holder ranking (T4), and T9 attribution |
+| fast | 10 s | T1, T2, T3, T4, and T8; capacity, CPU time, swap areas, and storage counters |
+| slow | 60 s (every 6th fast sample) | Per-cgroup T3–T6, holder rankings, T9 attribution, and reserve/metadata-cache counts |
+| metadata | start, first tick of each new UTC day, and orderly end | Recorder, kernel, policy settings, and effective oomd snapshot |
 | kill record | on each oomd or kernel OOM kill | T7 events with the preceding 15 minutes of samples |
 
 oomd checks swap every 150 ms and acts with no duration, so #404 ruled out
@@ -66,7 +74,8 @@ ran in `collector.lag_ms`.
 before a kill), `--grace` (seconds during which later kill messages join the
 same record, and of samples kept after it), `--retention-days`,
 `--max-sample-bytes`, `--max-incidents`, `--watch` and `--oomd-root`. The unit
-uses the defaults.
+uses the defaults. `run` and `sample` also accept `--oomctl` to select the
+read-only snapshot command.
 
 ## The record
 
@@ -80,25 +89,30 @@ uses the defaults.
 ```
 
 Retention keeps samples for 30 days and at most 512 MiB in total, deleting the
-oldest hour first; the open hour is never deleted. At the measured volume (see
-[Measured cost](#measured-cost)), the 30-day bound is the one that applies to
-samples. `incidents/` keeps the newest 200 kill records, a record that is still
-open included (see [Kill records](#kill-records)); at an estimated
-0.7–0.8 MB each, that is up to about 150 MB more. One record's size and write
-cost stay bounded whatever the journal delivers: it keeps at most 500 journal
+oldest hour first; the open hour is never deleted. The original recorder's
+measured volume fit within the size bound for 30 days
+(see [Measured cost](#measured-cost)); the extension's projected volume can
+reach the size bound sooner. `incidents/` keeps the newest 200 kill records, a record
+that is still open included (see [Kill records](#kill-records)); the original
+recorder's 0.7–0.8 MB estimate per record gave about 150 MB more. Larger
+extension samples also enlarge incident windows, so that estimate is a
+baseline only. One record's size and write cost stay bounded whatever the
+journal delivers: it keeps at most 500 journal
 events (see [Kill records](#kill-records)), and it is written only a few times
 (see [Measured cost](#measured-cost)).
 
-Each line in a segment and each `latest.json` has:
+Segments contain fast, slow, and metadata records; `latest.json` remains the
+newest fast sample. All three record kinds have:
 
 | Field | Meaning |
 |---|---|
 | `schema` | `memory-telemetry/v1` |
-| `kind` | `fast` or `slow` |
+| `schema_revision` | `2` for the additive #405 extension. Existing T1–T9 fields retain their meanings; original records may omit this field. Consumers must select the record kinds and fields they understand. |
+| `kind` | `fast`, `slow`, or `metadata` |
 | `t` | Unix time in seconds, wall clock, taken as the sample starts reading its sources |
-| `boot` | The boot ID. Counters are comparable only within one boot. |
+| `boot` | The boot ID, or `null` when unreadable. Counters are comparable only within one known boot. |
 | `unavailable` | Present when a required source could not be read: source name to error class, such as `"proc:pressure/io": "FileNotFoundError"`. [When a source cannot be read](#when-a-source-cannot-be-read) lists the required sources and what the affected fields look like. Whether `journalctl` runs is reported in `collector.journal` instead. |
-| `interval_s` | Fast samples only: seconds since the previous fast sample, at least half the configured interval. The sample that ran late after a stall has a long one, and its rates are averages over it. Absent from the first sample after a start or a boot change. |
+| `interval_s` | Fast samples only: seconds since the previous fast sample, at least half the configured interval. The sample that ran late after a stall has a long one, and its rates are averages over it. Absent from the first sample after a start or a boot change, and whenever the boot ID is unknown. |
 
 Sizes ending in `_kib` are KiB as `/proc/meminfo` reports them; sizes ending in
 `_bytes` are bytes as cgroup files and amdgpu report them.
@@ -110,11 +124,12 @@ Sizes ending in `_kib` are KiB as `/proc/meminfo` reports them; sizes ending in
 | `t1.mem_total_kib`, `t1.mem_available_kib` | T1 | `/proc/meminfo` |
 | `t1.oomd_line_kib` | T1 | `(1 − SwapUsedLimit) × MemTotal`, below which oomd's memory condition holds |
 | `t1.headroom_kib` | T1 | `MemAvailable − oomd_line_kib` |
+| `t2.cpu` | — | System CPU PSI `some` only, with the same averages and total as memory/I/O PSI; system CPU `full` is omitted |
 | `t2.memory`, `t2.io` | T2 | `/proc/pressure/*`: `some` and `full`, each with `avg10`, `avg60`, `avg300` and `total_us` |
 | `t2.cgroups.<name>` | T2 | `memory.pressure` of the user slice, `app.slice`, `builds.slice` and each watched cgroup |
-| `t2.*.stall_fraction` | T2 | Share of the last interval stalled, from the `total_us` delta; absent from the first sample after a start or a boot change |
-| `t3.counters` | T3 | `/proc/vmstat`: `pswpin`, `pswpout`, `zswpin`, `zswpout`, `zswpwb`, `workingset_refault_anon`, `pgmajfault`, `oom_kill`, and `allocstall` summed over zones |
-| `t3.per_s` | T3 | Per-second rates over the last interval. Absent from the first sample after a start or a boot change; a counter that went down has no rate. |
+| `t2.*.stall_fraction` | T2 | Share of the last interval stalled, from the `total_us` delta; absent from the first sample after a start or a boot change, or when the boot ID is unknown |
+| `t3.counters` | T3 | `/proc/vmstat`: swap, reclaim, compaction, and THP counters listed below, individual `allocstall_*` counters, and `allocstall` summed over zones |
+| `t3.per_s` | T3 | Per-second rates over the last interval. Absent from the first sample after a start or a boot change, or when the boot ID is unknown; a counter that went down has no rate. |
 | `t4.swap_*_kib`, `t4.swap_used_fraction` | T4 | Swap slot occupancy |
 | `t4.zswap_pool_kib`, `t4.zswapped_kib` | T4 | The compressed pool and the memory it holds |
 | `t4.disk_resident_upper_kib` | T4 | `swap used − Zswapped`, an upper bound on what is on disk |
@@ -122,21 +137,99 @@ Sizes ending in `_kib` are KiB as `/proc/meminfo` reports them; sizes ending in
 | `t8.gtt_used_bytes`, `t8.devices` | T8 | amdgpu `mem_info_{gtt,vram}_{used,total}` |
 | `t8.gpu_active_kib`, `t8.gpu_reclaim_kib` | T8 | `GPUActive`, `GPUReclaim` in `/proc/meminfo` |
 | `oomd.swap_used_limit`, `oomd.source` | — | oomd's `SwapUsedLimit` and the file that set it, read like systemd reads `oomd.conf` and its drop-ins; `default`, or `default (configuration unreadable)` when a file could not be read |
-| `collector` | — | The collector's own cost, cumulative since it started: `cpu_s`, `rss_anon_kib`, `rss_file_kib`, `hwm_kib`, `bytes_written` (samples, `latest.json`, kill records and the journal cursor), `lag_ms` (how late this tick ran), `journal`, `journal_ignored`, and while `journalctl` runs, its `journal_cpu_s`, `journal_rss_anon_kib` and `journal_rss_file_kib`. `journal` is always present: `starting` in a run's first sample, which is taken before `journalctl` starts; `catching up` while it reads the entries after its saved position; `following`; `exited: <status>`; or `unavailable: <error>`, which is also what a `--journalctl` command that cannot be run reports. `journal_ignored` counts the kill messages dropped since the start because they came from a sender other than the managers or repeated their `MESSAGE_ID` (see [Kill records](#kill-records)) |
+| `capacity_kib` | — | `/proc/meminfo` fields `MemFree`, `Cached`, `SwapCached`, `SReclaimable`, `SUnreclaim`, `Unevictable`, `Mlocked`, `Committed_AS`, `CommitLimit`, and `AnonHugePages`; original kernel field names are retained |
+| `swap_areas` | — | `/proc/swaps`: each area's `path`, `type`, `size_kib`, `used_kib`, and `priority` |
+| `cpu.time_ticks`, `cpu.per_s` | — | Aggregate `/proc/stat` CPU times: `user`, `nice`, `system`, `idle`, `iowait`, `irq`, `softirq`, `steal`, `guest`, and `guest_nice`; rates are ticks per second, not percentages. Metadata supplies `clock_ticks_per_s`. |
+| `diskstats.<name>` | — | Whole NVMe devices (`nvme…n…`), device-mapper (`dm-*`), and RAID (`md*`) layers from `/proc/diskstats`, each kept separately; no partition rows. Each has `device` (major:minor), `diskseq`, `counters`, and the current `in_flight` gauge. |
+| `collector` | — | The collector's own cost, cumulative since it started: `cpu_s`, `oomctl_cpu_s` (cumulative child CPU for metadata snapshots), `rss_anon_kib`, `rss_file_kib`, `hwm_kib`, `bytes_written` (samples, `latest.json`, kill records and the journal cursor), `lag_ms` (how late this tick ran), `journal`, `journal_ignored`, and while `journalctl` runs, its `journal_cpu_s`, `journal_rss_anon_kib` and `journal_rss_file_kib`. `journal` is always present: `starting` in a run's first sample, which is taken before `journalctl` starts; `catching up` while it reads the entries after its saved position; `following`; `exited: <status>`; or `unavailable: <error>`, which is also what a `--journalctl` command that cannot be run reports. `journal_ignored` counts the kill messages dropped since the start because they came from a sender other than the managers or repeated their `MESSAGE_ID` (see [Kill records](#kill-records)) |
+
+The complete `t3.counters` allowlist is:
+
+- Swap and faults: `pswpin`, `pswpout`, `zswpin`, `zswpout`, `zswpwb`,
+  `pgmajfault`, `oom_kill`, `swap_ra`, `swap_ra_hit`, `swpin_zero`, and
+  `swpout_zero`.
+- Reclaim: `workingset_refault_anon`, `workingset_refault_file`,
+  `workingset_activate_anon`, `workingset_activate_file`,
+  `workingset_restore_anon`, `workingset_restore_file`, `pgscan_anon`,
+  `pgscan_file`, `pgsteal_anon`, `pgsteal_file`, `pgscan_kswapd`,
+  `pgscan_direct`, `pgsteal_kswapd`, `pgsteal_direct`,
+  `kswapd_low_wmark_hit_quickly`, `kswapd_high_wmark_hit_quickly`, and every
+  available `allocstall_*`, plus their `allocstall` sum.
+- Compaction: `compact_stall`, `compact_fail`, `compact_success`,
+  `compact_migrate_scanned`, and `compact_free_scanned`.
+- THP: `thp_fault_alloc`, `thp_fault_fallback`, `thp_fault_fallback_charge`,
+  `thp_collapse_alloc`, `thp_collapse_alloc_failed`, `thp_split_page`,
+  `thp_split_page_failed`, `thp_deferred_split_page`, `thp_split_pmd`,
+  `thp_swpout`, and `thp_swpout_fallback`.
+
+Each disk's `counters` contains `reads`, `writes`, `read_sectors`,
+`write_sectors`, `read_ms`, `write_ms`, `io_ms`, and `weighted_io_ms`.
+`per_s` uses the same keys and actual elapsed seconds. It is emitted only when
+both observations have the same major:minor and the same non-null `diskseq`,
+within one known boot. A missing disk sequence number leaves raw counters
+usable but suppresses rates. Device replacement, a missing preceding device,
+and a counter decrease suppress the affected rates; `in_flight` is a gauge
+and never gets a rate. Host VM and CPU rates and PSI stall fractions likewise
+require consecutive observations within one known boot; a missing or decreased
+counter gets no derived value. A long interval after a stall still produces
+an average over that interval.
 
 ### Slow samples
 
 | Field | Signal | Contents |
 |---|---|---|
 | `swap_holders` | T4 | Leaf cgroups under oomd's roots (`system.slice` and the user slice by default) ranked by `memory.swap.current`, the top 10 with their swap share, `zswapped` and memory, how many exceed oomd's 5% candidacy floor, and `swap_mode_choice`: the cgroup oomd's swap mode would pick now, ignoring preferences |
-| `cgroups.<name>` | T3–T6 | For the user slice, `app.slice`, `builds.slice` and each watched cgroup: `memory.current`, `memory.peak`, `memory.swap.current`, `memory.swap.peak`, a `memory.stat` subset, `memory.events.local` (`memory_events_local`) and the hierarchical `memory.events` (`memory_events`, which includes descendants, removed ones too), `memory.swap.events`, threads (`pids.current`, `pids.peak`, `pids.max`, `pids.events max`), `populated`, and for watched cgroups the process count |
+| `cgroups.<name>` | T3–T6 | For each selected cgroup: `memory.current`, `memory.peak`, `memory.swap.current`, `memory.swap.peak`, `memory.zswap.current`, complete numeric `memory.stat` (`stat`), `memory.events.local` (`memory_events_local`) and the hierarchical `memory.events` (`memory_events`, which includes descendants, removed ones too), `memory.swap.events`, threads (`pids.current`, `pids.peak`, `pids.max`, `pids.events max`), `populated`, and for watched cgroups the process count |
 | `t9.<name>` | T9 | For each watched cgroup: process count, the app's executable, totals, and the top 20 `classes` and `trees`, each with `processes`, `rss_anon_kib`, `swap_kib`, `rss_file_kib` and `rss_shmem_kib`, ranked by anonymous plus swapped memory. Smaller groups fold into one `(rest)` entry. |
-| `removed.<name>` | T6 | The last counters seen for a watched cgroup whose directory is gone. A swap candidate that only fell below oomd's floor stops being sampled without appearing here. |
+| `removed.<name>` | T6 | The last counters seen for a sampled cgroup whose directory is gone. A group no longer selected but still present does not appear here. |
+| `reserves` | — | `/proc/zoneinfo` as `zones.<node>:<zone>` with `free`, `min`, `low`, `high`, `boost`, and `managed` in pages; `/proc/buddyinfo` as `buddy.<node>:<zone>` arrays from allocation order 0 upward; `dentry_state` and `inode_state` arrays in their kernel field order |
 | `collector_cgroup` | — | The memory charged to the collector's cgroup (`cgroup`, `cgroup_memory_bytes`, `cgroup_memory_peak_bytes`), which includes `journalctl` and page cache from its writes; `null` when unreadable |
 
 Watched cgroups are the user manager's `app.slice` children matching
 `app-com.anthropic.Claude*`, `app-chatgpt@*` or `app-org.chromium.Chromium-*`,
 plus any oomd swap candidate in this user's slice.
+
+Detailed cgroup selection is the union of:
+
+- the user slice, `app.slice`, `builds.slice`, and existing watched cgroups;
+- the five largest memory holders and five largest swap holders from the
+  existing walk under the configured oomd roots (`system.slice` and this
+  user's slice by default);
+- visited cgroups matching `lemon*.service`, `ollama*.service`,
+  `open-webui*.service`, or `inference*.service`;
+- `jobs.slice` at the cgroup root and under this user's manager, when present.
+
+The walk treats a directory without child cgroups, or one with
+`memory.oom.group=1`, as a leaf and stops descending there. Holder rankings
+therefore use these oomd-style units, rather than arbitrary parent totals.
+Inference matches can include a parent visited before its children. A group
+hidden beneath a stop point is outside this walk's coverage. `top_by_swap`
+keeps its existing top ten; `swap_holders.top_by_memory` lists the top five.
+Additional groups use their cgroup-relative paths as keys. The existing T9
+watch selection and process scan are unchanged: extra holders, inference
+services, and jobs slices receive file-based accounting only.
+
+Each detailed `cgroups.<name>` block also has:
+
+| Field | Contents |
+|---|---|
+| `path`, `identity` | Cgroup-relative path and `[st_dev, st_ino]` from its directory. Identity is checked again after reading; a changed identity drops that block. |
+| `limits` | This group's `memory.high`, `memory.max`, `memory.swap.high`, `memory.swap.max`, and `memory.zswap.max`, as bytes, `"max"`, or `null` |
+| `effective_limits`, `limits_unavailable` | The minimum finite configured bound along the group and its ancestors, excluding the cgroup root. These bounds are shared with siblings, not remaining headroom. An unreadable value anywhere in the chain makes that effective bound `null`; the corresponding cgroup-relative file paths appear in `limits_unavailable`. All-readable unlimited values yield `"max"`. |
+| `pressure` | `memory`, `io`, and `cpu` PSI averages and totals, read from this cgroup's pressure files |
+| `cpu_stat` | Available `usage_usec`, `user_usec`, `system_usec`, `nr_throttled`, and `throttled_usec` counters |
+| `io_stat` | Per-major:minor `rbytes`, `wbytes`, `rios`, and `wios` counters |
+
+These cgroup statistics are raw observations; the recorder derives no slow
+cgroup rates. Before calculating deltas, require the same known boot, path,
+and directory identity, a continuous observation interval, and nondecreasing
+counters. The identity pair is evidence of continuity, not a permanent ID;
+inode reuse and manual resets still need consideration. Full `memory.stat`
+contains gauges as well as counters, including kernel fields the recorder does
+not interpret. Apply the meaning and units of each field before comparing it.
+Fast `t2.cgroups` stall fractions match cgroups by name without checking
+directory identity; use continuity evidence before relying on them across a
+cgroup lifecycle transition.
 
 T9 groups processes two ways. A **class** is an executable basename plus a
 role:
@@ -168,12 +261,15 @@ read:
   `/proc/pressure/io`, the `memory.pressure` of the user slice and of
   `app.slice`, the `/sys/class/drm` directory, and any oomd configuration file
   or directory that exists but cannot be read or looked up (`config:` keys);
-- in slow samples: `/proc/meminfo` and the directory of each oomd root.
+- in slow samples: `/proc/meminfo` and the directory of each oomd root;
+- in metadata: the kernel release and each requested VM, zswap, MGLRU, and THP
+  setting, plus unreadable oomd configuration. Optional kernel settings absent
+  on that kernel are therefore explicit gaps too.
 
 Every other source is read without being listed: the `memory.pressure` of
 `builds.slice` and of the watched cgroups, each device's `mem_info_*` files,
 the cgroup files behind `cgroups.<name>` and `swap_holders`, the `/proc/<pid>`
-files behind T9, and the boot ID. A field fed only by such a source is `null` or
+files behind T9, the new fast and reserve sources, and the boot ID. A field fed only by such a source is `null` or
 missing, with no `unavailable` entry.
 
 The shared counters then look like this:
@@ -186,6 +282,50 @@ The shared counters then look like this:
 | `/proc/vmstat` | `t3.counters` is `{}`, and so is `t3.per_s` when present |
 | `/sys/class/drm` | `t8.devices` is `[]` and `t8.gtt_used_bytes` is `null` |
 | A device's `mem_info_<key>` | That device has no `<key>_bytes`; `t8.gtt_used_bytes` is `null` when no device has `gtt_used_bytes` |
+
+For added observations, unreadable `/proc/swaps` or `/proc/diskstats` gives
+`null`; readable sources with no accepted rows give `[]` or `{}`. Missing
+capacity or VM counter keys are omitted, and missing `/proc/stat` gives an
+empty `cpu.time_ticks`. System CPU PSI is `null` when unavailable. Reserve
+sources use `null` for unreadable zone/buddy files and unreadable or malformed
+dentry/inode arrays. A readable but unparsed zone/buddy file gives `{}`.
+Cgroup numeric files and pressure resources use `null`, keyed statistics use
+`{}` or omit unavailable keys, and a cgroup with unreadable `memory.current`
+or identity is omitted entirely. None of these values means zero activity.
+
+### Metadata snapshots
+
+`kind=metadata` records share the hourly segments and retention with samples;
+they do not replace `latest.json` or enter the fast/slow incident windows.
+`reason` is `start` on the first tick, `daily` on the first tick whose UTC date
+differs from the preceding tick, or `end` on orderly collector close. Missed
+days are not backfilled, and an abrupt kill can leave no end snapshot.
+`sample` prints one additional metadata object with `reason=sample`.
+
+| Field | Contents |
+|---|---|
+| `recorder_sha256` | SHA-256 of the recorder source read at collector start, or `null` if unreadable |
+| `kernel`, `boot`, `page_size_bytes`, `clock_ticks_per_s` | Kernel release, boot ID, and units for page and CPU accounting |
+| `vm` | `swappiness`, `page-cluster`, `vfs_cache_pressure`, `min_free_kbytes`, `watermark_scale_factor`, `watermark_boost_factor`, `overcommit_memory`, `overcommit_ratio`, and `overcommit_kbytes` |
+| `zswap` | `enabled`, `compressor`, `zpool`, `max_pool_percent`, `accept_threshold_percent`, and `shrinker_enabled` |
+| `mglru` | `enabled` and `min_ttl_ms` |
+| `thp` | `enabled`, `defrag`, `shmem_enabled`, `use_zero_page`, `khugepaged/defrag`, `khugepaged/pages_to_scan`, `khugepaged/scan_sleep_millisecs`, and `khugepaged/alloc_sleep_millisecs`; `sizes` adds `enabled` and `shmem_enabled` for each discovered `hugepages-<size>kB` directory |
+| `oomd` | File-derived `swap_used_limit` and `source`, plus `effective` from `oomctl --no-pager dump` |
+
+Settings retain their text, including bracketed selected values, or `null`
+with an `unavailable` entry. Effective oomd output retains only global dry-run,
+swap, and default memory-pressure limits/duration in `global`, monitored
+swap paths in `swap_monitored`, and paths with their pressure limits/duration
+in `pressure_monitored`. Unrecognized output is
+not stored. `oomd.effective.unavailable` reports command failure, timeout, or an
+unrecognized format, independently of the source-file `unavailable` map.
+Each attempt records `cpu_s` and `duration_ms`; fast samples' cumulative
+`collector.oomctl_cpu_s` accounts for completed snapshots.
+
+Each snapshot uses a short-lived, unprivileged read-only subprocess. It adds
+no daemon, second collector, or process scan. Daily settings snapshots cannot
+locate a mid-day rollout precisely; keep the manual workload and configuration
+timeline described in the [seven-day procedure](#seven-day-ordinary-operation-measurement).
 
 ### Kill records
 
@@ -260,9 +400,10 @@ damaged compressed segment contributes the samples before the damage. The #366
 `builds.slice` cap kills open records too.
 
 The collector reads a stored record only to join, resume or finalize it, and
-never reads one larger than 8 MiB, more than ten times a genuine record, so
-that parsing one stays well inside the unit's `MemoryMax=128M` (a parsed record
-takes about 4.7 times its file size at the peak). A larger record is left as it
+never reads one larger than 8 MiB. This bounds parsing cost; the original
+recorder's measurement found about 4.7 times the file size at the peak.
+This bound alone does not qualify the whole
+service under `MemoryMax=128M`; see [Measured cost](#measured-cost). A larger record is left as it
 is, never joined, resumed or finalized, until the 200-record cap deletes it; an
 entry that would have joined it is handled as if it were absent, except that
 its own first entry, read again, opens nothing in its place.
@@ -284,10 +425,12 @@ it, and their entries no longer hold the saved journal position back.
    see [When a source cannot be read](#when-a-source-cannot-be-read)), T3 from
    `t3.per_s`, the swap gate from `t4.oomd_swap_gate_armed`, and T8 from `t8`.
    `t3.per_s` and `stall_fraction` are absent from the first sample after a
-   start or a boot change; use the next sample.
+   start or a boot change, and while the boot ID is unknown. Wait for
+   consecutive samples with a known boot ID.
 3. For a window longer than one interval, read the `fast` lines of the sample
-   segments and difference the counters between two samples with the same
-   `boot`. PSI `total_us` gives exact stall time over any window.
+   segments and difference counters with a known, unchanged `boot`. Apply
+   the source-specific continuity and reset checks above. PSI `total_us`
+   gives stall time over the accepted window.
 
 Do not run a second collector.
 
@@ -317,7 +460,8 @@ includes page cache and the charged zswap pool), `oomctl`'s per-cgroup swap
 
 ## Measured cost
 
-Measured on 2026-10-09 (UTC) over a 10-minute run at the default cadence
+The following is the **original recorder baseline**, before the #405
+extension. Measured on 2026-10-09 (UTC) over a 10-minute run at the default cadence
 against the live host (kernel 7.2.9), while the watched cgroups held about
 1,690 processes (611 in the Claude Desktop scope, 1,013 in the ChatGPT Chromium
 scope) and oomd's roots held 163 leaf cgroups. Every figure comes from that
@@ -358,17 +502,74 @@ the startup figure above was measured with none stored. With 200 stored records
 of 0.69 MB each, that parse took about 3.5 s of CPU per start, and 10–20 s of
 wall time on a loaded host.
 
-These are per-process figures from runs started by hand, outside the unit. The
-memory charged to the unit's own cgroup, which also counts page cache from its
-writes, is not yet measured; the service records it in each slow sample.
+These are per-process figures from runs started by hand, outside the unit.
+That baseline did not measure memory charged to the unit's cgroup, which also
+counts page cache from its writes; the service records it in each slow sample.
 
 Each fast sample's `collector` records the collector's cumulative CPU time,
 its anonymous and file-backed RSS, the same for its `journalctl` child, and the
 bytes it has written, including kill records; each slow sample's
 `collector_cgroup` records the memory charged to its cgroup. The cost stays
 measured while it runs. The unit bounds the service
-at `MemoryMax=128M`, with `MemorySwapMax=0` so it keeps sampling when swap is
-full, and runs it at `Nice=10` with the lowest best-effort I/O priority.
+at `MemoryMax=128M`, uses `MemorySwapMax=0` to keep the collector out of swap,
+and runs it at `Nice=10` with the lowest best-effort I/O priority.
+
+### Extension sampling cost
+
+On 2026-10-17, a bounded comparison called the public fast sampler six times
+and the slow sampler twice against the ordinary live host, then persisted
+their real records and `latest.json` into a scratch directory with the
+recorder's existing writers. The extension also took one real metadata
+snapshot. No collector, journal reader, service, extra process scan, or
+synthetic workload was started. Memory PSI some/full avg10 was zero in the
+final extension run; MemAvailable was about 44.7% of RAM and swap use 57.6%.
+
+The baseline was source commit `c9d740e9102cda826cfa0bbd69a1e2cda780fa7c`.
+The extension source SHA-256 was
+`91a80826a76dee696a0319f214b25e4eafbb6682b559f84c7b6388c82af888a9`;
+its bytes stayed unchanged during measurement. CPU and wall times below
+include sampling, compact serialization, and the real scratch writes.
+
+| Observed mean | Baseline | Extension |
+|---|---:|---:|
+| Fast CPU / wall | 0.505 / 0.508 ms | 0.932 / 0.949 ms |
+| Slow CPU / wall | 23.089 / 23.142 ms | 28.738 / 28.801 ms |
+| Benchmark process peak RSS | 28.4 MiB | 30.7 MiB |
+
+The metadata record was 2,787 bytes: 1.30 ms of parent CPU, 2.96 ms of child
+CPU, and 4.37 ms elapsed through persistence. The short-lived `oomctl` child
+peaked at 5.3 MiB RSS. Child CPU includes the measurement wrapper; its RSS
+figure covers `oomctl` alone. These process peaks were measured separately,
+and the benchmark includes its helper and retained previous samples.
+
+At the default cadence, the observed rate-bearing record sizes project to
+167.2 MB/day of raw samples and 95.3 MB/day of `latest.json` rewrites: about
+262.6 MB/day of logical payload before compression, versus 63.8 MB/day for
+the bounded baseline comparison. The same timing projection gives about
+49.4 seconds/day of sampling and persistence CPU (0.057% of one core), versus
+37.6 seconds/day for the baseline. Three metadata captures add about
+0.009 seconds/day of child CPU. These are estimates from back-to-back calls,
+not observed daily service totals.
+
+The actual small samples file was 165,292 bytes and gzipped to 25,093 bytes.
+Applying that measured ratio projects about 25.4 MB/day of compressed samples,
+or about 178 MB for seven days. A small-file ratio is no retention guarantee;
+at this projection the 512 MiB size cap would bind before 30 days. Retention
+remains bounded by the existing age and size rules.
+
+This comparison omits `Collector.tick`'s extra fields, journal/cursor and
+incident writes, filesystem amplification, and compression writes. It
+measures no scheduling or tick lag and qualifies no full journal catch-up,
+incident recovery, or service-cgroup memory peak. The deployed recorder's
+existing `collector` and `collector_cgroup` fields supply those observations
+during the seven-day window; `collector.oomctl_cpu_s` adds snapshot-child CPU.
+
+`MemoryMax=128M` and `MemorySwapMax=0` are unchanged. The existing journal
+catch-up headroom limitation tracked in
+[#426](https://github.com/nisavid/dotfiles/issues/426) remains unresolved by
+this extension. This task does not qualify a new service deployment under
+that limit; per-process scratch measurements cannot establish service-cgroup
+headroom during journal catch-up.
 
 ## Not covered
 
@@ -379,8 +580,8 @@ full, and runs it at `Nice=10` with the lowest best-effort I/O priority.
   `SwapPss`) takes 1.6 s across the app scopes and briefly takes each
   process's mmap lock, so it is not sampled. RSS double-counts shared pages,
   `VmSwap` includes zswap, and processes that live less than 60 s are missed.
-- **T9 outside this user.** System services are ranked by swap but their
-  processes are not attributed.
+- **T9 outside this user.** Large memory/swap holders and matching inference
+  services receive cgroup statistics, but their processes are not attributed.
 - **Event-driven T6.** cgroup event files are read every 60 s rather than
   watched, so `.local` counters of a cgroup removed between samples are lost;
   `removed` keeps the last ones seen, and the parent slices' hierarchical
@@ -388,9 +589,10 @@ full, and runs it at `Nice=10` with the lowest best-effort I/O priority.
   T3 counters and as a kill record.
 - **PSI of each job scope.** #404's T2 and T6 name each job scope's
   `memory.pressure`. Builds run as transient scopes inside `builds.slice`,
-  whose PSI is recorded for all of them together. Each scope's own is not,
-  because which slice will hold jobs, and how it relates to `builds.slice`, is
-  #404 choice 1, still open.
+  whose PSI is recorded for all of them together. Existing `jobs.slice`
+  locations also receive slow pressure/accounting. Individual job scopes are
+  sampled only if the holder/watch selection picks them; coverage of every
+  job scope and the future slice arrangement remain outside this extension.
 - **PSI triggers.** Registering a kernel trigger is not needed while no
   threshold exists; the totals give exact stall time.
 - **oomd's D-Bus `Killed` signal and units' `OOMKills`/`ManagedOOMKills`.** The
@@ -435,6 +637,47 @@ reads them again without duplicating what was written. While the failure
 lasts, that repeats every 30 s, and each start also reads every stored kill
 record.
 
+## Seven-day ordinary-operation measurement
+
+For [#405](https://github.com/nisavid/dotfiles/issues/405), use the existing
+recorder for seven consecutive days of ordinary work after the reviewed
+extension is separately deployed. This procedure does not mean that deployment
+or the seven-day window has started. Load this procedure before beginning
+that measurement. Record the reviewed revision used, the measurement's start
+and end in UTC, the recorder's source digest, and known workload or
+configuration rollouts. Maintain a manual UTC
+timeline of ordinary app/plugin updates, workload-cap changes, model/service
+changes, and naturally reported stalls; record what is known without adding
+command lines or credentials to the record. Keep unchanged-policy periods
+separate, including changes to workload caps, plugin policy, and the
+kernel. Missing representative work is a gap to report; do not manufacture
+load or extend the study to fill it.
+
+Read `samples/` rather than only `latest.json`. Within each boot and unchanged
+policy period, calculate counter rates using the actual elapsed seconds. Skip
+comparisons across a missing observation, counter decrease, recreated cgroup,
+device replacement, or sampling gap. Keep each cgroup and each storage layer
+separate: parent and child memory totals overlap, as do mapper, RAID, and
+physical-device traffic. Swap slots describe occupancy, not physical writes;
+`zswpwb` overlaps disk swap-out accounting. Anonymous/file and
+direct/background scan categories also overlap and must not be added together.
+
+Report daily minima, maxima, and percentiles, with aligned 60-second and
+five-minute windows around naturally reported stalls and workload transitions.
+Compare anonymous paging with file refaults, direct with background reclaim,
+memory/I/O/CPU stall time, compressed with logical swapped bytes, swap-area
+occupancy with device traffic, and group-local pressure/events with host
+headroom. Include the recorder's CPU, RSS, cgroup memory, bytes written, and
+tick lag. CPU pressure does not establish compression cost; file refaults do
+not identify the refaulted files.
+
+At seven days, classify each setting as **retain**, **candidate for a separately
+approved comparison**, or **insufficient evidence**. Preserve the measurement
+window and gaps with that result. This passive baseline selects no tuning
+and cannot establish that an untested replacement performs better. Root-only
+zswap, slab, fragmentation, and MGLRU diagnostics remain optional operator-provided
+evidence; the recorder does not acquire privileges or mount debugfs.
+
 ## Operating it
 
 chezmoi does not start or restart the unit. An existing `run_after_` script
@@ -457,8 +700,8 @@ memory-telemetry report              # latest counters, oomd's choice, T9 growth
 memory-telemetry report --window 3600
 ```
 
-Try it without the service: `memory-telemetry sample` prints one fast and one
-slow sample and writes nothing, and
+Try it without the service: `memory-telemetry sample` prints one fast, one
+slow, and one metadata object and writes nothing, and
 `memory-telemetry run --state-dir "$(mktemp -d)" --duration 120` records for two
 minutes into a new private scratch directory.
 
