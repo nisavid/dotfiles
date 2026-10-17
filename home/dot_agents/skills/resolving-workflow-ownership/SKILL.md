@@ -1,6 +1,6 @@
 ---
 name: resolving-workflow-ownership
-description: Use when a task depends on who decides, approves, validates, acts, or closes out; when human, agent, operator, reviewer, or code-owner responsibility is ambiguous for merge, deploy, publish, release, install, delete, or handoff.
+description: Use when a task depends on who decides, approves, validates, acts, or closes out; when human, agent, operator, reviewer, or code-owner responsibility is ambiguous for merge, deploy, publish, release, install, delete, or handoff; or when an uncertain proxy controls a decision to stop, proceed, or seek outside help.
 ---
 
 # Resolving Workflow Ownership
@@ -21,6 +21,8 @@ Evidence is agent-owned when accessible and allowed. If decision or actuation ow
 ## Decision Flow
 
 First obey hard constraints and the active instruction hierarchy. Resolve ownership only inside the allowed space. Treat workflow text as active only when referenced, current, branch/PR-scoped, or maintained.
+
+When an uncertain proxy controls a stop, proceed, or outside-help recommendation, identify the governing requirement, the relevant observation, and the connection between them. Check that premise against the governing source and observation; a review of wording against the same derived summary does not validate it. If the connection is unsupported, withdraw the conclusion it supplied and inspect the source or use an already authorized direct check. Keep a real requirement unverified when evidence is missing, and retain stops required by permission, safety, privacy, or an unavailable control surface. For outside help, distinguish an available contact route from an established need for external action; recover relevant working evidence and the diagnostics actually performed before recommending it.
 
 - Evidence-only: report facts; do not decide or act.
 - Decision-only: decide state; do not act.
