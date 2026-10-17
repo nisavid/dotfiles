@@ -166,7 +166,10 @@ Each disk's `counters` contains `reads`, `writes`, `read_sectors`,
 `write_sectors`, `read_ms`, `write_ms`, `io_ms`, and `weighted_io_ms`.
 `per_s` uses the same keys and actual elapsed seconds. It is emitted only when
 both observations have the same major:minor and the same non-null `diskseq`,
-within one known boot. A missing disk sequence number leaves raw counters
+within one known boot. Device names are discovered before taking the counter
+snapshot; sequence reads bracket that snapshot. A newly appeared device or
+one whose sequence changes during acquisition is omitted for that sample.
+A missing disk sequence number leaves raw counters
 usable but suppresses rates. Device replacement, a missing preceding device,
 and a counter decrease suppress the affected rates; `in_flight` is a gauge
 and never gets a rate. Host VM and CPU rates and PSI stall fractions likewise
@@ -522,38 +525,38 @@ their real records and `latest.json` into a scratch directory with the
 recorder's existing writers. The extension also took one real metadata
 snapshot. No collector, journal reader, service, extra process scan, or
 synthetic workload was started. Memory PSI some/full avg10 was zero in the
-final extension run; MemAvailable was about 44.7% of RAM and swap use 57.6%.
+final extension run; MemAvailable was about 43.1% of RAM and swap use 59.2%.
 
 The baseline was source commit `c9d740e9102cda826cfa0bbd69a1e2cda780fa7c`.
 The extension source SHA-256 was
-`91a80826a76dee696a0319f214b25e4eafbb6682b559f84c7b6388c82af888a9`;
+`7c1a3cb26386954128bc8a3cc603be9241816bec1b3dc7ff66fac5c853830fa4`;
 its bytes stayed unchanged during measurement. CPU and wall times below
 include sampling, compact serialization, and the real scratch writes.
 
 | Observed mean | Baseline | Extension |
 |---|---:|---:|
-| Fast CPU / wall | 0.505 / 0.508 ms | 0.932 / 0.949 ms |
-| Slow CPU / wall | 23.089 / 23.142 ms | 28.738 / 28.801 ms |
-| Benchmark process peak RSS | 28.4 MiB | 30.7 MiB |
+| Fast CPU / wall | 0.505 / 0.508 ms | 1.678 / 1.694 ms |
+| Slow CPU / wall | 23.089 / 23.142 ms | 38.032 / 38.331 ms |
+| Benchmark process peak RSS | 28.4 MiB | 30.6 MiB |
 
-The metadata record was 2,787 bytes: 1.30 ms of parent CPU, 2.96 ms of child
-CPU, and 4.37 ms elapsed through persistence. The short-lived `oomctl` child
+The metadata record was 2,788 bytes: 1.54 ms of parent CPU, 3.49 ms of child
+CPU, and 5.39 ms elapsed through persistence. The short-lived `oomctl` child
 peaked at 5.3 MiB RSS. Child CPU includes the measurement wrapper; its RSS
 figure covers `oomctl` alone. These process peaks were measured separately,
 and the benchmark includes its helper and retained previous samples.
 
 At the default cadence, the observed rate-bearing record sizes project to
-167.2 MB/day of raw samples and 95.3 MB/day of `latest.json` rewrites: about
-262.6 MB/day of logical payload before compression, versus 63.8 MB/day for
+173.9 MB/day of raw samples and 96.6 MB/day of `latest.json` rewrites: about
+270.5 MB/day of logical payload before compression, versus 63.8 MB/day for
 the bounded baseline comparison. The same timing projection gives about
-49.4 seconds/day of sampling and persistence CPU (0.057% of one core), versus
+69.3 seconds/day of sampling and persistence CPU (0.080% of one core), versus
 37.6 seconds/day for the baseline. Three metadata captures add about
-0.009 seconds/day of child CPU. These are estimates from back-to-back calls,
-not observed daily service totals.
+0.010 seconds/day of child CPU. These are estimates from back-to-back calls,
+not observed daily service totals or a controlled workload comparison.
 
-The actual small samples file was 165,292 bytes and gzipped to 25,093 bytes.
-Applying that measured ratio projects about 25.4 MB/day of compressed samples,
-or about 178 MB for seven days. A small-file ratio is no retention guarantee;
+The actual small samples file was 173,513 bytes and gzipped to 28,098 bytes.
+Applying that measured ratio projects about 28.2 MB/day of compressed samples,
+or about 197 MB for seven days. A small-file ratio is no retention guarantee;
 at this projection the 512 MiB size cap would bind before 30 days. Retention
 remains bounded by the existing age and size rules.
 

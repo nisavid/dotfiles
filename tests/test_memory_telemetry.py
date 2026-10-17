@@ -307,6 +307,39 @@ class ParserTests(unittest.TestCase):
 
 
 class SampleTests(FixtureCase):
+    def test_storage_does_not_mix_device_lifetimes_during_acquisition(self) -> None:
+        disks = self.fixture.proc / "diskstats"
+        sequence = self.fixture.sys / "class/block/dm-0/diskseq"
+        for repeated in (False, True):
+            with self.subTest(repeated=repeated):
+                write(disks, "253 0 dm-0 10 0 10 10 10 0 10 10 0 10 10\n")
+                write(sequence, "41\n")
+                sources = self.fixture.sources()
+                read = sources.text
+                replaced = False
+
+                def replace_after_counters(path, required=False):
+                    nonlocal replaced
+                    captured = read(path, required)
+                    if path == disks and (repeated or not replaced):
+                        write(sequence, str(int(sequence.read_text()) + 1) + "\n")
+                        write(disks, "253 0 dm-0 100 0 100 100 100 0 100 100 0 100 100\n")
+                        replaced = True
+                    return captured
+
+                with mock.patch.object(sources, "text", replace_after_counters):
+                    first = mt.fast_sample(sources, 0.9, {}, 100.0, "boot", None)
+                if repeated:
+                    self.assertNotIn("dm-0", first["diskstats"])
+                elif "dm-0" in first["diskstats"]:
+                    self.assertEqual(first["diskstats"]["dm-0"]["counters"]["reads"], 100)
+                    self.assertEqual(first["diskstats"]["dm-0"]["diskseq"], 42)
+                second = mt.fast_sample(sources, 0.9, {}, 110.0, "boot", first)
+                self.assertIn(second["diskstats"]["dm-0"].get("per_s", {}).get("reads"), (None, 0.0))
+                write(disks, "253 0 dm-0 150 0 150 150 150 0 150 150 0 150 150\n")
+                third = mt.fast_sample(sources, 0.9, {}, 120.0, "boot", second)
+                self.assertEqual(third["diskstats"]["dm-0"]["per_s"]["reads"], 5.0)
+
     def test_reserves_preserve_zones_buddy_orders_and_metadata_counts(self) -> None:
         write(self.fixture.proc / "zoneinfo", "Node 0, zone DMA\n  pages free 12\n min 2\n low 3\n high 4\n"
               " boost 5\n managed 100\n protection: (0, 1)\nNode 1, zone Normal\n pages free 120\n min 20\n")

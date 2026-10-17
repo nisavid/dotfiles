@@ -163,6 +163,7 @@ CAPACITY_KEYS = ("MemFree", "Cached", "SwapCached", "SReclaimable", "SUnreclaim"
 CPU_TIME_KEYS = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal", "guest", "guest_nice")
 DISK_COUNTER_FIELDS = {"reads": 0, "read_sectors": 2, "read_ms": 3, "writes": 4,
                        "write_sectors": 6, "write_ms": 7, "io_ms": 9, "weighted_io_ms": 10}
+BLOCK_DEVICE_NAME = re.compile(r"nvme\d+(?:c\d+)?n\d+|dm-\d+|md\d+")
 VM_SETTINGS = ("swappiness", "page-cluster", "vfs_cache_pressure", "min_free_kbytes", "watermark_scale_factor",
                "watermark_boost_factor", "overcommit_memory", "overcommit_ratio", "overcommit_kbytes")
 ZSWAP_SETTINGS = ("enabled", "compressor", "zpool", "max_pool_percent", "accept_threshold_percent", "shrinker_enabled")
@@ -271,17 +272,31 @@ def diskstats(sources: Sources) -> Record | None:
     text = sources.text(sources.proc / "diskstats")
     if text is None:
         return None
+    # Discover names first, then bracket the actual counter snapshot with diskseq
+    # reads. A sequence read only after counters could label a departed device's
+    # counters with its same-name replacement's identity.
+    before = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and BLOCK_DEVICE_NAME.fullmatch(fields[2]):
+            before[fields[2]] = sources.number(sources.sys / "class/block" / fields[2] / "diskseq")
+    text = sources.text(sources.proc / "diskstats")
+    if text is None:
+        return None
     disks: Record = {}
     for line in text.splitlines():
         fields = line.split()
-        if len(fields) < 14 or not re.fullmatch(r"nvme\d+(?:c\d+)?n\d+|dm-\d+|md\d+", fields[2]):
+        if len(fields) < 14 or not BLOCK_DEVICE_NAME.fullmatch(fields[2]):
             continue
         if not all(value.isdigit() for value in fields[:2] + fields[3:14]):
             continue
         values = [int(value) for value in fields[3:14]]
+        sequence = sources.number(sources.sys / "class/block" / fields[2] / "diskseq")
+        if fields[2] not in before or sequence != before[fields[2]]:
+            continue
         disks[fields[2]] = {
             "device": f"{fields[0]}:{fields[1]}",
-            "diskseq": sources.number(sources.sys / "class/block" / fields[2] / "diskseq"),
+            "diskseq": sequence,
             "counters": {key: values[index] for key, index in DISK_COUNTER_FIELDS.items()},
             "in_flight": values[8],
         }
