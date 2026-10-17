@@ -240,6 +240,7 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
                 str(self.home / ".t3/worktrees"),
                 str(self.home / ".local/share/chezmoi"),
                 str(self.home / ".local/share/chezmoi.wt"),
+                str(self.home / ".local/state/provingkit/deletion-queue"),
             },
         )
         self.assertEqual(
