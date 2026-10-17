@@ -1,11 +1,13 @@
 ---
 name: capturing-agent-procedures
-description: Use when planning, executing, reviewing, or completing work that establishes a reusable agent procedure, corrects an existing method, or depends on a procedure another task produces, across design, development, operations, and adoption.
+description: Use when planning, executing, reviewing, or completing work that establishes a reusable agent procedure, corrects an existing method, or depends on a procedure another task produces, across design, development, operations, and adoption; or when current instructions require agent equipment the active harness cannot resolve.
 ---
 
 # Capturing Agent Procedures
 
 Make reusable methods discoverable and executable by the next agent. Capture them as part of the producing work's completion contract; connect dependent work to the reviewed procedure.
+
+For a current required-equipment route the harness cannot resolve, follow [the missing-route branch](references/required-equipment.md) before returning to capture or consumer verification.
 
 ## Identify The Capture
 

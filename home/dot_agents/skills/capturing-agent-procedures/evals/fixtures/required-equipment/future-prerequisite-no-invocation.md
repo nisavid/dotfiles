@@ -1,0 +1,1 @@
+A roadmap says a later release exercise will require incident-diagnosis. The active task is a routine read-only comparison that does not invoke that future prerequisite, establish or correct a reusable procedure, or consume another task's method. Current applicable instructions and their supported routes are resolvable. The operator asks you to finish today's comparison.
