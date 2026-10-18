@@ -135,11 +135,16 @@ Secret Service, and notification delivery are not readiness signals.
 
 When the target is `npx`, named on `PATH` or by an absolute path, the launcher
 changes to the root directory before it execs the target, on every path that
-reaches the target, including reuse and fallback. A relative command path that
-contains a slash, such as `./node_modules/.bin/npx`, resolves from the caller's
-directory, so it keeps that directory and runs exactly as before; npm files
-above that directory still apply to it. Every other target keeps the caller's
-directory.
+reaches the target, including reuse and fallback. The `PATH` search for a bare
+`npx` happens after that change, so a relative or empty `PATH` entry, such as
+`node_modules/.bin`, resolves under `/`: a project's own `npx` reached through
+such an entry can no longer take the place of one in an absolute `PATH`
+directory, and a launch that found `npx` only through such an entry now finds a
+different one, or none. An absolute `PATH` entry, such as a project directory
+that direnv adds, is searched as given. A relative command path that contains a
+slash, such as `./node_modules/.bin/npx`, resolves from the caller's directory,
+so it keeps that directory and runs exactly as before; npm files above that
+directory still apply to it. Every other target keeps the caller's directory.
 
 npm treats the nearest directory at or above the working directory that holds
 `package.json` or `node_modules` as the project and applies its `.npmrc`, and a
