@@ -55,8 +55,8 @@ its cause alone, without the token or either login:
   configuration fails the directory rule below.
 - `the token belongs to a different GitHub account than the profile expects`:
   the stored token is another account's.
-- `GitHub rejected the token (HTTP 401: expired or revoked)`: replace the
-  stored token.
+- `GitHub rejected the token (HTTP 401: invalid, expired, or revoked)`: replace
+  the stored token.
 - `GitHub refused the request (HTTP <status>)`: another HTTP error response
   whose status `gh` reports, such as a policy block or a JSON server error.
 - `no HTTP status was reported`: an unreachable network, a `gh` or launcher

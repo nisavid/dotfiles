@@ -158,7 +158,7 @@ check_failed='GitHub identity self-check failed'
 config_create_diagnostic="$check_failed: cannot create a private gh configuration under TMPDIR"
 config_trust_diagnostic="$check_failed: another user can change TMPDIR or a directory above it"
 mismatch_diagnostic="$check_failed: the token belongs to a different GitHub account than the profile expects"
-rejected_diagnostic="$check_failed: GitHub rejected the token (HTTP 401: expired or revoked)"
+rejected_diagnostic="$check_failed: GitHub rejected the token (HTTP 401: invalid, expired, or revoked)"
 refused_diagnostic="$check_failed: GitHub refused the request (HTTP 503)"
 bare_refused_diagnostic="$check_failed: GitHub refused the request (HTTP 502)"
 no_status_diagnostic="$check_failed: no HTTP status was reported"
@@ -227,6 +227,10 @@ expect_fail_closed "$no_status_diagnostic" \
 launch_environment=("FAKE_GH_ERROR_LINE=invalid character '<' looking for beginning of value")
 expect_fail_closed "$no_status_diagnostic" \
   'an error page --jq cannot read' fixture-personal github -- target
+# A status ending a line that is not gh's own error line names nothing.
+launch_environment=('FAKE_GH_ERROR_LINE=transport error (HTTP 401)')
+expect_fail_closed "$no_status_diagnostic" \
+  'a status outside a gh error line' fixture-personal github -- target
 launch_environment=(FAKE_GH_DELAY=10)
 expect_fail_closed "$timeout_diagnostic" \
   'a checker that outlives its deadline' fixture-personal github -- target
