@@ -131,6 +131,32 @@ while local session files remain. A successful remote `pass-cli info` call,
 with its output suppressed, is the readiness signal. Local files, a running
 Secret Service, and notification delivery are not readiness signals.
 
+### npx launches
+
+When the target is `npx`, named on `PATH` or by an absolute path, the launcher
+changes to the root directory before it execs the target, on every path that
+reaches the target, including reuse and fallback. A relative command path that
+contains a slash, such as `./node_modules/.bin/npx`, resolves from the caller's
+directory, so it keeps that directory and runs exactly as before; npm files
+above that directory still apply to it. Every other target keeps the caller's
+directory.
+
+npm treats the nearest directory at or above the working directory that holds
+`package.json` or `node_modules` as the project and applies its `.npmrc`, and a
+Node version manager whose `npx` shim comes first on `PATH` also reads `.npmrc`
+files and Node version settings from each parent. The consumer bindings launch
+pinned packages through `npx` from whatever directory the harness started in,
+usually a project under the home directory, so a stray file anywhere above it
+applied to the launch: a `devEngines` entry naming another package manager
+stopped it, a project `.npmrc` could point it at another registry, and a
+project's own `node_modules` could supply the package in place of the pinned
+one, credentials included. Only the superuser can create files in `/`.
+
+npm options such as `--prefix` are not enough, because a version manager's shim
+reads the working directory before npm starts. User and global npm
+configuration and the environment still apply, because they do not come from
+the working directory.
+
 ### Best-effort launches
 
 `secret-exec --best-effort <profile> -- <command> [args...]` injects exactly
@@ -156,9 +182,10 @@ managed name is gone, a later resolution failure falls back. That includes a
 missing or failing readiness helper (a locked native store, for example), a
 missing or untrusted provider command, a provider timeout or failure, including
 one whose process group became unmanageable, and a resolved value that is empty
-or spans lines. Three post-scrub failures still stop the launch: signals, a
-failed GitHub identity check, and a failure to close the launcher's diagnostic
-channel after every value resolved.
+or spans lines. Four post-scrub failures still stop the launch: signals, a
+failed GitHub identity check, a failure to close the launcher's diagnostic
+channel after every value resolved, and a failure to start an `npx` target from
+the root directory.
 
 On fallback, the launcher unsets every value it had already exported and the
 provider request variables, and it does not export the provenance marker.
