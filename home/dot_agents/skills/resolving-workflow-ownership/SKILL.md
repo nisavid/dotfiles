@@ -37,7 +37,7 @@ Use the harness's question tool: `AskUserQuestion` in Claude Code, `request_user
 - `Who performs <action> once allowed?` Options: `Human/operator/code owner`, `Agent`.
 - If approval is unclear: `Who can approve <gate>?` Options: `Human/operator/reviewer/code owner`, `Agent only if explicitly permitted`.
 
-Fallback when no question tool is available: `Who should decide whether <state> is true, and who should perform <action> if it is approved: human/human, human/agent, agent/human, or agent/agent?`
+Fallback when no question tool is available: `Who should decide whether <state> is true, and who should perform <action> if it is approved: human/human, human/agent, agent/human, or agent/agent?` If approval is unclear, also ask: `Who can approve <gate>: human/operator/reviewer/code owner, or the agent only if explicitly permitted?`
 
 ## Language
 
