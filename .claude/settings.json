@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 ~/.local/state/dotfiles-orchestrator/codex_dispatch.py *)"
+    ]
+  }
+}
