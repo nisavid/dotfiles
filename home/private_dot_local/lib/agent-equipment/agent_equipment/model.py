@@ -25,6 +25,7 @@ _INSTALLED_IMPLEMENTATION_PATHS = (
     "lib/agent-equipment/agent_equipment/authoring.py",
     "lib/agent-equipment/agent_equipment/authorization.py",
     "lib/agent-equipment/agent_equipment/canonical.py",
+    "lib/agent-equipment/agent_equipment/direct_mcp.py",
     "lib/agent-equipment/agent_equipment/discovery.py",
     "lib/agent-equipment/agent_equipment/inventory.py",
     "lib/agent-equipment/agent_equipment/model.py",
