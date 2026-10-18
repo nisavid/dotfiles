@@ -6,8 +6,9 @@ nisavid/dotfiles#404 defined and keeps its own bounded record in
 $XDG_STATE_HOME/memory-telemetry. It reads /proc, /sys, the systemd-oomd
 configuration and the journal, and it writes only inside that directory. It
 never kills, signals, moves or reconfigures anything except its own journalctl
-children, which it stops on exit. It raises no alarms: it records the numbers that
-the threshold forms in #404 need, and the operator chooses the thresholds later.
+and oomctl children, which it stops on exit or a snapshot timeout. It raises no
+alarms: it records the numbers that the threshold forms in #404 need, and the
+operator chooses the thresholds later.
 docs/MEMORY_TELEMETRY.md in the dotfiles repository describes the record.
 
 It never records a command line, argument or environment variable. Processes
@@ -15,7 +16,7 @@ are named by the basename of their executable and a coarse role taken from the
 process tree, and journal entries keep only an allowlist of fields.
 
   memory-telemetry run      sample until stopped; the systemd user service runs this
-  memory-telemetry sample   print one fast and one slow sample and write nothing
+  memory-telemetry sample   print fast, slow, and metadata observations; write nothing
   memory-telemetry report   summarize the record
 """
 
@@ -25,9 +26,11 @@ import argparse
 import errno
 import fnmatch
 import gzip
+import hashlib
 import json
 import os
 import re
+import resource
 import selectors
 import signal
 import subprocess
@@ -43,6 +46,7 @@ from stat import S_ISREG
 from typing import Any
 
 SCHEMA = "memory-telemetry/v1"
+SCHEMA_REVISION = 2  # Additive observations; existing T1-T9 fields keep their meanings.
 Record = dict[str, Any]
 
 # systemd-oomd (v262) kills in swap mode as soon as MemAvailable and SwapFree
@@ -129,6 +133,8 @@ JOURNAL_RESTART_DELAY = 30.0
 CURSOR_REFUSED = b"Failed to seek to cursor"
 TOP_ENTRIES = 20
 TOP_SWAP_HOLDERS = 10
+DETAIL_HOLDERS = 5
+INFERENCE_CGROUPS = ("lemon*.service", "ollama*.service", "open-webui*.service", "inference*.service")
 
 AGENT_EXES = frozenset({"claude", "codex"})
 # The Codex app-server runs the tools and MCP servers of all its threads as its own children, so #404
@@ -138,12 +144,31 @@ SPLIT_AGENT_EXES = frozenset({"codex"})
 SHELL_EXES = frozenset({"bash", "dash", "fish", "sh", "zsh"})
 SWAP_COUNTERS = (
     "pswpin", "pswpout", "zswpin", "zswpout", "zswpwb", "workingset_refault_anon", "pgmajfault", "oom_kill",
-)
-CGROUP_STAT_KEYS = (
-    "anon", "file", "shmem", "zswap", "zswapped", "swapcached",
-    "pswpin", "pswpout", "zswpin", "zswpout", "zswpwb", "workingset_refault_anon", "pgmajfault",
+    "workingset_refault_file", "workingset_activate_anon", "workingset_activate_file",
+    "workingset_restore_anon", "workingset_restore_file",
+    "pgscan_anon", "pgscan_file", "pgsteal_anon", "pgsteal_file",
+    "pgscan_kswapd", "pgscan_direct", "pgsteal_kswapd", "pgsteal_direct",
+    "kswapd_low_wmark_hit_quickly", "kswapd_high_wmark_hit_quickly", "swap_ra", "swap_ra_hit",
+    "swpin_zero", "swpout_zero", "compact_stall", "compact_fail", "compact_success",
+    "compact_migrate_scanned", "compact_free_scanned", "thp_fault_alloc", "thp_fault_fallback",
+    "thp_fault_fallback_charge", "thp_collapse_alloc", "thp_collapse_alloc_failed", "thp_split_page",
+    "thp_split_page_failed", "thp_deferred_split_page", "thp_split_pmd", "thp_swpout", "thp_swpout_fallback",
 )
 MEMORY_EVENT_KEYS = ("low", "high", "max", "oom", "oom_kill", "oom_group_kill")
+CGROUP_LIMIT_KEYS = ("memory.high", "memory.max", "memory.swap.high", "memory.swap.max", "memory.zswap.max")
+CPU_STAT_KEYS = ("usage_usec", "user_usec", "system_usec", "nr_throttled", "throttled_usec")
+IO_STAT_KEYS = ("rbytes", "wbytes", "rios", "wios")
+CAPACITY_KEYS = ("MemFree", "Cached", "SwapCached", "SReclaimable", "SUnreclaim", "Unevictable", "Mlocked",
+                 "Committed_AS", "CommitLimit", "AnonHugePages")
+CPU_TIME_KEYS = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal", "guest", "guest_nice")
+DISK_COUNTER_FIELDS = {"reads": 0, "read_sectors": 2, "read_ms": 3, "writes": 4,
+                       "write_sectors": 6, "write_ms": 7, "io_ms": 9, "weighted_io_ms": 10}
+BLOCK_DEVICE_NAME = re.compile(r"nvme\d+(?:c\d+)?n\d+|dm-\d+|md\d+")
+VM_SETTINGS = ("swappiness", "page-cluster", "vfs_cache_pressure", "min_free_kbytes", "watermark_scale_factor",
+               "watermark_boost_factor", "overcommit_memory", "overcommit_ratio", "overcommit_kbytes")
+ZSWAP_SETTINGS = ("enabled", "compressor", "zpool", "max_pool_percent", "accept_threshold_percent", "shrinker_enabled")
+THP_SETTINGS = ("enabled", "defrag", "shmem_enabled", "use_zero_page", "khugepaged/defrag",
+                "khugepaged/pages_to_scan", "khugepaged/scan_sleep_millisecs", "khugepaged/alloc_sleep_millisecs")
 PROCESS_FIELDS = frozenset({"PPid", "RssAnon", "RssFile", "RssShmem", "VmSwap"})
 FOOTPRINT_FIELDS = frozenset({"RssAnon", "RssFile", "VmHWM"})
 SEGMENT_FORMAT = "%Y%m%dT%H"
@@ -215,6 +240,67 @@ def parse_keyed(text: str | None) -> dict[str, int]:
         if len(fields) == 2 and fields[1].lstrip("-").isdigit():
             values[fields[0]] = int(fields[1])
     return values
+
+
+def swap_areas(sources: Sources) -> list[Record] | None:
+    text = sources.text(sources.proc / "swaps")
+    if text is None:
+        return None
+    areas = []
+    for line in text.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) != 5:
+            continue
+        try:
+            areas.append({"path": clean_text(fields[0]), "type": clean_text(fields[1]),
+                          "size_kib": int(fields[2]), "used_kib": int(fields[3]), "priority": int(fields[4])})
+        except ValueError:
+            continue
+    return areas
+
+
+def cpu_times(sources: Sources) -> dict[str, int]:
+    for line in (sources.text(sources.proc / "stat") or "").splitlines():
+        fields = line.split()
+        if fields and fields[0] == "cpu":
+            return {key: int(value) for key, value in zip(CPU_TIME_KEYS, fields[1:]) if value.isdigit()}
+    return {}
+
+
+def diskstats(sources: Sources) -> Record | None:
+    """Whole NVMe devices and mapper/RAID layers, each with its own counters; never sum layers."""
+    text = sources.text(sources.proc / "diskstats")
+    if text is None:
+        return None
+    # Discover names first, then bracket the actual counter snapshot with diskseq
+    # reads. A sequence read only after counters could label a departed device's
+    # counters with its same-name replacement's identity.
+    before = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and BLOCK_DEVICE_NAME.fullmatch(fields[2]):
+            before[fields[2]] = sources.number(sources.sys / "class/block" / fields[2] / "diskseq")
+    text = sources.text(sources.proc / "diskstats")
+    if text is None:
+        return None
+    disks: Record = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 14 or not BLOCK_DEVICE_NAME.fullmatch(fields[2]):
+            continue
+        if not all(value.isdigit() for value in fields[:2] + fields[3:14]):
+            continue
+        values = [int(value) for value in fields[3:14]]
+        sequence = sources.number(sources.sys / "class/block" / fields[2] / "diskseq")
+        if fields[2] not in before or sequence != before[fields[2]]:
+            continue
+        disks[fields[2]] = {
+            "device": f"{fields[0]}:{fields[1]}",
+            "diskseq": sequence,
+            "counters": {key: values[index] for key, index in DISK_COUNTER_FIELDS.items()},
+            "in_flight": values[8],
+        }
+    return disks
 
 
 def parse_psi(text: str | None) -> Record | None:
@@ -329,6 +415,88 @@ def boot_id(sources: Sources) -> str | None:
     return text.strip().replace("-", "") if text else None
 
 
+def recorder_digest() -> str | None:
+    try:
+        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def effective_oomd(command: str) -> Record:
+    """Read oomd's current defaults and monitored limits; retain no unrecognized output."""
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    started = time.monotonic()
+    error_name = None
+    try:
+        result = subprocess.run([command, "--no-pager", "dump"], capture_output=True, timeout=3,
+                                env=os.environ | {"LC_ALL": "C"})
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        error_name = type(error).__name__
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cost = {"cpu_s": round(after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime, 6),
+            "duration_ms": round((time.monotonic() - started) * 1000, 3)}
+    if error_name is not None:
+        return {**cost, "unavailable": error_name}
+    if result.returncode:
+        return {**cost, "unavailable": f"exit: {result.returncode}"}
+    globals_: Record = {}
+    swap = []
+    monitored: Record = {}
+    section, path = "", ""
+    for raw in result.stdout.decode("utf-8", "replace").splitlines():
+        line = raw.strip()
+        key, separator, value = line.partition(":")
+        value = value.strip()
+        if line in ("System Context:", "Swap Monitored CGroups:", "Memory Pressure Monitored CGroups:"):
+            section, path = line, ""
+        elif not raw[:1].isspace() and separator and key in (
+                "Dry Run", "Swap Used Limit", "Default Memory Pressure Limit", "Default Memory Pressure Duration"):
+            globals_[key] = clean_text(value)
+        elif key == "Path" and separator and value.startswith("/"):
+            path = clean_text(value)
+            if section == "Swap Monitored CGroups:":
+                swap.append(path)
+            elif section == "Memory Pressure Monitored CGroups:":
+                monitored[path] = {}
+        elif path in monitored and section == "Memory Pressure Monitored CGroups:" and key in (
+                "Memory Pressure Limit", "Memory Pressure Duration"):
+            monitored[path][key] = clean_text(value)
+    if len(globals_) != 4:
+        return {**cost, "unavailable": "unrecognized oomctl output"}
+    return {**cost, "global": globals_, "swap_monitored": swap, "pressure_monitored": monitored}
+
+
+def metadata_sample(sources: Sources, now: float, boot: str | None, reason: str,
+                    revision: str | None, oomctl: str) -> Record:
+    sources.unavailable = {}
+
+    def settings(root: Path, names: tuple[str, ...]) -> Record:
+        return {name: clean_text(text.strip()) if (text := sources.text(root / name, required=True)) is not None
+                else None for name in names}
+
+    kernel = sources.text(sources.proc / "sys/kernel/osrelease", required=True)
+    limit, source, errors = oomd_swap_used_limit(sources.config)
+    thp_root = sources.sys / "kernel/mm/transparent_hugepage"
+    thp = settings(thp_root, THP_SETTINGS)
+    try:
+        sizes = sorted(name for name in os.listdir(thp_root) if re.fullmatch(r"hugepages-\d+kB", name))
+    except OSError:
+        sizes = []
+    thp["sizes"] = {name: settings(thp_root / name, ("enabled", "shmem_enabled")) for name in sizes}
+    sample = {
+        "schema": SCHEMA, "schema_revision": SCHEMA_REVISION, "kind": "metadata", "t": round(now, 3),
+        "boot": boot, "reason": reason, "recorder_sha256": revision,
+        "kernel": clean_text(kernel.strip()) if kernel is not None else None,
+        "page_size_bytes": os.sysconf("SC_PAGE_SIZE"), "clock_ticks_per_s": os.sysconf("SC_CLK_TCK"),
+        "vm": settings(sources.proc / "sys/vm", VM_SETTINGS),
+        "zswap": settings(sources.sys / "module/zswap/parameters", ZSWAP_SETTINGS),
+        "mglru": settings(sources.sys / "kernel/mm/lru_gen", ("enabled", "min_ttl_ms")), "thp": thp,
+        "oomd": {"swap_used_limit": limit, "source": source, "effective": effective_oomd(oomctl)},
+    }
+    add_unavailable(sample, sources.unavailable | errors)
+    return sample
+
+
 def clean_text(text: str) -> str:
     """Make a name chosen by another process safe to record and print: valid UTF-8, no control characters."""
     text = text.encode("utf-8", "backslashreplace").decode("utf-8")
@@ -364,9 +532,11 @@ def pressure(sources: Sources, watched: dict[str, Path]) -> Record:
         psi = parse_psi(sources.text(path / "memory.pressure", required=required))
         if psi is not None:
             cgroups[name] = psi
+    cpu = parse_psi(sources.text(sources.proc / "pressure/cpu"))
     return {
         "memory": parse_psi(sources.text(sources.proc / "pressure/memory", required=True)),
         "io": parse_psi(sources.text(sources.proc / "pressure/io", required=True)),
+        "cpu": {"some": cpu["some"]} if cpu and "some" in cpu else None,
         "cgroups": cgroups,
     }
 
@@ -374,6 +544,7 @@ def pressure(sources: Sources, watched: dict[str, Path]) -> Record:
 def swap_counters(vmstat: dict[str, int]) -> dict[str, int]:
     """T3: monotonic swap and reclaim counters from /proc/vmstat."""
     counters = {key: vmstat[key] for key in SWAP_COUNTERS if key in vmstat}
+    counters.update({key: value for key, value in vmstat.items() if key.startswith("allocstall_")})
     stalls = [value for key, value in vmstat.items() if key.startswith("allocstall_")]
     if stalls:
         counters["allocstall"] = sum(stalls)
@@ -457,7 +628,14 @@ def add_rates(sample: Record, previous: Record) -> None:
     before3 = previous.get("t3") or {}
     sample["t3"]["per_s"] = counter_rates(sample["t3"]["counters"], before3.get("counters", {}), seconds)
     t2, before2 = sample["t2"], previous.get("t2") or {}
-    for resource in ("memory", "io"):
+    sample["cpu"]["per_s"] = counter_rates(sample["cpu"]["time_ticks"],
+                                             (previous.get("cpu") or {}).get("time_ticks", {}), seconds)
+    for name, disk in (sample["diskstats"] or {}).items():
+        before = (previous.get("diskstats") or {}).get(name)
+        if (before and disk["diskseq"] is not None and disk["diskseq"] == before.get("diskseq")
+                and disk["device"] == before.get("device")):
+            disk["per_s"] = counter_rates(disk["counters"], before["counters"], seconds)
+    for resource in ("memory", "io", "cpu"):
         fraction = stall_fraction(t2[resource], before2.get(resource), seconds)
         if fraction:
             t2[resource]["stall_fraction"] = fraction
@@ -475,16 +653,21 @@ def fast_sample(
     vmstat = parse_keyed(sources.text(sources.proc / "vmstat", required=True))
     sample: Record = {
         "schema": SCHEMA,
+        "schema_revision": SCHEMA_REVISION,
         "kind": "fast",
         "t": round(now, 3),
         "boot": boot,
+        "capacity_kib": {key: meminfo[key] for key in CAPACITY_KEYS if key in meminfo},
+        "swap_areas": swap_areas(sources),
+        "cpu": {"time_ticks": cpu_times(sources)},
+        "diskstats": diskstats(sources),
         "t1": available_ram(meminfo, limit),
         "t2": pressure(sources, watched),
         "t3": {"counters": swap_counters(vmstat)},
         "t4": swap_occupancy(meminfo, limit),
         "t8": gpu_residency(sources, meminfo),
     }
-    if previous is not None and previous.get("boot") == boot and sample["t"] > previous["t"]:
+    if previous is not None and boot is not None and previous.get("boot") == boot and sample["t"] > previous["t"]:
         add_rates(sample, previous)
     if sources.unavailable:
         sample["unavailable"] = dict(sorted(sources.unavailable.items()))
@@ -494,12 +677,14 @@ def fast_sample(
 # Slow samples: per-cgroup T3-T6 and the oomd view, plus T9 attribution ------
 
 
-def leaf_cgroups(sources: Sources, root: Path) -> list[Path]:
+def leaf_cgroups(sources: Sources, root: Path, observed: list[Path] | None = None) -> list[Path]:
     """Leaf cgroups under root, counting a memory.oom.group=1 cgroup as one unit, as oomd does."""
     leaves: list[Path] = []
     stack = [root]
     while stack:
         path = stack.pop()
+        if observed is not None:
+            observed.append(path)
         try:
             children = [Path(entry.path) for entry in os.scandir(path) if entry.is_dir(follow_symlinks=False)]
         except OSError as error:
@@ -513,15 +698,25 @@ def leaf_cgroups(sources: Sources, root: Path) -> list[Path]:
     return leaves
 
 
-def oomd_view(sources: Sources, roots: list[str], swap_total: int) -> tuple[Record, list[Path]]:
+def oomd_view(sources: Sources, roots: list[str], swap_total: int) -> tuple[Record, list[Path], list[Path]]:
     """T4 per cgroup: which leaves hold swap, and which one oomd's swap mode would pick now."""
     usage: list[tuple[int, Path]] = []
+    memory: list[tuple[int, Path]] = []
+    observed: list[Path] = []
+    seen: set[Path] = set()
     for root in roots:
-        for path in leaf_cgroups(sources, sources.cgroup / root):
+        for path in leaf_cgroups(sources, sources.cgroup / root, observed):
+            if path in seen:
+                continue
+            seen.add(path)
             swap = sources.number(path / "memory.swap.current")
             if swap is not None:
                 usage.append((swap, path))
+            current = sources.number(path / "memory.current")
+            if current is not None:
+                memory.append((current, path))
     usage.sort(key=lambda item: (-item[0], str(item[1])))
+    memory.sort(key=lambda item: (-item[0], str(item[1])))
     floor = OOMD_SWAP_CANDIDATE_SHARE * swap_total
     candidates = [path for swap, path in usage if swap_total and swap > floor]
     top = []
@@ -535,6 +730,9 @@ def oomd_view(sources: Sources, roots: list[str], swap_total: int) -> tuple[Reco
             "memory_bytes": sources.number(path / "memory.current"),
             "oomd_swap_candidate": path in candidates,
         })
+    detailed = dict.fromkeys(path for _, path in memory[:DETAIL_HOLDERS] + usage[:DETAIL_HOLDERS])
+    detailed.update(dict.fromkeys(path for path in observed
+                                 if any(fnmatch.fnmatchcase(path.name, pattern) for pattern in INFERENCE_CGROUPS)))
     return {
         "roots": roots,
         "leaf_cgroups": len(usage),
@@ -542,7 +740,9 @@ def oomd_view(sources: Sources, roots: list[str], swap_total: int) -> tuple[Reco
         "candidates": len(candidates),
         "swap_mode_choice": sources.cgroup_name(candidates[0]) if candidates else None,
         "top_by_swap": top,
-    }, candidates
+        "top_by_memory": [{"cgroup": sources.cgroup_name(path), "memory_bytes": current}
+                          for current, path in memory[:DETAIL_HOLDERS]],
+    }, candidates, list(detailed)
 
 
 def watched_cgroups(sources: Sources, patterns: list[str], candidates: list[Path]) -> dict[str, Path]:
@@ -561,21 +761,70 @@ def watched_cgroups(sources: Sources, patterns: list[str], candidates: list[Path
     return watched
 
 
-def cgroup_block(sources: Sources, path: Path) -> Record | None:
+def cgroup_identity(path: Path) -> list[int] | None:
+    try:
+        stat = path.stat()
+        return [stat.st_dev, stat.st_ino]
+    except OSError:
+        return None
+
+
+def cgroup_limits(sources: Sources, path: Path, cache: dict[Path, Record]) -> Record:
+    """The tightest configured ancestor bounds, shared with siblings, not remaining headroom."""
+    chain = []
+    for ancestor in (path, *path.parents):
+        if ancestor == sources.cgroup or not ancestor.is_relative_to(sources.cgroup):
+            break  # the cgroup2 root has no memory limits
+        if ancestor not in cache:
+            cache[ancestor] = {key: sources.limit(ancestor / key) for key in CGROUP_LIMIT_KEYS}
+        chain.append(ancestor)
+    effective: Record = {}
+    missing = []
+    for key in CGROUP_LIMIT_KEYS:
+        values = [cache[ancestor][key] for ancestor in chain]
+        missing.extend(sources.cgroup_name(ancestor) + "/" + key
+                       for ancestor in chain if cache[ancestor][key] is None)
+        finite = [value for value in values if isinstance(value, int)]
+        effective[key] = None if not values or None in values else min(finite) if finite else "max"
+    return {"limits": cache.get(path, {}), "effective_limits": effective, "limits_unavailable": missing}
+
+
+def cgroup_io(sources: Sources, path: Path) -> Record:
+    devices: Record = {}
+    for line in (sources.text(path / "io.stat") or "").splitlines():
+        device, *fields = line.split() or [""]
+        if not re.fullmatch(r"\d+:\d+", device):
+            continue
+        values = dict(field.split("=", 1) for field in fields if "=" in field)
+        devices[device] = {key: int(values[key]) for key in IO_STAT_KEYS
+                           if key in values and values[key].isdigit()}
+    return devices
+
+
+def cgroup_block(sources: Sources, path: Path, limit_cache: dict[Path, Record] | None = None) -> Record | None:
     """T3-T6 for one cgroup: memory and swap use, memory.stat counters, events and thread counts."""
+    identity = cgroup_identity(path)
     current = sources.number(path / "memory.current")
-    if current is None:
+    if current is None or identity is None:
         return None
     stat = parse_keyed(sources.text(path / "memory.stat"))
     events = parse_keyed(sources.text(path / "memory.events.local"))
     tree_events = parse_keyed(sources.text(path / "memory.events"))
-    return {
+    cpu = parse_keyed(sources.text(path / "cpu.stat"))
+    block = {
         "path": sources.cgroup_name(path),
+        "identity": identity,
         "memory_bytes": current,
         "memory_peak_bytes": sources.number(path / "memory.peak"),
         "swap_bytes": sources.number(path / "memory.swap.current"),
         "swap_peak_bytes": sources.number(path / "memory.swap.peak"),
-        "stat": {key: stat[key] for key in CGROUP_STAT_KEYS if key in stat},
+        "zswap_bytes": sources.number(path / "memory.zswap.current"),
+        "stat": stat,
+        **cgroup_limits(sources, path, limit_cache if limit_cache is not None else {}),
+        "pressure": {resource: parse_psi(sources.text(path / f"{resource}.pressure"))
+                     for resource in ("memory", "io", "cpu")},
+        "cpu_stat": {key: cpu[key] for key in CPU_STAT_KEYS if key in cpu},
+        "io_stat": cgroup_io(sources, path),
         "memory_events_local": {key: events[key] for key in MEMORY_EVENT_KEYS if key in events},
         # Hierarchical counts include descendants, removed ones too; a parent slice's .local counts stay 0.
         "memory_events": {key: tree_events[key] for key in MEMORY_EVENT_KEYS if key in tree_events},
@@ -588,6 +837,37 @@ def cgroup_block(sources: Sources, path: Path) -> Record | None:
         },
         "populated": parse_keyed(sources.text(path / "cgroup.events")).get("populated"),
     }
+    return block if cgroup_identity(path) == identity else None
+
+
+def reserves(sources: Sources) -> Record:
+    zone_text = sources.text(sources.proc / "zoneinfo")
+    zones: Record = {}
+    current: Record | None = None
+    for line in (zone_text or "").splitlines():
+        match = re.fullmatch(r"Node (\d+), zone\s+(\S+)\s*", line)
+        if match:
+            current = zones.setdefault(f"{match[1]}:{match[2]}", {})
+        elif current is not None:
+            fields = line.split()
+            if len(fields) == 3 and fields[:2] == ["pages", "free"] and fields[2].isdigit():
+                current["free"] = int(fields[2])
+            elif len(fields) == 2 and fields[0] in ("min", "low", "high", "boost", "managed") and fields[1].isdigit():
+                current[fields[0]] = int(fields[1])
+    buddy_text = sources.text(sources.proc / "buddyinfo")
+    buddy = {}
+    for line in (buddy_text or "").splitlines():
+        match = re.fullmatch(r"Node\s+(\d+), zone\s+(\S+)\s+([\d\s]+)", line)
+        if match:
+            buddy[f"{match[1]}:{match[2]}"] = [int(value) for value in match[3].split()]
+    counts = {}
+    for name in ("dentry", "inode"):
+        text = sources.text(sources.proc / f"sys/fs/{name}-state")
+        values = (text or "").split()
+        counts[f"{name}_state"] = [int(value) for value in values] if values and all(
+            value.lstrip("-").isdigit() for value in values) else None
+    return {"zones": zones if zone_text is not None else None,
+            "buddy": buddy if buddy_text is not None else None, **counts}
 
 
 @dataclass
@@ -752,17 +1032,22 @@ def slow_sample(
     cgroup it sampled, which the next call takes as previous_paths."""
     sources.unavailable = {}
     meminfo = parse_meminfo(sources.text(sources.proc / "meminfo", required=True))
-    view, candidates = oomd_view(sources, roots, meminfo.get("SwapTotal", 0) * 1024)
+    view, candidates, detailed = oomd_view(sources, roots, meminfo.get("SwapTotal", 0) * 1024)
     watched = watched_cgroups(sources, patterns, candidates)
     fixed = {
         sources.user_slice.name: sources.user_slice,
         "app.slice": sources.manager / "app.slice",
         "builds.slice": sources.manager / "builds.slice",
+        "jobs.slice": sources.cgroup / "jobs.slice",
+        sources.cgroup_name(sources.manager / "jobs.slice"): sources.manager / "jobs.slice",
     }
+    existing = set(fixed.values()) | set(watched.values())
+    extra = {sources.cgroup_name(path): path for path in detailed if path not in existing}
     cgroups: Record = {}
     sampled: dict[str, Path] = {}
-    for name, path in {**fixed, **watched}.items():
-        block = cgroup_block(sources, path)
+    limit_cache: dict[Path, Record] = {}
+    for name, path in {**extra, **fixed, **watched}.items():
+        block = cgroup_block(sources, path, limit_cache)
         if block is not None:
             cgroups[name] = block
             sampled[name] = path
@@ -773,8 +1058,8 @@ def slow_sample(
             t9[name] = attribute(processes)
             if name in cgroups:
                 cgroups[name]["processes"] = len(processes)
-    sample: Record = {"schema": SCHEMA, "kind": "slow", "t": round(now, 3), "boot": boot,
-                      "swap_holders": view, "cgroups": cgroups, "t9": t9}
+    sample: Record = {"schema": SCHEMA, "schema_revision": SCHEMA_REVISION, "kind": "slow", "t": round(now, 3), "boot": boot,
+                      "swap_holders": view, "cgroups": cgroups, "t9": t9, "reserves": reserves(sources)}
     if previous is not None:
         # A recorded name or path is escaped and may name no real directory, so removal is decided on the
         # real path the previous call sampled. Callers without one fall back to the recorded path.
@@ -1584,8 +1869,22 @@ class Collector:
         self.previous_slow: Record | None = None
         self.ticks = 0
         self.unwritten_entry: Record | None = None  # the newest journal entry whose record change is not written
+        self.metadata_day: str | None = None
+        self.revision = recorder_digest()
+        self.closed = False
+        self.oomctl_cpu_s = 0.0
+
+    def snapshot(self, now: float, reason: str) -> None:
+        sample = metadata_sample(self.sources, now, self.boot, reason, self.revision, self.options.oomctl)
+        self.oomctl_cpu_s += sample["oomd"]["effective"]["cpu_s"]
+        self.store.append(sample)
 
     def tick(self, lag: float) -> None:
+        now = time.time()
+        day = datetime.fromtimestamp(now, timezone.utc).date().isoformat()
+        if day != self.metadata_day:
+            self.snapshot(now, "start" if self.metadata_day is None else "daily")
+            self.metadata_day = day
         if self.ticks % self.options.slow_every == 0:
             self.limit, self.limit_source, self.limit_errors = oomd_swap_used_limit(self.sources.config)
             slow, self.watched, self.sampled = slow_sample(
@@ -1608,6 +1907,15 @@ class Collector:
         self.flush()
         self.journal.save_cursor()
         self.ticks += 1
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self.snapshot(time.time(), "end")
+        finally:
+            self.store.close()
 
     def handle(self, entry: Record) -> None:
         """Handle one journal entry. It counts as handled, so a restart resumes after it, once every record change
@@ -1635,6 +1943,7 @@ class Collector:
             status: dict[str, int] = {}
         block: Record = {
             "cpu_s": round(time.process_time(), 3),
+            "oomctl_cpu_s": round(self.oomctl_cpu_s, 6),
             "rss_anon_kib": status.get("RssAnon"),
             "rss_file_kib": status.get("RssFile"),
             "hwm_kib": status.get("VmHWM"),
@@ -1697,8 +2006,10 @@ def run(options: argparse.Namespace) -> int:
                     collector.handle(entry)
         collector.flush()  # stopping: write the changes the last entries made, then mark them handled
     finally:
-        journal.close()
-        collector.store.close()
+        try:
+            collector.close()
+        finally:
+            journal.close()
     return 0
 
 
@@ -1711,7 +2022,8 @@ def sample_once(options: argparse.Namespace) -> int:
     fast = fast_sample(sources, limit, watched, now, boot, None)
     fast["oomd"] = {"swap_used_limit": limit, "source": source}
     add_unavailable(fast, errors)
-    json.dump({"fast": fast, "slow": slow}, sys.stdout, indent=1)
+    metadata = metadata_sample(sources, time.time(), boot, "sample", recorder_digest(), options.oomctl)
+    json.dump({"fast": fast, "slow": slow, "metadata": metadata}, sys.stdout, indent=1)
     sys.stdout.write("\n")
     return 0
 
@@ -1786,7 +2098,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="memory-telemetry", description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     run_parser = commands.add_parser("run", help="sample until stopped")
-    sample_parser = commands.add_parser("sample", help="print one fast and one slow sample; write nothing")
+    sample_parser = commands.add_parser("sample", help="print fast, slow, and metadata observations; write nothing")
     report_parser = commands.add_parser("report", help="summarize the record")
     for command in (run_parser, sample_parser):
         command.add_argument("--watch", action="append", metavar="GLOB",
@@ -1797,6 +2109,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         command.add_argument("--proc-root", default="/proc", help=argparse.SUPPRESS)
         command.add_argument("--sys-root", default="/sys", help=argparse.SUPPRESS)
         command.add_argument("--config-root", default="/", help=argparse.SUPPRESS)
+        command.add_argument("--oomctl", default="oomctl", help="read-only oomd snapshot command")
     for command in (run_parser, report_parser):
         command.add_argument("--state-dir", help="default: $STATE_DIRECTORY or $XDG_STATE_HOME/memory-telemetry")
     run_parser.add_argument("--interval", type=positive(float), default=DEFAULT_INTERVAL,

@@ -174,12 +174,20 @@ class Fixture:
             (drm / name).mkdir(parents=True)
         os.symlink(device, drm / "card0/device")
         write(self.config / "etc/systemd/oomd.conf", "[OOM]\n#SwapUsedLimit=50%\nSwapUsedLimit=90%\n")
+        self.oomctl = self.root / "fake-oomctl"
+        write(self.oomctl, f"#!{sys.executable}\nprint('''Dry Run: no\nSwap Used Limit: 90.00%\n"
+              "Default Memory Pressure Limit: 60.00%\nDefault Memory Pressure Duration: 30s\n"
+              "Swap Monitored CGroups:\n  Path: /system.slice\nMemory Pressure Monitored CGroups:\n"
+              "  Path: /system.slice\n    Memory Pressure Limit: 80.00%\n"
+              "    Memory Pressure Duration: 30s\nUNRELATED-SENTINEL\n''')\n")
+        self.oomctl.chmod(0o755)
 
     def sources(self):
         return mt.Sources(self.proc, self.sys, self.config, UID)
 
     def options(self, *extra: str) -> list[str]:
-        return ["--proc-root", str(self.proc), "--sys-root", str(self.sys), "--config-root", str(self.config), *extra]
+        return ["--proc-root", str(self.proc), "--sys-root", str(self.sys), "--config-root", str(self.config),
+                "--oomctl", str(self.oomctl), *extra]
 
 
 class FixtureCase(unittest.TestCase):
@@ -299,6 +307,257 @@ class ParserTests(unittest.TestCase):
 
 
 class SampleTests(FixtureCase):
+    def test_storage_does_not_mix_device_lifetimes_during_acquisition(self) -> None:
+        disks = self.fixture.proc / "diskstats"
+        sequence = self.fixture.sys / "class/block/dm-0/diskseq"
+        for repeated in (False, True):
+            with self.subTest(repeated=repeated):
+                write(disks, "253 0 dm-0 10 0 10 10 10 0 10 10 0 10 10\n")
+                write(sequence, "41\n")
+                sources = self.fixture.sources()
+                read = sources.text
+                replaced = False
+
+                def replace_after_counters(path, required=False):
+                    nonlocal replaced
+                    captured = read(path, required)
+                    if path == disks and (repeated or not replaced):
+                        write(sequence, str(int(sequence.read_text()) + 1) + "\n")
+                        write(disks, "253 0 dm-0 100 0 100 100 100 0 100 100 0 100 100\n")
+                        replaced = True
+                    return captured
+
+                with mock.patch.object(sources, "text", replace_after_counters):
+                    first = mt.fast_sample(sources, 0.9, {}, 100.0, "boot", None)
+                if repeated:
+                    self.assertNotIn("dm-0", first["diskstats"])
+                elif "dm-0" in first["diskstats"]:
+                    self.assertEqual(first["diskstats"]["dm-0"]["counters"]["reads"], 100)
+                    self.assertEqual(first["diskstats"]["dm-0"]["diskseq"], 42)
+                second = mt.fast_sample(sources, 0.9, {}, 110.0, "boot", first)
+                self.assertIn(second["diskstats"]["dm-0"].get("per_s", {}).get("reads"), (None, 0.0))
+                write(disks, "253 0 dm-0 150 0 150 150 150 0 150 150 0 150 150\n")
+                third = mt.fast_sample(sources, 0.9, {}, 120.0, "boot", second)
+                self.assertEqual(third["diskstats"]["dm-0"]["per_s"]["reads"], 5.0)
+
+    def test_reserves_preserve_zones_buddy_orders_and_metadata_counts(self) -> None:
+        write(self.fixture.proc / "zoneinfo", "Node 0, zone DMA\n  pages free 12\n min 2\n low 3\n high 4\n"
+              " boost 5\n managed 100\n protection: (0, 1)\nNode 1, zone Normal\n pages free 120\n min 20\n")
+        write(self.fixture.proc / "buddyinfo", "Node 0, zone DMA 1 2 3 4\nNode 1, zone Normal 5 6 7 8\nbad\n")
+        write(self.fixture.proc / "sys/fs/dentry-state", "100 50 45 0 7 -1\n")
+        write(self.fixture.proc / "sys/fs/inode-state", "200 100 0 0 0 0 0\n")
+        sources = self.fixture.sources()
+        sample, _, _ = mt.slow_sample(sources, list(mt.DEFAULT_WATCH), [], 100.0, "boot", None)
+        self.assertEqual(sample["reserves"], {
+            "zones": {"0:DMA": {"free": 12, "min": 2, "low": 3, "high": 4, "boost": 5, "managed": 100},
+                      "1:Normal": {"free": 120, "min": 20}},
+            "buddy": {"0:DMA": [1, 2, 3, 4], "1:Normal": [5, 6, 7, 8]},
+            "dentry_state": [100, 50, 45, 0, 7, -1], "inode_state": [200, 100, 0, 0, 0, 0, 0],
+        })
+        for name in ("zoneinfo", "buddyinfo", "sys/fs/dentry-state", "sys/fs/inode-state"):
+            (self.fixture.proc / name).unlink()
+        missing, _, _ = mt.slow_sample(sources, [], [], 160.0, "boot", sample)
+        self.assertEqual(missing["reserves"], {"zones": None, "buddy": None,
+                         "dentry_state": None, "inode_state": None})
+
+    def test_holder_union_adds_detail_without_expanding_process_attribution(self) -> None:
+        root = self.fixture.cgroup / "system.slice"
+        for number in range(6):
+            self.fixture.cgroup_files(root / f"resident-{number}.service", (50 + number) << 30, 0)
+            self.fixture.cgroup_files(root / f"swapped-{number}.service", 1 << 30, (30 + number) << 30)
+        inference = root / "ollama.service"
+        self.fixture.cgroup_files(inference, 1, 0)
+        # Include an inference parent even when the existing walk descends into its children.
+        self.fixture.cgroup_files(inference / "runner", 1, 0)
+        jobs = self.fixture.builds.with_name("jobs.slice")
+        self.fixture.cgroup_files(jobs, 1, 0)
+        sources = self.fixture.sources()
+        read = sources.text
+
+        def no_added_process_scan(path, required=False):
+            if path.name == "cgroup.procs" and (path.is_relative_to(root) or path.is_relative_to(jobs)):
+                self.fail(f"new process scan: {path}")
+            return read(path, required)
+
+        with mock.patch.object(sources, "text", no_added_process_scan):
+            sample, watched, _ = mt.slow_sample(sources, list(mt.DEFAULT_WATCH),
+                ["system.slice", f"user.slice/user-{UID}.slice"], 100.0, "boot", None)
+        recorded = {block["path"] for block in sample["cgroups"].values()}
+        for number in range(1, 6):
+            self.assertIn(f"system.slice/resident-{number}.service", recorded)
+            self.assertIn(f"system.slice/swapped-{number}.service", recorded)
+        self.assertNotIn("system.slice/resident-0.service", recorded)
+        self.assertNotIn("system.slice/swapped-0.service", recorded)
+        self.assertIn("system.slice/ollama.service", recorded)
+        self.assertIn(sources.cgroup_name(jobs), recorded)
+        self.assertEqual(set(sample["t9"]), set(watched))
+        self.assertFalse(any("resident-" in name or "swapped-" in name or "ollama" in name for name in watched))
+        self.assertEqual(sample["swap_holders"]["top_by_memory"][0]["cgroup"], "system.slice/resident-5.service")
+
+    def test_cgroup_detail_retains_complete_stats_pressure_and_ancestor_limits(self) -> None:
+        group = self.fixture.claude
+        for path in (group, *group.parents):
+            if path == self.fixture.cgroup:
+                break
+            for name in ("memory.high", "memory.max", "memory.swap.high", "memory.swap.max", "memory.zswap.max"):
+                write(path / name, "max\n")
+        write(group / "memory.max", "500\n")
+        write(group.parent / "memory.high", "300\n")
+        write(group.parent / "memory.swap.max", "0\n")
+        write(group.parent / "memory.zswap.max", "80\n")
+        write(group / "memory.zswap.current", "12\n")
+        write(group / "memory.stat", "anon 11\nfile 22\npgscan 33\nfuture_counter 44\n")
+        write(group / "cpu.stat", "usage_usec 100\nuser_usec 60\nsystem_usec 40\nnr_throttled 2\n"
+              "throttled_usec 30\nextra 999\n")
+        write(group / "io.stat", "259:0 rbytes=10 wbytes=20 rios=3 wios=4 dbytes=99\n"
+              "253:0 rbytes=5 wbytes=6 rios=7 wios=8\nmalformed\n")
+        write(group / "io.pressure", psi(200, 100))
+        write(group / "cpu.pressure", psi(300, 20))
+        sources = self.fixture.sources()
+        first, _, _ = mt.slow_sample(sources, list(mt.DEFAULT_WATCH),
+                                     [f"user.slice/user-{UID}.slice"], 100.0, "boot", None)
+        block = first["cgroups"][group.name]
+        self.assertEqual(block["stat"], {"anon": 11, "file": 22, "pgscan": 33, "future_counter": 44})
+        self.assertEqual(block["zswap_bytes"], 12)
+        self.assertEqual(block["effective_limits"], {"memory.high": 300, "memory.max": 500,
+                         "memory.swap.high": "max", "memory.swap.max": 0, "memory.zswap.max": 80})
+        self.assertEqual(block["limits"]["memory.max"], 500)
+        self.assertEqual(block["limits"]["memory.high"], "max")
+        self.assertEqual(block["cpu_stat"], {"usage_usec": 100, "user_usec": 60, "system_usec": 40,
+                         "nr_throttled": 2, "throttled_usec": 30})
+        self.assertEqual(block["io_stat"]["259:0"], {"rbytes": 10, "wbytes": 20, "rios": 3, "wios": 4})
+        self.assertEqual(block["pressure"]["memory"]["some"]["total_us"], 1_000_000)
+        self.assertEqual(block["pressure"]["io"]["full"]["total_us"], 100)
+        self.assertEqual(block["pressure"]["cpu"]["some"]["total_us"], 300)
+        self.assertEqual(len(block["identity"]), 2)
+        (group / "memory.zswap.current").unlink()
+        (group / "cpu.stat").unlink()
+        (group / "io.stat").unlink()
+        (group / "cpu.pressure").unlink()
+        (group.parent / "memory.max").unlink()
+        second, _, _ = mt.slow_sample(sources, list(mt.DEFAULT_WATCH),
+                                      [f"user.slice/user-{UID}.slice"], 160.0, "boot", first)
+        missing = second["cgroups"][group.name]
+        self.assertIsNone(missing["zswap_bytes"])
+        self.assertEqual(missing["cpu_stat"], {})
+        self.assertEqual(missing["io_stat"], {})
+        self.assertIsNone(missing["pressure"]["cpu"])
+        self.assertIsNone(missing["effective_limits"]["memory.max"])
+        self.assertIn(sources.cgroup_name(group.parent) + "/memory.max", missing["limits_unavailable"])
+        group.rename(group.with_name("old.scope"))
+        self.fixture.cgroup_files(group, 1, 0)
+        recreated, _, _ = mt.slow_sample(sources, list(mt.DEFAULT_WATCH),
+                                         [f"user.slice/user-{UID}.slice"], 220.0, "boot", second)
+        self.assertNotEqual(recreated["cgroups"][group.name]["identity"], block["identity"])
+
+    def test_storage_keeps_layers_and_omits_rates_after_reset_or_replacement(self) -> None:
+        disks = self.fixture.proc / "diskstats"
+        write(disks, "259 0 nvme0n1 10 2 30 40 50 6 70 80 9 100 110\n"
+              "253 0 dm-0 20 0 60 80 100 0 140 160 0 200 220\n"
+              "9 0 md0 1 0 3 4 5 0 7 8 0 10 11\n7 0 loop0 1 0 3 4 5 0 7 8 0 10 11\n"
+              "259 1 nvme0n1p1 1 0 3 4 5 0 7 8 0 10 11\nmalformed\n")
+        write(self.fixture.sys / "class/block/nvme0n1/diskseq", "42\n")
+        sources = self.fixture.sources()
+        first = mt.fast_sample(sources, 0.9, {}, 100.0, "boot", None)
+        self.assertEqual(set(first["diskstats"]), {"nvme0n1", "dm-0", "md0"})
+        disk = first["diskstats"]["nvme0n1"]
+        self.assertEqual(disk["device"], "259:0")
+        self.assertEqual(disk["diskseq"], 42)
+        self.assertEqual(disk["counters"], {"reads": 10, "read_sectors": 30, "read_ms": 40,
+                         "writes": 50, "write_sectors": 70, "write_ms": 80, "io_ms": 100, "weighted_io_ms": 110})
+        self.assertEqual(disk["in_flight"], 9)
+        write(disks, "259 0 nvme0n1 20 2 50 60 40 6 90 100 0 120 130\n")
+        second = mt.fast_sample(sources, 0.9, {}, 110.0, "boot", first)
+        self.assertEqual(second["diskstats"]["nvme0n1"]["per_s"]["read_sectors"], 2.0)
+        self.assertNotIn("writes", second["diskstats"]["nvme0n1"]["per_s"])
+        self.assertNotIn("in_flight", second["diskstats"]["nvme0n1"]["per_s"])
+        write(self.fixture.sys / "class/block/nvme0n1/diskseq", "43\n")
+        replaced = mt.fast_sample(sources, 0.9, {}, 120.0, "boot", second)
+        self.assertNotIn("per_s", replaced["diskstats"]["nvme0n1"])
+        disks.unlink()
+        missing = mt.fast_sample(sources, 0.9, {}, 130.0, "boot", replaced)
+        self.assertIsNone(missing["diskstats"])
+        write(disks, "259 0 nvme0n1 30 0 60 70 50 0 100 110 0 130 140\n")
+        resumed = mt.fast_sample(sources, 0.9, {}, 140.0, "boot", missing)
+        self.assertNotIn("per_s", resumed["diskstats"]["nvme0n1"])
+
+    def test_cpu_observations_use_some_pressure_and_reset_aware_time_deltas(self) -> None:
+        write(self.fixture.proc / "pressure/cpu", psi(1_000_000, 0))
+        write(self.fixture.proc / "stat", "cpu 100 20 30 400 50 6 7 8 9 10\ncpu0 1 2 3 4\n")
+        sources = self.fixture.sources()
+        first = mt.fast_sample(sources, 0.9, {}, 100.0, "boot", None)
+        self.assertEqual(first["cpu"]["time_ticks"], {"user": 100, "nice": 20, "system": 30, "idle": 400,
+                         "iowait": 50, "irq": 6, "softirq": 7, "steal": 8, "guest": 9, "guest_nice": 10})
+        self.assertEqual(list(first["t2"]["cpu"]), ["some"])
+        write(self.fixture.proc / "stat", "cpu 130 20 40 500 40\n")
+        write(self.fixture.proc / "pressure/cpu", psi(3_000_000, 0))
+        second = mt.fast_sample(sources, 0.9, {}, 110.0, "boot", first)
+        self.assertEqual(second["cpu"]["per_s"], {"user": 3.0, "nice": 0.0, "system": 1.0, "idle": 10.0})
+        self.assertEqual(second["t2"]["cpu"]["stall_fraction"], {"some": 0.2})
+        (self.fixture.proc / "stat").unlink()
+        (self.fixture.proc / "pressure/cpu").unlink()
+        missing = mt.fast_sample(sources, 0.9, {}, 120.0, "boot", second)
+        self.assertEqual(missing["cpu"], {"time_ticks": {}, "per_s": {}})
+        self.assertIsNone(missing["t2"]["cpu"])
+        write(self.fixture.proc / "stat", "cpu 160\n")
+        resumed = mt.fast_sample(sources, 0.9, {}, 130.0, "boot", missing)
+        self.assertEqual(resumed["cpu"]["per_s"], {})
+        rebooted = mt.fast_sample(sources, 0.9, {}, 140.0, "other-boot", resumed)
+        self.assertNotIn("per_s", rebooted["cpu"])
+        unknown = mt.fast_sample(sources, 0.9, {}, 150.0, None, None)
+        self.assertNotIn("per_s", mt.fast_sample(sources, 0.9, {}, 160.0, None, unknown)["cpu"])
+
+    def test_capacity_keeps_meminfo_and_each_swap_area_separate(self) -> None:
+        capacity = {"MemFree": 101, "Cached": 102, "SwapCached": 103, "SReclaimable": 104,
+                    "SUnreclaim": 105, "Unevictable": 106, "Mlocked": 107, "Committed_AS": 108,
+                    "CommitLimit": 109, "AnonHugePages": 110}
+        self.fixture.meminfo(**capacity)
+        write(self.fixture.proc / "swaps", "Filename Type Size Used Priority\n"
+              "/dev/dm-0 partition 16384 1234 10\n/var/swap\\040file file 32768 2345 -2\nmalformed\n")
+        sources = self.fixture.sources()
+        sample = mt.fast_sample(sources, 0.9, {}, 100.0, "boot", None)
+        self.assertEqual(sample["capacity_kib"], capacity)
+        self.assertEqual(sample["swap_areas"], [
+            {"path": "/dev/dm-0", "type": "partition", "size_kib": 16384, "used_kib": 1234, "priority": 10},
+            {"path": "/var/swap\\040file", "type": "file", "size_kib": 32768, "used_kib": 2345, "priority": -2},
+        ])
+        (self.fixture.proc / "swaps").unlink()
+        self.fixture.meminfo()
+        missing = mt.fast_sample(sources, 0.9, {}, 110.0, "boot", sample)
+        self.assertEqual(missing["capacity_kib"], {})
+        self.assertIsNone(missing["swap_areas"])
+        write(self.fixture.proc / "swaps", "Filename Type Size Used Priority\n")
+        self.assertEqual(mt.fast_sample(sources, 0.9, {}, 120.0, "boot", missing)["swap_areas"], [])
+
+    def test_reclaim_compaction_and_thp_counters_keep_individual_stalls(self) -> None:
+        counters = {
+            "workingset_refault_file": 100, "workingset_activate_anon": 2, "workingset_activate_file": 3,
+            "workingset_restore_anon": 4, "workingset_restore_file": 5,
+            "pgscan_anon": 6, "pgscan_file": 7, "pgsteal_anon": 8, "pgsteal_file": 9,
+            "pgscan_kswapd": 10, "pgscan_direct": 11, "pgsteal_kswapd": 12, "pgsteal_direct": 13,
+            "kswapd_low_wmark_hit_quickly": 14, "kswapd_high_wmark_hit_quickly": 15,
+            "swap_ra": 16, "swap_ra_hit": 17, "swpin_zero": 18, "swpout_zero": 19,
+            "compact_stall": 20, "compact_fail": 21, "compact_success": 22,
+            "compact_migrate_scanned": 23, "compact_free_scanned": 24,
+            "thp_fault_alloc": 25, "thp_fault_fallback": 26, "thp_fault_fallback_charge": 27,
+            "thp_collapse_alloc": 28, "thp_collapse_alloc_failed": 29, "thp_split_page": 30,
+            "thp_split_page_failed": 31, "thp_deferred_split_page": 32, "thp_split_pmd": 33,
+            "thp_swpout": 34, "thp_swpout_fallback": 35, "allocstall_device": 36,
+        }
+        self.fixture.vmstat(**counters)
+        sources = self.fixture.sources()
+        first = mt.fast_sample(sources, 0.9, {}, 100.0, "boot", None)
+        self.assertEqual(first["schema"], "memory-telemetry/v1")
+        self.assertEqual(first["schema_revision"], 2)
+        self.assertEqual({key: first["t3"]["counters"][key] for key in counters}, counters)
+        self.assertEqual(first["t3"]["counters"]["allocstall_normal"], 1)
+        self.assertEqual(first["t3"]["counters"]["allocstall"], 39)
+        self.fixture.vmstat(workingset_refault_file=130, compact_stall=10)
+        second = mt.fast_sample(sources, 0.9, {}, 115.0, "boot", first)
+        self.assertEqual(second["t3"]["per_s"]["workingset_refault_file"], 2.0)
+        self.assertNotIn("compact_stall", second["t3"]["per_s"])
+        self.assertNotIn("thp_fault_alloc", second["t3"]["counters"])
+
     def test_fast_sample_records_the_shared_counters(self) -> None:
         sources = self.fixture.sources()
         sample = mt.fast_sample(sources, 0.9, {"app-com.anthropic.Claude-100.scope": self.fixture.claude},
@@ -342,7 +601,7 @@ class SampleTests(FixtureCase):
         shutil.rmtree(self.fixture.sys / "class/drm")
         sample = mt.fast_sample(sources, 0.9, {}, 110.0, "boot", previous)
         self.assertIsNone(sample["t1"])
-        self.assertEqual(sample["t2"], {"memory": None, "io": None, "cgroups": {}})
+        self.assertEqual(sample["t2"], {"memory": None, "io": None, "cpu": None, "cgroups": {}})
         self.assertEqual(sample["t3"], {"counters": {}, "per_s": {}})
         self.assertIsNone(sample["t4"])
         self.assertEqual(sample["t8"], {"gtt_used_bytes": None, "gpu_active_kib": None, "gpu_reclaim_kib": None,
@@ -581,6 +840,46 @@ class ScheduleTests(unittest.TestCase):
 
 
 class CollectorTests(FixtureCase):
+    def test_policy_snapshots_record_start_each_utc_day_and_graceful_end(self) -> None:
+        write(self.fixture.proc / "sys/kernel/osrelease", "fixture-kernel\n")
+        write(self.fixture.proc / "sys/vm/swappiness", "100\n")
+        write(self.fixture.sys / "module/zswap/parameters/enabled", "Y\n")
+        write(self.fixture.sys / "kernel/mm/lru_gen/min_ttl_ms", "100\n")
+        write(self.fixture.sys / "kernel/mm/transparent_hugepage/enabled", "always [madvise] never\n")
+        start = 1_791_590_400.0  # a UTC midnight
+        with mock.patch.object(mt.time, "time", return_value=start):
+            collector = self.collector()
+            collector.tick(0.0)
+        with mock.patch.object(mt.time, "time", return_value=start + 10):
+            collector.tick(0.0)
+        write(self.fixture.proc / "sys/vm/swappiness", "101\n")
+        with mock.patch.object(mt.time, "time", return_value=start + 86400):
+            collector.tick(0.0)
+        with mock.patch.object(mt.time, "time", return_value=start + 86410):
+            collector.close()
+        records = mt.read_samples(self.state / "samples", start, start + 90000)
+        snapshots = [record for record in records if record["kind"] == "metadata"]
+        self.assertEqual([record["reason"] for record in snapshots], ["start", "daily", "end"])
+        first = snapshots[0]
+        self.assertEqual(first["schema_revision"], 2)
+        self.assertEqual(first["kernel"], "fixture-kernel")
+        self.assertEqual(first["boot"], "0123abcd00004000800000000000beef")
+        self.assertEqual(first["recorder_sha256"], hashlib.sha256(SCRIPT.read_bytes()).hexdigest())
+        self.assertEqual(first["vm"]["swappiness"], "100")
+        self.assertEqual(snapshots[1]["vm"]["swappiness"], "101")
+        self.assertEqual(first["zswap"]["enabled"], "Y")
+        self.assertEqual(first["mglru"]["min_ttl_ms"], "100")
+        self.assertEqual(first["thp"]["enabled"], "always [madvise] never")
+        self.assertIsNone(first["vm"]["overcommit_memory"])
+        self.assertEqual(first["oomd"]["effective"]["global"]["Swap Used Limit"], "90.00%")
+        self.assertEqual(first["oomd"]["effective"]["pressure_monitored"]["/system.slice"],
+                         {"Memory Pressure Limit": "80.00%", "Memory Pressure Duration": "30s"})
+        self.assertNotIn("UNRELATED-SENTINEL", json.dumps(snapshots))
+        self.assertIn("proc:sys/vm/overcommit_memory", first["unavailable"])
+        self.assertGreaterEqual(first["oomd"]["effective"]["cpu_s"], 0)
+        fast = [record for record in records if record["kind"] == "fast"]
+        self.assertGreaterEqual(fast[0]["collector"]["oomctl_cpu_s"], 0)
+
     def collector(self, *extra: str):
         options = mt.parse_arguments(["run", "--state-dir", str(self.state), *self.fixture.options(), *extra])
         journal = mt.Journal(str(self.base / "no-journalctl"), self.state / "journal.cursor")  # never started
@@ -1659,12 +1958,12 @@ class RunTests(FixtureCase):
         samples = mt.read_samples(self.state / "samples", 0, time.time() + 60)
         fast = [sample for sample in samples if sample["kind"] == "fast"]
         slow = [sample for sample in samples if sample["kind"] == "slow"]
-        self.assertEqual(set(fast[-1]["collector"]), {"cpu_s", "rss_anon_kib", "rss_file_kib", "hwm_kib",
+        self.assertEqual(set(fast[-1]["collector"]), {"cpu_s", "oomctl_cpu_s", "rss_anon_kib", "rss_file_kib", "hwm_kib",
                                                      "bytes_written", "lag_ms", "journal", "journal_ignored",
                                                      "journal_cpu_s", "journal_rss_anon_kib",
                                                      "journal_rss_file_kib"}
                          if sys.platform == "linux" else
-                         {"cpu_s", "rss_anon_kib", "rss_file_kib", "hwm_kib", "bytes_written", "lag_ms", "journal",
+                         {"cpu_s", "oomctl_cpu_s", "rss_anon_kib", "rss_file_kib", "hwm_kib", "bytes_written", "lag_ms", "journal",
                           "journal_ignored"})
         self.assertTrue(all("collector_cgroup" in sample and "collector" not in sample for sample in slow))
         # Rates need an earlier sample from the same boot, so the first sample after a start has none.
@@ -1932,12 +2231,31 @@ class RunTests(FixtureCase):
                       "a sample reporting journalctl unavailable")
         self.stop(process)
 
+    def test_unavailable_or_unrecognized_oomd_snapshot_does_not_prevent_sampling(self) -> None:
+        for command, output, expected in (
+            (str(self.base / "no-oomctl"), None, "FileNotFoundError"),
+            (str(self.fixture.oomctl), "raise SystemExit(7)\n", "exit: 7"),
+            (str(self.fixture.oomctl), "print('UNRELATED-SENTINEL')\n", "unrecognized oomctl output"),
+        ):
+            with self.subTest(expected=expected):
+                if output is not None:
+                    write(self.fixture.oomctl, f"#!{sys.executable}\n" + output)
+                result = subprocess.run([sys.executable, "-I", "-B", str(SCRIPT), "sample",
+                    *self.fixture.options("--oomctl", command)], text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                sample = json.loads(result.stdout)
+                self.assertEqual(sample["metadata"]["oomd"]["effective"]["unavailable"], expected)
+                self.assertEqual(sample["fast"]["kind"], "fast")
+                self.assertNotIn("UNRELATED-SENTINEL", result.stdout)
+                self.assertFalse(self.state.exists())
+
     def test_sample_and_report_commands(self) -> None:
         result = subprocess.run([sys.executable, "-I", "-B", str(SCRIPT), "sample", *self.fixture.options()],
                                 env=self.environment, text=True, capture_output=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         sample = json.loads(result.stdout)
         self.assertEqual((sample["fast"]["kind"], sample["slow"]["kind"]), ("fast", "slow"))
+        self.assertEqual(sample["metadata"]["reason"], "sample")
         for secret in SECRETS:
             self.assertNotIn(secret, result.stdout)
         self.assertFalse(self.state.exists())
