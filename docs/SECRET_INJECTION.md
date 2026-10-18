@@ -34,8 +34,8 @@ request. The configured consumer, `mcp-remote` without `--enable-proxy`,
 ignores those variables too; it keeps the caller's environment. The resolved
 token reaches `gh` as `GH_TOKEN` only inside the check, so a `GH_TOKEN` the
 caller set reaches the consumer unchanged. The check compares the login with
-the rendered expectation and reports only a generic failure, so a stale or
-cross-host credential cannot silently start the MCP process.
+the rendered expectation, so a stale or cross-host credential cannot silently
+start the MCP process.
 
 The check runs on every `github` launch. An inherited provenance marker never
 lets the launcher reuse injected GitHub values. Every check failure stops the
@@ -43,6 +43,26 @@ launch, even with `--best-effort`: a login mismatch, missing metadata, a missing
 or untrusted `gh`, a `gh` failure or timeout, or an unreachable API.
 Best-effort covers only the credential provider, before the check; an
 unverified credential never starts the consumer.
+
+The check compares the login itself and never shows anything `gh` prints; it
+reads only the HTTP status that `gh` reports with an error. Once the checker is
+trusted, each failure reports `GitHub identity self-check failed:` followed by
+its cause alone, without the token or either login:
+
+- `cannot create a private gh configuration under TMPDIR`: `TMPDIR` is missing
+  or not writable.
+- `another user can change TMPDIR or a directory above it`: the private
+  configuration fails the directory rule below.
+- `the token belongs to a different GitHub account than the profile expects`:
+  the stored token is another account's.
+- `GitHub rejected the token (HTTP 401: expired or revoked)`: replace the
+  stored token.
+- `GitHub refused the request (HTTP <status>)`: another HTTP error response
+  whose status `gh` reports, such as a policy block or a JSON server error.
+- `no HTTP status was reported`: an unreachable network, a `gh` or launcher
+  failure, or an error response that `gh` reports without its status, such as
+  a non-JSON error page.
+- `no answer from GitHub within 3 seconds`: the bounded check timed out.
 
 The checker is the first `gh` on `PATH`, resolved through symbolic links. It
 must belong to root or the current user and must not be group- or
