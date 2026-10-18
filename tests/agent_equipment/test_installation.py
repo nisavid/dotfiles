@@ -39,6 +39,7 @@ PACKAGE_NAMES = (
     "authoring.py",
     "authorization.py",
     "canonical.py",
+    "direct_mcp.py",
     "discovery.py",
     "inventory.py",
     "model.py",
