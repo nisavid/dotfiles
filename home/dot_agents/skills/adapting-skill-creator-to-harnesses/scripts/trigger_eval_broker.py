@@ -385,8 +385,13 @@ class BrokerHandler(http.server.BaseHTTPRequestHandler):
         if data == b"[DONE]":
             return b"data: [DONE]\n\n"
         value = json.loads(data)
-        if self._is_error(value) or not isinstance(value.get("type"), str) or not value["type"].startswith("response."):
+        if self._is_error(value) or not isinstance(value.get("type"), str):
             raise ValueError("Upstream error")
+        # ChatGPT mixes private account/rate-limit and timing metadata into
+        # valid Responses streams. Discard these frames without forwarding them
+        # or interrupting inference; explicit errors still fail above.
+        if not value["type"].startswith("response."):
+            return b""
         # Rebuild SSE framing, dropping all unneeded upstream fields and headers.
         return b"data: " + self._serialize_success(value) + b"\n\n"
 

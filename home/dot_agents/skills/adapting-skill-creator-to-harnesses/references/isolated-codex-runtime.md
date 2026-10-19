@@ -60,7 +60,12 @@ read-only policy or nested sandbox support. ACPX's after-the-fact diagnostics
 still decide whether the probe obeyed the skill-reading measurement contract.
 Shell access grants no host or broker filesystem/process access.
 
-All three resources are removed after completion, exceptions, and timeouts.
+All three resources are removed after completion, exceptions, timeouts, and
+catchable termination (SIGTERM, SIGINT, or SIGHUP). Both CLI runners use the
+same main-thread controller. Termination during resource creation is deferred
+until that engine operation finishes; repeated signals cannot interrupt cleanup.
+SIGKILL, a controller crash, or host power loss cannot run Python cleanup;
+remove any surviving `trigger-eval-*` containers and socket volumes before reuse.
 Container teardown terminates descendants and ACP sessions. `--keep-probe-homes`
 retains only host-side generated probe files, never a container home or auth.
 If the engine becomes unavailable during cleanup, the runner reports the

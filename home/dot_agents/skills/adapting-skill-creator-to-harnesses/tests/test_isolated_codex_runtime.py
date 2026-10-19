@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -203,6 +204,41 @@ class IsolatedCodexRuntimeTests(unittest.TestCase):
             self.assert_resources_removed(probe)
             with self.assertRaisesRegex(runtime.IsolationError, "not active"):
                 probe.run(["codex", "exec", "another fixture"], timeout=2)
+
+    def test_termination_during_setup_execution_and_cleanup_removes_resources(self) -> None:
+        for stage in ("setup", "execution", "cleanup"):
+            with self.subTest(stage=stage):
+                self.engine.broker.stdin = RetainedInput()
+                self.engine.broker.stdout = io.StringIO("READY\n")
+                probe = self.create_runtime()
+                previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+                sent = False
+
+                def terminate(argv, kwargs):
+                    nonlocal sent
+                    target = {"setup": "--detach", "execution": "--workdir=/work", "cleanup": "rm"}[stage]
+                    if target in argv and not sent:
+                        sent = True
+                        signal.raise_signal(signal.SIGTERM)
+                    if argv[1:3] == ["rm", "--force"]:
+                        # Another termination during teardown must not abandon
+                        # the remaining container or socket volume.
+                        signal.raise_signal(signal.SIGTERM)
+
+                self.engine.failure = terminate
+                with self.assertRaises(SystemExit) as caught:
+                    with probe:
+                        probe.run(["codex", "exec", "fixture"], timeout=2)
+                self.assertTrue(sent)
+                self.assertEqual(caught.exception.code, 128 + signal.SIGTERM)
+                self.assert_resources_removed(probe)
+                self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+
+    def test_normal_exit_restores_signal_handlers(self) -> None:
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+        with self.create_runtime():
+            self.assertNotEqual(signal.getsignal(signal.SIGTERM), previous[signal.SIGTERM])
+        self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
 
     def test_nonzero_container_removal_is_reported_while_other_cleanup_continues(self) -> None:
         probe = self.create_runtime()

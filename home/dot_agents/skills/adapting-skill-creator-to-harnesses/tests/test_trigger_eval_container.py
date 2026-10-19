@@ -6,9 +6,11 @@ import errno
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -148,6 +150,46 @@ print(json.dumps({
             with runtime:
                 runtime.run(["python3", "-c", "import subprocess,time; subprocess.Popen(['sleep','300']); time.sleep(300)"], timeout=1)
         self.assert_removed(runtime)
+
+    def test_sigterm_of_controller_removes_live_tools_broker_and_volume(self) -> None:
+        runtime = self.runtime()
+        code = """
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from isolated_codex_runtime import IsolatedCodexRuntime
+runtime = IsolatedCodexRuntime(codex_home=Path(sys.argv[2]), skill_path=Path(sys.argv[3]))
+runtime.worker_name, runtime.broker_name, runtime.volume_name = sys.argv[4:7]
+with runtime:
+    runtime.run(['python3', '-c', "import subprocess,time; from pathlib import Path; subprocess.Popen(['sleep','300']); Path('/work/tool-started').touch(); time.sleep(300)"], timeout=300)
+"""
+        child = subprocess.Popen([
+            sys.executable, "-B", "-c", code, str(SKILL_DIR / "scripts"),
+            str(self.codex_home), str(self.skill_path), runtime.worker_name,
+            runtime.broker_name, runtime.volume_name,
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline and child.poll() is None:
+                started = subprocess.run([
+                    "docker", "exec", runtime.worker_name, "test", "-f", "/work/tool-started",
+                ], capture_output=True, timeout=5)
+                if started.returncode == 0:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail("Controller did not start the real tool and descendant")
+            child.send_signal(signal.SIGTERM)
+            stdout, stderr = child.communicate(timeout=60)
+            self.assertEqual(child.returncode, 128 + signal.SIGTERM, stdout + stderr)
+            self.assert_removed(runtime)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=10)
+            # Keep a failed regression from leaking fixtures on the CI host.
+            subprocess.run(["docker", "rm", "--force", runtime.worker_name, runtime.broker_name], capture_output=True, timeout=15)
+            subprocess.run(["docker", "volume", "rm", runtime.volume_name], capture_output=True, timeout=15)
 
     def test_next_probe_has_no_previous_session_files(self) -> None:
         first = self.runtime()

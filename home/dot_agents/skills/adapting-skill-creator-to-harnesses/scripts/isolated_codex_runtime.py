@@ -13,6 +13,7 @@ import os
 import re
 import select
 import shutil
+import signal
 import subprocess
 import uuid
 from pathlib import Path
@@ -140,6 +141,10 @@ class IsolatedCodexRuntime:
         self._broker: subprocess.Popen[str] | None = None
         self._entered = False
         self._resources_started = False
+        self._starting = False
+        self._closing = False
+        self._termination_signal: int | None = None
+        self._previous_handlers: dict[int, Any] = {}
         self._host_env = {
             key: value for key, value in os.environ.items()
             if key in {"PATH", "HOME", "XDG_RUNTIME_DIR", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "CONTAINER_HOST"}
@@ -155,7 +160,26 @@ class IsolatedCodexRuntime:
         result = self._engine(args, input=input)
         if result.returncode:
             raise IsolationError("Container runtime operation failed; verify the local engine and build the documented runtime image.")
+        self._check_termination()
         return result
+
+    def _check_termination(self) -> None:
+        if self._termination_signal is not None:
+            raise SystemExit(128 + self._termination_signal)
+
+    def _handle_termination(self, signum: int, _frame: Any) -> None:
+        self._termination_signal = self._termination_signal or signum
+        # Let resource creation finish before removing it. Repeated signals
+        # must also leave the bounded teardown sequence uninterrupted.
+        if not self._starting and not self._closing:
+            self._check_termination()
+
+    def _install_signal_handlers(self) -> None:
+        # Both CLI runners are synchronous. Refuse non-main-thread use before
+        # allocating resources rather than silently losing termination cleanup.
+        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            previous = signal.signal(signum, self._handle_termination)
+            self._previous_handlers[signum] = previous
 
     def __enter__(self) -> IsolatedCodexRuntime:
         resolved = shutil.which(self.engine)
@@ -175,6 +199,8 @@ class IsolatedCodexRuntime:
             name = None
         credentials = load_credentials(self.codex_home)
         try:
+            self._starting = True
+            self._install_signal_handlers()
             self._resources_started = True
             self._checked(["volume", "create", self.volume_name])
             common = [
@@ -201,6 +227,7 @@ class IsolatedCodexRuntime:
             ready, _, _ = select.select([self._broker.stdout], [], [], self.timeout)
             if not ready or self._broker.stdout.readline(128) != "READY\n":
                 raise IsolationError("Credential broker did not become ready; no probe was started")
+            self._check_termination()
             self._checked([
                 "run", "--rm", "--detach", "--name", self.worker_name, *common,
                 "--network=none",
@@ -216,6 +243,8 @@ class IsolatedCodexRuntime:
                 "python3", "-I", "/opt/trigger/trigger_eval_worker.py", "init",
             ], input=json.dumps({"skills": skills, "config": probe_config(name)}))
             self._entered = True
+            self._starting = False
+            self._check_termination()
             return self
         except BaseException:
             self.close()
@@ -240,6 +269,18 @@ class IsolatedCodexRuntime:
             raise
 
     def close(self) -> None:
+        self._closing = True
+        try:
+            self._close_resources()
+        finally:
+            for signum, previous in self._previous_handlers.items():
+                signal.signal(signum, previous)
+            self._previous_handlers.clear()
+            self._starting = False
+            self._closing = False
+        self._check_termination()
+
+    def _close_resources(self) -> None:
         self._entered = False
         if not self._resources_started:
             return

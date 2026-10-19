@@ -361,6 +361,36 @@ class BrokerTests(unittest.TestCase):
         self.assertIn(b"Inference failed", returned)
         self.assertNotIn(FIXTURE_UPSTREAM_TEXT.encode(), returned)
 
+    def test_sse_private_metadata_is_dropped_without_interrupting_responses(self):
+        events = [
+            {"type": "codex.rate_limits", "private": FIXTURE_BEARER},
+            {"type": "response.created", "response": {"id": "fixture-response"}},
+            {"type": "codex.response.metadata", "private": FIXTURE_UPSTREAM_TEXT},
+            {"type": "response.output_text.delta", "delta": "TRIGGER_SENTINEL"},
+            {"type": "responsesapi.websocket_timing", "private": "fixture-timing"},
+            {"type": "response.completed", "response": {"status": "completed"}},
+        ]
+        body = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
+        with running_broker(FakeFactory(lambda: FakeResponse(body, content_type="text/event-stream"))) as (path, _, _):
+            status, _, returned = request(path)
+        self.assertEqual(status, 200)
+        expected = [event for event in events if event["type"].startswith("response.")]
+        frames = returned.split(b"\n\n")
+        self.assertEqual([json.loads(frame[6:]) for frame in frames[:-2]], expected)
+        self.assertEqual(frames[-2], b"data: [DONE]")
+        for private in (FIXTURE_BEARER, FIXTURE_UPSTREAM_TEXT, "fixture-timing", "Inference failed"):
+            self.assertNotIn(private.encode(), returned)
+
+    def test_sse_invalid_types_and_private_error_frames_still_fail_closed(self):
+        for event in ({}, {"type": None}, {"type": []}, {"type": 3},
+                      {"type": "codex.response.metadata", "error": {"message": FIXTURE_UPSTREAM_TEXT}}):
+            with self.subTest(event=event):
+                body = b"data: " + json.dumps(event).encode() + b"\n\n"
+                with running_broker(FakeFactory(lambda: FakeResponse(body, content_type="text/event-stream"))) as (path, _, _):
+                    status, _, returned = request(path)
+                self.assertEqual(status, 502)
+                self.assertNotIn(FIXTURE_UPSTREAM_TEXT.encode(), returned)
+
     def test_request_response_and_time_limits(self):
         with running_broker() as (path, server, factory):
             server.requests_started = broker.MAX_REQUESTS
