@@ -1171,6 +1171,195 @@ output=$(env SECRET_EXEC_FALLBACK_PROFILES='firecrawl' \
   -s $FAKE_PASS_LOG ]] ||
   fail "a fallback marker for another profile must not skip resolution: $output"
 
+# npm searches its working directory and each parent for the nearest
+# package.json, so a stray one above the caller's directory, such as a
+# devEngines entry that names another package manager, stopped every
+# credential-bearing npx launch. The stand-in npx repeats that search, records
+# which copy ran and where, and reports where it started.
+npx_project=$test_dir/npx-project
+npx_session=$npx_project/session
+mkdir -p -- "$npx_session/tools"
+print -r -- '{"name":"stray","devEngines":{"packageManager":{"name":"pnpm","version":"12.11.2"}}}' \
+  > "$npx_project/package.json"
+cat > "$fake_bin/npx" <<'EOF'
+#!/usr/bin/env zsh
+marker=npx
+directory=$(pwd -P)
+[[ -z ${NPX_RECORD:-} ]] || print -r -- "$marker $directory" >> "$NPX_RECORD"
+while :; do
+  if [[ -f $directory/package.json ]]; then
+    if grep -q devEngines -- "$directory/package.json"; then
+      print -u2 -r -- 'npm error code EBADDEVENGINES'
+      exit 1
+    fi
+    break
+  fi
+  [[ $directory != / ]] || break
+  directory=${directory:h}
+done
+print -r -- "$marker physical=$(pwd -P) args=$* context7=${CONTEXT7_API_KEY:+set}"
+EOF
+chmod +x "$fake_bin/npx"
+cp -- "$fake_bin/npx" "$npx_session/tools/npx"
+# Through a symlinked directory, `..` leads where the kernel says it does, so
+# the copy there names itself.
+npx_elsewhere=$npx_project/elsewhere
+mkdir -p -- "$npx_elsewhere/linked" "$npx_elsewhere/tools"
+sed 's/^marker=npx$/marker=elsewhere-npx/' "$fake_bin/npx" > "$npx_elsewhere/tools/npx"
+chmod +x "$npx_elsewhere/tools/npx"
+ln -s -- "$npx_elsewhere/linked" "$npx_session/link"
+# A shell repairs a stale PWD when it starts, so this npx reads it raw.
+npx_environment=$test_dir/npx-environment/npx
+mkdir -p -- "${npx_environment:h}"
+cat > "$npx_environment" <<'EOF'
+#!/usr/bin/awk -f
+BEGIN { print "PWD=" (("PWD" in ENVIRON) ? ENVIRON["PWD"] : "unset") }
+EOF
+chmod +x "$npx_environment"
+cat > "$fake_bin/print-directory" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "directory=$(pwd -P)"
+EOF
+chmod +x "$fake_bin/print-directory"
+export NPX_RECORD=$test_dir/npx-record
+npx_injected='npx physical=/ args=-y pinned-mcp@1.0.0 context7=set'
+npx_scrubbed='npx physical=/ args=-y pinned-mcp@1.0.0 context7='
+
+# Runs one launch path from the session directory. Best-effort expects the
+# provider to fail, so its fallback starts the target.
+launch_from_session() {
+  local launch_path=$1
+  shift
+  case $launch_path in
+    normal)
+      (cd -- "$npx_session" && zsh "$launcher" context7 -- "$@")
+      ;;
+    reuse)
+      (cd -- "$npx_session" &&
+        env SECRET_EXEC_INJECTED_PROFILES=context7 \
+          "$context7_field=inherited-context7" zsh "$launcher" context7 -- "$@")
+      ;;
+    fallen-back)
+      (cd -- "$npx_session" &&
+        env SECRET_EXEC_FALLBACK_PROFILES=context7 zsh "$launcher" context7 -- "$@")
+      ;;
+    best-effort)
+      (cd -- "$npx_session" &&
+        zsh "$launcher" --best-effort context7 -- "$@" 2>/dev/null)
+      ;;
+  esac
+}
+
+set +e
+output=$(cd -- "$npx_session" && npx -y pinned-mcp@1.0.0 2>&1)
+npx_status=$?
+set -e
+(( npx_status != 0 )) && [[ $output == 'npm error code EBADDEVENGINES' ]] ||
+  fail "the stand-in npx must reproduce the stray devEngines failure: $output"
+for launch_path in normal reuse fallen-back best-effort; do
+  for npx_command in npx "$fake_bin/npx" "$npx_environment"; do
+    npx_arguments=(-y pinned-mcp@1.0.0)
+    if [[ $npx_command == $npx_environment ]]; then
+      npx_arguments=()
+      npx_expected='PWD=/'
+    elif [[ $launch_path == (normal|reuse) ]]; then
+      npx_expected=$npx_injected
+    else
+      npx_expected=$npx_scrubbed
+    fi
+    : > "$FAKE_PASS_LOG"
+    : > "$FAKE_NOTIFY_LOG"
+    [[ $launch_path != best-effort ]] || : > "$FAKE_PASS_ITEM_EXIT_124"
+    set +e
+    output=$(launch_from_session "$launch_path" "$npx_command" "${npx_arguments[@]}")
+    npx_status=$?
+    set -e
+    rm -f -- "$FAKE_PASS_ITEM_EXIT_124"
+    (( npx_status == 0 )) && [[ $output == "$npx_expected" ]] ||
+      fail "a $launch_path npx launch ($npx_command) must start from the root directory: status=$npx_status output=$output"
+    [[ $launch_path != reuse || ! -s $FAKE_PASS_LOG ]] ||
+      fail 'a reused npx launch must skip resolution'
+    [[ $launch_path != best-effort ]] || wait_for_notify_log ||
+      fail 'a best-effort npx fallback must notify'
+  done
+done
+
+# A relative command path resolves from the caller's directory, so it keeps
+# that directory: every shape runs, or fails, exactly as a direct exec from
+# there does, and stray npm files above that directory still apply.
+for npx_command npx_expected in \
+  tools/npx "npx $npx_session" \
+  ./tools/npx "npx $npx_session" \
+  link/../tools/npx "elsewhere-npx $npx_session" \
+  tools/npx/ '' \
+  missing/../tools/npx ''; do
+  : > "$NPX_RECORD"
+  set +e
+  (cd -- "$npx_session" && "$npx_command" -y pinned-mcp@1.0.0) > /dev/null 2>&1
+  direct_status=$?
+  set -e
+  direct_record=$(<"$NPX_RECORD")
+  [[ $direct_record == "$npx_expected" ]] ||
+    fail "a direct exec of $npx_command must run the expected copy: $direct_record"
+  : > "$NPX_RECORD"
+  set +e
+  (cd -- "$npx_session" &&
+    zsh "$launcher" context7 -- "$npx_command" -y pinned-mcp@1.0.0) > /dev/null 2>&1
+  launched_status=$?
+  set -e
+  [[ $launched_status == $direct_status && $(<"$NPX_RECORD") == "$direct_record" ]] ||
+    fail "a relative npx path ($npx_command) must run, or fail, as a direct exec does"
+done
+# The same holds once the caller's directory is gone: resolved from the root
+# directory instead, this path would name the stand-in.
+npx_deleted=$test_dir/npx-deleted
+npx_through_parent=..$fake_bin/npx
+mkdir -p -- "$npx_deleted"
+: > "$NPX_RECORD"
+set +e
+(cd -- "$npx_deleted" && rmdir -- "$npx_deleted" && "$npx_through_parent") \
+  > /dev/null 2>&1
+direct_status=$?
+set -e
+direct_record=$(<"$NPX_RECORD")
+mkdir -p -- "$npx_deleted"
+: > "$NPX_RECORD"
+set +e
+(cd -- "$npx_deleted" && rmdir -- "$npx_deleted" &&
+  zsh "$launcher" context7 -- "$npx_through_parent") > /dev/null 2>&1
+launched_status=$?
+set -e
+[[ $launched_status == $direct_status && $(<"$NPX_RECORD") == "$direct_record" ]] ||
+  fail 'a relative npx path from a deleted directory must fail as a direct exec does'
+
+output=$(cd -- "$npx_session" && zsh "$launcher" context7 -- print-directory)
+[[ $output == "directory=$npx_session" ]] ||
+  fail "a target other than npx must keep the caller's directory: $output"
+
+# Best-effort covers the provider only: once every value has resolved, a
+# failed start from the root directory fails closed instead of falling back.
+# A copy beside the launcher keeps its helpers and fails that start.
+cd_failure_launcher=$fixture_local_bin/secret-exec-cd-failure
+sed 's#builtin cd -q / #builtin cd -q /nonexistent-secret-exec-root #' \
+  "$launcher" > "$cd_failure_launcher"
+[[ $(grep -c nonexistent-secret-exec-root "$cd_failure_launcher") == 1 ]] ||
+  fail 'the failing root-directory start must patch exactly one cd'
+chmod +x "$cd_failure_launcher"
+: > "$FAKE_NOTIFY_LOG"
+: > "$NPX_RECORD"
+set +e
+output=$(cd -- "$npx_session" &&
+  zsh "$cd_failure_launcher" --best-effort context7 -- npx -y pinned-mcp@1.0.0 2>&1)
+npx_status=$?
+set -e
+zselect -t 50 2>/dev/null || true
+(( npx_status == 1 )) &&
+  [[ $output == *'secret-exec: cannot start npx from the root directory'* &&
+    $output != *'without context7 credentials'* &&
+    ! -s $NPX_RECORD && ! -s $FAKE_NOTIFY_LOG ]] ||
+  fail "a failed start from the root directory must fail closed: status=$npx_status output=$output"
+rm -f -- "$cd_failure_launcher"
+
 : > "$FAKE_NOTIFY_LOG"
 for best_effort_contract in \
   '--best-effort' \
