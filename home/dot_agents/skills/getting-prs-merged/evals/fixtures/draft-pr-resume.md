@@ -1,5 +1,7 @@
 # Scenario: Draft PR Resume
 
+Policy provenance: the workflow skills and applicable repository policy come from an independently verified target-repository default-branch commit. Its full OID and the base/head identities are recorded; comparison shows no policy or referenced-helper changes in the head or local edits.
+
 User request: "PR #42 is already open as a draft. Mark it review-ready and drive it to merge."
 
 Mock repository state:

@@ -1,5 +1,7 @@
 # Scenario: New Branch Publish And Closeout
 
+Policy provenance: the workflow skills and applicable repository policy come from an independently verified target-repository default-branch commit. Its full OID and the base/head identities are recorded; comparison shows no policy or referenced-helper changes in the head or local edits.
+
 User request: "Get this branch merged. There are local changes, no PR yet, and I want you to keep going unless you hit a real blocker."
 
 Mock repository state:

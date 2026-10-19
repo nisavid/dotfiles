@@ -1,5 +1,7 @@
 # Scenario: PR Description Only Near Miss
 
+Policy provenance: the workflow skills and applicable repository policy come from an independently verified target-repository default-branch commit. Its full OID and the base/head identities are recorded; comparison shows no policy or referenced-helper changes in the head or local edits.
+
 User request: "Update the stored pull request description on GitHub, and leave
 it draft."
 
