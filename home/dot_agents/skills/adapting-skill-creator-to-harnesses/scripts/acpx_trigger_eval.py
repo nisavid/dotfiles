@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -25,6 +24,17 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+from isolated_codex_runtime import (
+    DEFAULT_IMAGE,
+    PROBE_CODEX_HOME,
+    PROBE_CWD,
+    PROBE_HOME,
+    IsolationError,
+    IsolatedCodexRuntime,
+    add_runtime_arguments,
+    probe_config,
+)
 
 from trigger_eval_core import (
     EFFORTS,
@@ -37,7 +47,6 @@ from trigger_eval_core import (
     parse_frontmatter,
     skill_body_load_diagnostic,
     slugify,
-    source_skill_paths,
     summarize_trigger_results,
     tool_call_diagnostic,
     write_probe_skill,
@@ -47,22 +56,11 @@ from trigger_eval_core import (
 
 DRIVER_ID = "acpx-codex"
 DETECTOR = "acpx-codex-sentinel"
-CODEX_MODE = "read-only"
+# These settings apply only inside the externally isolated evaluator container.
+CODEX_MODE = "danger-full-access"
 CODEX_APPROVAL_POLICY = "never"
 CODEX_WEB_SEARCH = "disabled"
 CODEX_SHELL_TOOL = True
-LOCKED_CODEX_CONFIG = f"""sandbox_mode = "{CODEX_MODE}"
-approval_policy = "{CODEX_APPROVAL_POLICY}"
-web_search = "{CODEX_WEB_SEARCH}"
-
-[features]
-shell_tool = {str(CODEX_SHELL_TOOL).lower()}
-"""
-GLOBAL_SKILL_ROOTS = (
-    Path.home() / ".agents" / "skills",
-    Path.home() / ".codex" / "skills",
-    Path.home() / ".local" / "share" / "chezmoi" / "home" / "dot_agents" / "skills",
-)
 
 
 def parse_json_stream(stdout: str) -> list[Any]:
@@ -200,21 +198,12 @@ def build_base_cmd(
 def completed_result(
     cmd: list[str],
     *,
-    cwd: Path,
-    env: dict[str, str],
+    runtime: IsolatedCodexRuntime,
     timeout: int,
 ) -> tuple[int | None, str, str, bool, float]:
     started = time.monotonic()
     try:
-        completed = subprocess.run(
-            cmd,
-            cwd=cwd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-        )
+        completed = runtime.run(cmd, timeout=timeout)
         return completed.returncode, completed.stdout, completed.stderr, False, time.monotonic() - started
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout or ""
@@ -226,235 +215,80 @@ def completed_result(
         return None, stdout, stderr, True, time.monotonic() - started
 
 
-def env_for_home(home: Path, codex_home: Path | None) -> dict[str, str]:
-    env = os.environ.copy()
-    env["HOME"] = str(home)
-    if codex_home:
-        env["CODEX_HOME"] = str(codex_home)
-    env.setdefault("NO_COLOR", "1")
-    return env
-
-
-def render_locked_codex_config(skill_paths: list[Path]) -> str:
-    blocks = [LOCKED_CODEX_CONFIG.rstrip()]
-    for skill_path in skill_paths:
-        blocks.extend(
-            [
-                "",
-                "[[skills.config]]",
-                f"path = {json.dumps(str(skill_path))}",
-                "enabled = true",
-            ]
-        )
-    return "\n".join(blocks) + "\n"
-
-
-def write_codex_config(runtime_codex_home: Path, skill_paths: list[Path]) -> str:
-    config_text = render_locked_codex_config(skill_paths)
-    (runtime_codex_home / "config.toml").write_text(config_text, encoding="utf-8")
-    return config_text
-
-
-def write_locked_codex_home(runtime_codex_home: Path, source_codex_home: Path | None) -> dict[str, Any]:
-    runtime_codex_home.mkdir(parents=True, exist_ok=True)
-    config_path = runtime_codex_home / "config.toml"
-    config_text = write_codex_config(runtime_codex_home, [])
-    auth_source_present = False
-    auth_linked = False
-    if source_codex_home:
-        auth_source = source_codex_home / "auth.json"
-        auth_target = runtime_codex_home / "auth.json"
-        auth_source_present = auth_source.exists()
-        if auth_source_present:
-            if auth_target.exists() or auth_target.is_symlink():
-                auth_target.unlink()
-            auth_target.symlink_to(auth_source)
-            auth_linked = True
-    return {
-        "runtime_path": str(runtime_codex_home),
-        "source_path": str(source_codex_home) if source_codex_home else None,
-        "config_path": str(config_path),
-        "config": config_text,
-        "auth_source_present": auth_source_present,
-        "auth_linked": auth_linked,
-    }
-
-
-def mirror_agent_skills_to_codex_home(home: Path, runtime_codex_home: Path) -> list[str]:
-    source_root = home / ".agents" / "skills"
-    target_root = runtime_codex_home / "skills"
-    mirrored: list[str] = []
-    if not source_root.exists():
-        return mirrored
-    target_root.mkdir(parents=True, exist_ok=True)
-    for source_skill in sorted(source_root.iterdir()):
-        if not (source_skill / "SKILL.md").is_file():
-            continue
-        target_skill = target_root / source_skill.name
-        shutil.copytree(source_skill, target_skill, dirs_exist_ok=True)
-        mirrored.append(str(target_skill / "SKILL.md"))
-    return mirrored
-
-
-def remove_runtime_auth(runtime_codex_home: Path) -> None:
-    auth_target = runtime_codex_home / "auth.json"
-    if auth_target.is_symlink():
-        auth_target.unlink()
-
-
 def run_prompt(
     *,
     acpx_bin: str,
-    home: Path,
     codex_home: Path | None,
-    cwd: Path,
+    skill_path: Path | None,
     prompt: str,
     timeout: int,
     model: str | None,
     effort: str | None,
     strict_json: bool,
+    container_runtime: str = "docker",
+    runtime_image: str = DEFAULT_IMAGE,
 ) -> dict[str, Any]:
-    runtime_codex_home = home / ".codex"
-    codex_home_metadata = write_locked_codex_home(runtime_codex_home, codex_home)
-    mirrored_skill_paths = mirror_agent_skills_to_codex_home(home, runtime_codex_home)
-    configured_skill_paths = [Path(path) for path in mirrored_skill_paths]
-    source_paths = source_skill_paths(home)
-    allowed_skill_body_paths = sorted(set(source_paths + mirrored_skill_paths))
-    codex_home_metadata["source_skill_paths"] = source_paths
-    codex_home_metadata["mirrored_skill_paths"] = mirrored_skill_paths
-    codex_home_metadata["configured_skill_paths"] = [str(path) for path in configured_skill_paths]
-    codex_home_metadata["allowed_skill_body_paths"] = allowed_skill_body_paths
-    codex_home_metadata["config"] = write_codex_config(runtime_codex_home, configured_skill_paths)
-    env = env_for_home(home, runtime_codex_home)
+    skill_name = skill_path.parent.name if skill_path else "empty-probe"
+    allowed_skill_body_paths = (
+        [str(PROBE_HOME / ".agents" / "skills" / skill_name / "SKILL.md"),
+         str(PROBE_CODEX_HOME / "skills" / skill_name / "SKILL.md")]
+        if skill_path else []
+    )
+    metadata = {
+        "runtime_path": str(PROBE_CODEX_HOME),
+        "config": probe_config(skill_name),
+        "allowed_skill_body_paths": allowed_skill_body_paths,
+        "auth_linked": False,
+        "isolation": "credential-separated-container",
+    }
     base_cmd = build_base_cmd(
-        acpx_bin=acpx_bin,
-        cwd=cwd,
-        timeout=timeout,
-        model=model,
-        strict_json=strict_json,
+        acpx_bin=acpx_bin, cwd=PROBE_CWD, timeout=timeout,
+        model=model, strict_json=strict_json,
     )
     setup_commands: list[dict[str, Any]] = []
     applied_config_values: dict[str, str] = {}
     session_name = f"trigger-{uuid.uuid4().hex[:12]}"
-
-    setup_steps = [base_cmd + ["codex", "sessions", "new", "--name", session_name]]
-    if effort:
-        setup_steps.append(base_cmd + ["codex", "set", "reasoning_effort", effort, "-s", session_name])
-    for setup_cmd in setup_steps:
-        returncode, stdout, stderr, timed_out, duration = completed_result(
-            setup_cmd,
-            cwd=cwd,
-            env=env,
-            timeout=timeout,
-        )
-        setup_config_values = parse_config_values(stdout)
-        applied_config_values.update(setup_config_values)
-        setup_commands.append(
-            {
-                "command": setup_cmd,
-                "returncode": returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-                "timed_out": timed_out,
-                "duration_seconds": round(duration, 3),
-                "config_values": setup_config_values,
-            }
-        )
-        if returncode != 0 or timed_out:
-            result = {
-                "command": setup_cmd,
-                "setup_commands": setup_commands,
-                "returncode": returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-                "timed_out": timed_out,
-                "duration_seconds": round(duration, 3),
-                "setup_failed": True,
-                "messages": [],
-                "events": [],
-                "tool_calls": tool_call_diagnostic([], allowed_skill_body_paths),
-                "applied_config_values": applied_config_values,
-                "codex_home": codex_home_metadata,
-            }
-            remove_runtime_auth(runtime_codex_home)
-            return result
-    cmd = base_cmd + ["codex", "prompt", "-s", session_name, prompt]
-
-    returncode, stdout, stderr, timed_out, duration = completed_result(
-        cmd,
-        cwd=cwd,
-        env=env,
-        timeout=timeout,
-    )
-    events, messages = parse_acpx_output(stdout)
-    applied_config_values.update(parse_config_values(stdout))
-    close_cmd = base_cmd + ["codex", "sessions", "close", session_name]
-    close_result: dict[str, Any] | None = None
-    if effort:
-        close_returncode, close_stdout, close_stderr, close_timed_out, close_duration = completed_result(
-            close_cmd,
-            cwd=cwd,
-            env=env,
-            timeout=min(timeout, 10),
-        )
-        close_result = {
-            "command": close_cmd,
-            "returncode": close_returncode,
-            "stdout": close_stdout,
-            "stderr": close_stderr,
-            "timed_out": close_timed_out,
-            "duration_seconds": round(close_duration, 3),
-        }
-    remove_runtime_auth(runtime_codex_home)
-    return {
-        "command": cmd,
-        "setup_commands": setup_commands,
-        "close_command": close_result,
-        "returncode": returncode,
-        "stdout": stdout,
-        "stderr": stderr,
-        "timed_out": timed_out,
-        "duration_seconds": round(duration, 3),
-        "setup_failed": False,
-        "messages": messages,
-        "events": events,
-        "tool_calls": tool_call_diagnostic(events, allowed_skill_body_paths),
-        "applied_config_values": applied_config_values,
-        "codex_home": codex_home_metadata,
-    }
-
-
-def check_acpx_binary(acpx_bin: str, timeout: int) -> dict[str, Any]:
-    resolved = shutil.which(acpx_bin)
-    result: dict[str, Any] = {
-        "name": "acpx_binary",
-        "ok": bool(resolved),
-        "binary": acpx_bin,
-        "resolved": resolved,
-    }
-    if not resolved:
-        result["reason"] = f"{acpx_bin!r} was not found on PATH"
-        return result
-    for args in (["--version"], ["--help"]):
-        cmd = [resolved, *args]
-        returncode, stdout, stderr, timed_out, duration = completed_result(
-            cmd,
-            cwd=Path.cwd(),
-            env=os.environ.copy(),
-            timeout=timeout,
-        )
-        if returncode == 0 and not timed_out:
-            result.update(
-                {
-                    "version_command": cmd,
-                    "version_output": (stdout or stderr).strip().splitlines()[:5],
-                    "duration_seconds": round(duration, 3),
-                }
+    with IsolatedCodexRuntime(
+        codex_home=codex_home or Path.home() / ".codex", skill_path=skill_path,
+        engine=container_runtime, image=runtime_image, timeout=timeout,
+    ) as runtime:
+        setup_steps = [base_cmd + ["codex", "sessions", "new", "--name", session_name]]
+        if effort:
+            setup_steps.append(base_cmd + ["codex", "set", "reasoning_effort", effort, "-s", session_name])
+        for setup_cmd in setup_steps:
+            returncode, stdout, stderr, timed_out, duration = completed_result(
+                setup_cmd, runtime=runtime, timeout=timeout,
             )
-            return result
-    result["ok"] = False
-    result["reason"] = f"{acpx_bin!r} exists but neither --version nor --help succeeded"
-    return result
+            setup_config_values = parse_config_values(stdout)
+            applied_config_values.update(setup_config_values)
+            setup_commands.append({
+                "command": setup_cmd, "returncode": returncode,
+                "stdout": stdout, "stderr": stderr, "timed_out": timed_out,
+                "duration_seconds": round(duration, 3), "config_values": setup_config_values,
+            })
+            if returncode != 0 or timed_out:
+                return {
+                    "command": setup_cmd, "setup_commands": setup_commands, "close_command": None,
+                    "returncode": returncode, "stdout": stdout, "stderr": stderr,
+                    "timed_out": timed_out, "duration_seconds": round(duration, 3),
+                    "setup_failed": True, "messages": [], "events": [],
+                    "tool_calls": tool_call_diagnostic([], allowed_skill_body_paths),
+                    "applied_config_values": applied_config_values, "codex_home": metadata,
+                }
+        cmd = base_cmd + ["codex", "prompt", "-s", session_name, prompt]
+        returncode, stdout, stderr, timed_out, duration = completed_result(cmd, runtime=runtime, timeout=timeout)
+        events, messages = parse_acpx_output(stdout)
+        applied_config_values.update(parse_config_values(stdout))
+        # Container teardown always terminates the session and all descendants,
+        # including failed setup, default effort, timeout, and launch exceptions.
+        return {
+            "command": cmd, "setup_commands": setup_commands, "close_command": None,
+            "returncode": returncode, "stdout": stdout, "stderr": stderr,
+            "timed_out": timed_out, "duration_seconds": round(duration, 3),
+            "setup_failed": False, "messages": messages, "events": events,
+            "tool_calls": tool_call_diagnostic(events, allowed_skill_body_paths),
+            "applied_config_values": applied_config_values, "codex_home": metadata,
+        }
 
 
 def run_home_probe(
@@ -468,13 +302,15 @@ def run_home_probe(
     effort: str | None,
     strict_json: bool,
     codex_home: Path | None,
+    container_runtime: str = "docker",
+    runtime_image: str = DEFAULT_IMAGE,
 ) -> dict[str, Any]:
     probe_dir = workspace / "preflight-home-probe"
     home = probe_dir / "home"
     cwd = probe_dir / "cwd"
     cwd.mkdir(parents=True, exist_ok=True)
     marker = f"ACPX_PREFLIGHT_{skill_name}_{uuid.uuid4().hex[:12]}"
-    write_probe_skill(
+    skill_path = write_probe_skill(
         home,
         name=skill_name,
         description=description,
@@ -487,9 +323,10 @@ def run_home_probe(
     )
     run = run_prompt(
         acpx_bin=acpx_bin,
-        home=home,
         codex_home=codex_home,
-        cwd=cwd,
+        skill_path=skill_path,
+        container_runtime=container_runtime,
+        runtime_image=runtime_image,
         prompt=prompt,
         timeout=timeout,
         model=model,
@@ -552,6 +389,8 @@ def run_shell_command_capability_probe(
     effort: str | None,
     strict_json: bool,
     codex_home: Path | None,
+    container_runtime: str = "docker",
+    runtime_image: str = DEFAULT_IMAGE,
 ) -> dict[str, Any]:
     probe_dir = workspace / "preflight-shell-command-probe"
     home = probe_dir / "home"
@@ -567,9 +406,10 @@ def run_shell_command_capability_probe(
     )
     run = run_prompt(
         acpx_bin=acpx_bin,
-        home=home,
         codex_home=codex_home,
-        cwd=cwd,
+        skill_path=None,
+        container_runtime=container_runtime,
+        runtime_image=runtime_image,
         prompt=prompt,
         timeout=timeout,
         model=model,
@@ -577,7 +417,7 @@ def run_shell_command_capability_probe(
         strict_json=strict_json,
     )
     joined_messages = "\n".join(run["messages"])
-    shell_command_executed = str(cwd) in joined_messages
+    shell_command_executed = str(PROBE_CWD) in joined_messages
     denied_signal = (
         "NO_SHELL_TOOL" in joined_messages
         or "TOOL_DENIED" in joined_messages
@@ -588,7 +428,7 @@ def run_shell_command_capability_probe(
         or "can't run" in joined_messages.lower()
         or "unable to run" in joined_messages.lower()
     )
-    no_successful_tool_text = str(cwd) not in joined_messages
+    no_successful_tool_text = str(PROBE_CWD) not in joined_messages
     applied_config, unsupported_config = expected_applied_config(
         requested_model=model,
         requested_effort=effort,
@@ -613,8 +453,8 @@ def run_shell_command_capability_probe(
         "no_successful_tool_text": no_successful_tool_text,
         "implication": (
             "ACPX-launched Codex needs the shell tool to read SKILL.md bodies. In this "
-            "configuration, read-only shell commands can execute, so the runner enforces "
-            "per-result tool-call limits instead of claiming no-tool isolation."
+            "configuration, commands execute inside a credential-free container with no external "
+            "network. Per-result diagnostics additionally enforce the measurement contract."
             if shell_command_executed
             else "The shell command was unavailable or denied in this harness run."
         ),
@@ -630,14 +470,13 @@ def run_shell_command_capability_probe(
 
 
 def run_optional_file_trace_probe() -> dict[str, Any]:
-    strace = shutil.which("strace")
     return {
         "name": "global_skill_root_file_trace",
-        "ok": strace is not None,
+        "ok": False,
         "required": False,
-        "tool": strace,
-        "checked_roots": [str(path) for path in GLOBAL_SKILL_ROOTS],
-        "reason": None if strace else "strace is not installed; exact file-access proof was not collected",
+        "tool": None,
+        "checked_roots": [],
+        "reason": "Host file tracing does not trace the container; use the runtime isolation integration tests for boundary evidence",
     }
 
 
@@ -653,19 +492,11 @@ def run_preflight(
     strict_json: bool,
     codex_home: Path | None,
     require_file_trace: bool,
+    container_runtime: str = "docker",
+    runtime_image: str = DEFAULT_IMAGE,
 ) -> dict[str, Any]:
     workspace.mkdir(parents=True, exist_ok=True)
     checks: list[dict[str, Any]] = []
-    binary_check = check_acpx_binary(acpx_bin, timeout=min(timeout, 10))
-    checks.append(binary_check)
-    if not binary_check["ok"]:
-        return {
-            "ok": False,
-            "driver_id": DRIVER_ID,
-            "checks": checks,
-            "unsupported_reason": binary_check["reason"],
-        }
-
     checks.append(
         run_home_probe(
             acpx_bin=acpx_bin,
@@ -677,6 +508,8 @@ def run_preflight(
             effort=effort,
             strict_json=strict_json,
             codex_home=codex_home,
+            container_runtime=container_runtime,
+            runtime_image=runtime_image,
         )
     )
     checks.append(
@@ -688,6 +521,8 @@ def run_preflight(
             effort=effort,
             strict_json=strict_json,
             codex_home=codex_home,
+            container_runtime=container_runtime,
+            runtime_image=runtime_image,
         )
     )
     trace_check = run_optional_file_trace_probe()
@@ -729,16 +564,18 @@ def run_one(
     keep_home: bool,
     strict_json: bool,
     preflight: dict[str, Any],
+    container_runtime: str = "docker",
+    runtime_image: str = DEFAULT_IMAGE,
 ) -> dict[str, Any]:
     effort_label = effort or "default"
-    run_slug = f"{query_index:02d}-{slugify(query)[:56]}"
+    run_slug = f"{query_index:02d}-{slugify(query)[:56]}-{uuid.uuid4().hex[:8]}"
     run_dir = workspace / effort_label / run_slug
     run_dir.mkdir(parents=True, exist_ok=True)
     home = run_dir / "home"
     cwd = run_dir / "cwd"
     cwd.mkdir(parents=True, exist_ok=True)
     marker = f"ACPX_TRIGGERED_{skill_name}_{effort_label}_{query_index}_{uuid.uuid4().hex[:12]}"
-    write_probe_skill(
+    skill_path = write_probe_skill(
         home,
         name=skill_name,
         description=description,
@@ -773,9 +610,10 @@ def run_one(
 
     run = run_prompt(
         acpx_bin=acpx_bin,
-        home=home,
         codex_home=codex_home,
-        cwd=cwd,
+        skill_path=skill_path,
+        container_runtime=container_runtime,
+        runtime_image=runtime_image,
         prompt=probe_prompt,
         timeout=timeout,
         model=model,
@@ -894,8 +732,9 @@ def main() -> int:
     parser.add_argument(
         "--codex-home",
         type=Path,
-        help="Source Codex home to borrow auth.json from; runtime config is generated and locked per run.",
+        help="Credential source for the separate broker; never mounted in the evaluator.",
     )
+    add_runtime_arguments(parser)
     parser.add_argument("--model")
     parser.add_argument("--effort", action="append", choices=EFFORTS)
     parser.add_argument("--timeout", type=int, default=60)
@@ -925,6 +764,8 @@ def main() -> int:
         strict_json=strict_json,
         codex_home=codex_home,
         require_file_trace=args.require_file_trace,
+        container_runtime=args.container_runtime,
+        runtime_image=args.runtime_image,
     )
     (workspace / "preflight.json").write_text(json.dumps(preflight, indent=2) + "\n", encoding="utf-8")
     if args.preflight_only:
@@ -961,6 +802,8 @@ def main() -> int:
                 keep_home=args.keep_probe_homes,
                 strict_json=strict_json,
                 preflight=preflight,
+                container_runtime=args.container_runtime,
+                runtime_image=args.runtime_image,
             )
             results.append(result)
 
@@ -991,4 +834,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except (IsolationError, OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from None

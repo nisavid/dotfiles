@@ -112,6 +112,8 @@ def write_probe_skill(
     harness_label: str,
     skill_root: Path | None = None,
 ) -> Path:
+    if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) is None or len(name) > 64:
+        raise ValueError("Probe skill name must be a lowercase slug of at most 64 characters")
     skill_root = skill_root or home / ".agents" / "skills"
     skill_dir = skill_root / name
     skill_dir.mkdir(parents=True, exist_ok=True)

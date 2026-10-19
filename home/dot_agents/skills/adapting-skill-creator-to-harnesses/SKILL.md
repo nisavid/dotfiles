@@ -52,6 +52,7 @@ Adapt execution to the current harness:
 Trigger tests are harness-specific because each harness exposes skills differently.
 
 - Use `evals/trigger-evals.json` as the shared input format for should-trigger and should-not-trigger queries.
+- Before using either Codex runner, follow [isolated runtime setup](references/isolated-codex-runtime.md). Both require a locally built container image and a working trusted local container engine; neither falls back to host execution. Authentication is supplied only to a separate inference broker.
 - Use this skill's runner scripts for supported harnesses:
   - `scripts/codex_trigger_eval.py --skill-dir <skill-dir> --workspace <workspace>`
   - `scripts/acpx_trigger_eval.py --skill-dir <skill-dir> --workspace <workspace>`
@@ -68,8 +69,8 @@ Trigger tests are harness-specific because each harness exposes skills different
 
 | Runner | Harness signal | Counted positive | Counted negative |
 | --- | --- | --- | --- |
-| `codex_trigger_eval.py` | Codex JSONL final message text from an isolated probe skill. | Sentinel appears in Codex output. | Sentinel is absent and the run exits cleanly. |
-| `acpx_trigger_eval.py` | ACPX/Codex JSON stream plus recorded read of the temporary `SKILL.md`. | Temporary skill body is read and its sentinel appears. | Sentinel is absent and no disallowed tool calls occur. |
+| `codex_trigger_eval.py` | Codex JSONL final message text from a probe skill in a credential-free container. | Sentinel appears in Codex output. | Sentinel is absent and the run exits cleanly. |
+| `acpx_trigger_eval.py` | ACPX/Codex JSON stream plus recorded read of the temporary `SKILL.md` in a credential-free container. | Temporary skill body is read and its sentinel appears. | Sentinel is absent and no disallowed tool calls occur. |
 | `claude_trigger_eval.py` | Claude Code `Skill` tool call plus synthetic skill body delivery. | Matching `Skill` tool call occurs, the synthetic body is delivered, and the sentinel appears. | Sentinel is absent and no tool calls occur. |
 | `cursor_trigger_eval.py` | Cursor Agent project `AGENTS.md` shim plus temporary `.cursor/skills` body read. | Temporary skill body is read and its sentinel appears. | Sentinel is absent and the temporary skill body is not read. |
 
