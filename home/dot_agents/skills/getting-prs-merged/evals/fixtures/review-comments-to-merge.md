@@ -1,5 +1,7 @@
 # Scenario: Review Comments To Merge
 
+Policy provenance: the workflow skills and applicable repository policy come from an independently verified target-repository default-branch commit. Its full OID and the base/head identities are recorded; comparison shows no policy or referenced-helper changes in the head or local edits.
+
 User request: "Address the unresolved review comments on this PR, rerun the review loop, and merge once it is clean."
 
 Mock repository state:
