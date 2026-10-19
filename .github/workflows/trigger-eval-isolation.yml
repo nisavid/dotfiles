@@ -1,0 +1,43 @@
+name: Trigger eval isolation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  container-boundary:
+    name: Real Docker boundary and Codex tool canaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: home/dot_agents/skills/adapting-skill-creator-to-harnesses
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build production runtime
+        run: >-
+          docker build --file runtime/Dockerfile --target runtime
+          --tag nisavid-trigger-eval:codex-0.163.0-acpx-0.19.6 .
+
+      - name: Build deterministic inference fixture
+        run: >-
+          docker build --file runtime/Dockerfile --target container-tests
+          --tag nisavid-trigger-eval:codex-0.163.0-acpx-0.19.6-test .
+
+      - name: Execute adapter tests and real container canaries
+        env:
+          TRIGGER_EVAL_CONTAINER_TESTS: "1"
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v

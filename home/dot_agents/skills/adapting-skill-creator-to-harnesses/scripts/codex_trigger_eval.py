@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import time
@@ -21,6 +20,13 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from isolated_codex_runtime import (
+    DEFAULT_IMAGE,
+    PROBE_CWD,
+    IsolationError,
+    IsolatedCodexRuntime,
+    add_runtime_arguments,
+)
 from trigger_eval_core import (
     EFFORTS,
     build_probe_prompt,
@@ -71,15 +77,19 @@ def run_one(
     timeout: int,
     sandbox: str,
     keep_home: bool,
+    container_runtime: str = "docker",
+    runtime_image: str = DEFAULT_IMAGE,
 ) -> dict[str, Any]:
-    run_slug = f"{query_index:02d}-{slugify(query)[:56]}"
+    if sandbox != "read-only":
+        raise IsolationError("Trigger evaluation requires the isolated container runtime; alternate host sandbox modes are unsupported")
+    run_slug = f"{query_index:02d}-{slugify(query)[:56]}-{uuid.uuid4().hex[:8]}"
     run_dir = workspace / effort / run_slug
     run_dir.mkdir(parents=True, exist_ok=True)
     home = run_dir / "home"
     cwd = run_dir / "cwd"
     cwd.mkdir(parents=True, exist_ok=True)
     marker = f"CODEX_TRIGGERED_{skill_name}_{effort}_{query_index}_{uuid.uuid4().hex[:12]}"
-    write_probe_skill(
+    skill_path = write_probe_skill(
         home,
         name=skill_name,
         description=description,
@@ -103,12 +113,11 @@ def run_one(
         "exec",
         "--json",
         "--ephemeral",
-        "--ignore-user-config",
         "--skip-git-repo-check",
         "--sandbox",
-        sandbox,
+        "danger-full-access",  # Inside the enforced outer container only.
         "-C",
-        str(cwd),
+        str(PROBE_CWD),
         "-c",
         f"model_reasoning_effort={effort}",
     ]
@@ -117,23 +126,14 @@ def run_one(
     probe_prompt = build_probe_prompt(query, allow_skill_body_read_command=False)
     cmd.append(probe_prompt)
 
-    env = os.environ.copy()
-    env["HOME"] = str(home)
-    env["CODEX_HOME"] = str(codex_home)
-    env.setdefault("NO_COLOR", "1")
-
     started = time.monotonic()
     timed_out = False
     try:
-        completed = subprocess.run(
-            cmd,
-            cwd=cwd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-        )
+        with IsolatedCodexRuntime(
+            codex_home=codex_home, skill_path=skill_path,
+            engine=container_runtime, image=runtime_image, timeout=timeout,
+        ) as runtime:
+            completed = runtime.run(cmd, timeout=timeout)
         returncode = completed.returncode
         stdout = completed.stdout
         stderr = completed.stderr
@@ -171,6 +171,7 @@ def run_one(
         "event_count": len(events),
         "run_dir": str(run_dir),
         "command": cmd,
+        "isolation": "credential-separated-container",
     }
     (run_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     if not keep_home:
@@ -183,11 +184,12 @@ def main() -> int:
     parser.add_argument("--skill-dir", type=Path, required=True)
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--codex-bin", default="codex")
-    parser.add_argument("--codex-home", type=Path)
+    parser.add_argument("--codex-home", type=Path, help="Credential source for the separate broker; never mounted in the evaluator")
+    add_runtime_arguments(parser)
     parser.add_argument("--model")
     parser.add_argument("--effort", action="append", choices=EFFORTS)
     parser.add_argument("--timeout", type=int, default=60)
-    parser.add_argument("--sandbox", default="read-only", choices=("read-only", "workspace-write", "danger-full-access"))
+    parser.add_argument("--sandbox", default="read-only", choices=("read-only",), help="Legacy compatibility option; the container boundary is always required")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--index", type=int, action="append", help="Run only the specified trigger eval index; repeatable")
     parser.add_argument("--keep-probe-homes", action="store_true")
@@ -219,6 +221,8 @@ def main() -> int:
                 timeout=args.timeout,
                 sandbox=args.sandbox,
                 keep_home=args.keep_probe_homes,
+                container_runtime=args.container_runtime,
+                runtime_image=args.runtime_image,
             )
             results.append(result)
 
@@ -245,4 +249,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except (IsolationError, OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from None
