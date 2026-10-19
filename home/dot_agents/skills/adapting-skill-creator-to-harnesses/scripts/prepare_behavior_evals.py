@@ -19,6 +19,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import stat
 import sys
 from pathlib import Path
@@ -32,6 +33,12 @@ def slugify(value: str) -> str:
 
 def load_evals(skill_dir: Path) -> dict:
     return json.loads(read_scoped_text(skill_dir, "evals/evals.json"))
+
+
+def validate_skill_name(value: object) -> str:
+    if not isinstance(value, str) or not value.strip() or "\0" in value:
+        raise ValueError("skill_name must be a nonempty string without NUL characters")
+    return value
 
 
 def read_scoped_text(skill_dir: Path, relative_path: str) -> str:
@@ -307,6 +314,24 @@ def write_run_instructions(
     runs: int,
 ) -> None:
     validate_workspace_identity(workspace_fd, workspace)
+    skill_name = validate_skill_name(skill_name)
+    commands = "\n".join(
+        shlex.join(argv)
+        for argv in (
+            [
+                "python", "-m", "scripts.aggregate_benchmark", str(workspace),
+                f"--skill-name={skill_name}",
+            ],
+            [
+                "python", "eval-viewer/generate_review.py", str(workspace),
+                f"--skill-name={skill_name}",
+                "--benchmark", str(workspace / "benchmark.json"),
+                "--static", str(workspace / "review.html"),
+            ],
+        )
+    )
+    # Quoted arguments can contain newlines and backticks; keep them inside the block.
+    fence = "`" * max(3, 1 + max(map(len, re.findall(r"`+", commands)), default=0))
     instructions = f"""# Behavioral Eval Run Instructions
 
 This workspace was generated for the `skill-creator` behavioral eval flow.
@@ -324,11 +349,10 @@ For each `eval-*` directory:
    `expectations[].text`, `expectations[].passed`, and `expectations[].evidence`.
 6. Run:
 
-```bash
+{fence}bash
 cd <skill-creator-skill-dir>
-python -m scripts.aggregate_benchmark {workspace} --skill-name {skill_name}
-python eval-viewer/generate_review.py {workspace} --skill-name {skill_name} --benchmark {workspace}/benchmark.json --static {workspace}/review.html
-```
+{commands}
+{fence}
 
 The static viewer at `review.html` is the human review artifact.
 """
@@ -370,6 +394,7 @@ def main() -> int:
         parser.error("--workspace must not already exist")
     try:
         data = load_evals(skill_dir)
+        skill_name = validate_skill_name(data.get("skill_name"))
         validate_eval_directory_names(data["evals"])
         prepared_evals = [
             (eval_item, prompt_variants(skill_dir=skill_dir, eval_item=eval_item))
@@ -392,7 +417,7 @@ def main() -> int:
             write_run_instructions(
                 workspace_fd,
                 workspace,
-                data["skill_name"],
+                skill_name,
                 args.runs,
             )
         except (OSError, ValueError) as error:
