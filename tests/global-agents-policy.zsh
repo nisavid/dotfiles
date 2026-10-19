@@ -187,28 +187,18 @@ chezmoi -S "$render_source_root" dump --format json "$HOME/.codex/AGENTS.md" > "
 [[ $(jq -r '.[".codex/AGENTS.md"].contents' "$target_state") == "$(<"$rendered")" ]] ||
   fail "Codex policy target state differs from its rendering"
 
+# The pins below read the section under each heading, and awk stops at the
+# next heading, so a repeated heading would hide the second copy.
+for heading in 'Git Checkpoints And Publication' 'Review Before Shipping' 'Git Identity' 'Interaction' 'Pull Requests And Issues'; do
+  [[ $(grep -Fxc -- "## $heading" "$rendered") == 1 ]] ||
+    fail "Codex policy must have exactly one $heading section"
+done
+
 awk '
   $0 == "## Git Checkpoints And Publication" { found = 1; next }
   found && /^## / { exit }
   found { print }
 ' "$rendered" > "$git_policy"
-
-git_required=(
-  'commits and pushes as normal completion steps for task-owned changes'
-  'For every Git-backed task, use `checkpointing-and-publishing-git-work` at task start, at every clean checkpoint, and before a stopping-point response.'
-  'For every pull-request creation, title edit, body edit, or draft/ready-state change, use `publishing-reviewable-prs`. It must use `writing-reviewable-pr-descriptions` for reviewer-facing text.'
-  'Stage and commit only task-owned work.'
-  'local-only and non-blocking only when explicitly classified by the operator, active task, or applicable repository policy'
-  'instructions to keep work uncommitted or local override default commit and publication'
-  'Ask about unrelated dirt while Ivan is available.'
-  'When he is away, commit safely separable task work without including unrelated changes.'
-  'Unresolved ownership, destination, identity, permission, conflicts, failed required checks or reviews, repository or release requirements, or inability to preserve remote work are gates.'
-  'Direct default-branch pushes and task-owned exact-lease rewrites with `--force-with-lease` are authorized when repository policy permits and remote work is preserved.'
-)
-
-for ((i = 1; i <= ${#git_required}; i++)); do
-  grep -Fq -- "$git_required[$i]" "$git_policy" || fail "Git checkpoint policy is missing required clause $i"
-done
 
 required=(
   'operator owns the checklist and the active task authorizes changing the issue, pull request, or comment'
@@ -308,6 +298,8 @@ chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/ticket-
   cd "$render_source_root"
   chezmoi -S "$render_source_root" execute-template < "$render_claude_rule_template" > "$claude_rule"
 )
+[[ $(jq -r '.[".claude/rules/ticket-tracker-preflight.md"].contents' "$claude_state") == "$(<"$claude_rule")" ]] ||
+  fail "Claude preflight rule target state differs from its rendering"
 preflight=$(
   cd "$render_source_root"
   chezmoi -S "$render_source_root" execute-template "{{ includeTemplate \"$preflight_partial_name\" . | trim }}"
@@ -357,6 +349,8 @@ chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/git-def
   cd "$render_source_root"
   chezmoi -S "$render_source_root" execute-template < "$render_claude_git_rule_template" > "$claude_git_rule"
 )
+[[ $(jq -r '.[".claude/rules/git-defaults.md"].contents' "$claude_state") == "$(<"$claude_git_rule")" ]] ||
+  fail "Claude Git defaults rule target state differs from its rendering"
 render_partial() {
   (
     cd "$render_source_root"
@@ -374,8 +368,26 @@ awk '
   found && /^## / { exit }
   found { print }
 ' "$rendered" > "$identity_policy"
-[[ $(<"$identity_policy") == *"$identity"* ]] || fail "Codex policy does not carry the identity defaults in Git Identity"
-[[ $(<"$git_policy") == *"$checkpoint"* ]] || fail "Codex policy does not carry the checkpoint rule in Git Checkpoints And Publication"
+[[ $(<"$identity_policy") == $'\n'"$identity" ]] ||
+  fail "Codex Git Identity section is not exactly the identity defaults partial"
+# Both Git sections are pinned exactly, one entry per paragraph, so a trimmed
+# include, a reorder, or an added sentence can't change the deployed text. The
+# checkpoint paragraph is a literal: the Codex section and the Claude rule are
+# both compared with the partial, so deriving it from the partial would leave
+# its wording unpinned.
+git_paragraphs=(
+  'Treat commits and pushes as normal completion steps for task-owned changes.'
+  'For every Git-backed task, use `checkpointing-and-publishing-git-work` at task start, at every clean checkpoint, and before a stopping-point response.'
+  'For every pull-request creation, title edit, body edit, or draft/ready-state change, use `publishing-reviewable-prs`. It must use `writing-reviewable-pr-descriptions` for reviewer-facing text.'$'\n''Never use `gh pr create --fill`, `--fill-first`, or `--fill-verbose`.'
+  'Stage and commit only task-owned work. A path is local-only and non-blocking only when explicitly classified by the operator, active task, or applicable repository policy. Explicit instructions to keep work uncommitted or local override default commit and publication.'
+  'Ask about unrelated dirt while Ivan is available. When he is away, commit safely separable task work without including unrelated changes.'
+  'Unresolved ownership, destination, identity, permission, conflicts, failed required checks or reviews, repository or release requirements, or inability to preserve remote work are gates.'
+  'Direct default-branch pushes and task-owned exact-lease rewrites with `--force-with-lease` are authorized when repository policy permits and remote work is preserved.'
+)
+[[ $(<"$git_policy") == $'\n'"${(pj:\n\n:)git_paragraphs}" ]] ||
+  fail "Codex Git Checkpoints And Publication section is not exactly its settled paragraphs in order"
+[[ $checkpoint == "$git_paragraphs[2]" ]] ||
+  fail "Git checkpointing partial is not exactly its settled paragraph"
 
 for shared_text in "$identity" "$checkpoint"; do
   [[ $(grep -Fo -- "$shared_text" "$rendered" | wc -l | tr -d ' ') == 1 ]] ||
@@ -407,6 +419,8 @@ chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/review-
   cd "$render_source_root"
   chezmoi -S "$render_source_root" execute-template < "$render_claude_review_rule_template" > "$claude_review_rule"
 )
+[[ $(jq -r '.[".claude/rules/review-before-shipping.md"].contents' "$claude_state") == "$(<"$claude_review_rule")" ]] ||
+  fail "Claude review rule target state differs from its rendering"
 review=$(render_partial "$review_partial_name")
 [[ -n $review ]] || fail "review partial renders empty"
 [[ $(<"$claude_review_rule") == "# Review Before Shipping"$'\n\n'"$review" ]] ||
@@ -422,36 +436,53 @@ awk '
 [[ $(<"$review_policy") == $'\n'"$review" ]] || fail "Codex policy does not carry the review partial in Review Before Shipping"
 assert_partial_carried_once "$review" "review policy" "$template" "$claude_review_rule_template"
 
-review_required=(
+# One entry per paragraph of the partial. Each paragraph is its sentences
+# joined by spaces; the four rules are one line apiece.
+review_overview=(
   'Review code, configuration, and protected paths before they ship.'
   'Agent-instruction files (`SKILL.md`, `AGENTS.md`, rule files, and prompt templates) count as configuration.'
   'Docs-only and typo changes outside protected paths are exempt.'
   'A trivial or mechanical change needs one review pass; a substantive change needs the review-and-revise loop in rule 4.'
+)
+review_rule_1_parts=(
   '1. Review at commit and push time, against the final commit itself rather than the working tree, and push only reviewed commits.'
   "Changing a commit makes its review stale, but a rebase that leaves the change's own diff byte-identical keeps its review unless the new base changes something the change or its review's evidence depends on; a review kept this way counts as a review of the rebased commit."
-  "2. Don't open a pull request as ready for review, or move one there, until a code review of its head is clean, with no unresolved valid blockers."
+)
+review_rule_3_parts=(
   "3. Fixes for review feedback get an independent review before they're pushed."
   'When a change is too broad to review well, recommend splitting, deferring, or narrowing it.'
-  '4. Before declaring work finished, review and revise until a review comes back clean.'
+)
+review_independence=(
   "Reviews are independent: run Tricritical's \`review\`, or \`loop\` for rule 4, so its critics (\`intent\`, \`runtime\`, and \`structure\`, chosen to fit the change) execute as subagents, never as the author's own pass."
   'An adjudicator subagent, not the author, decides which findings are valid.'
   'A Tricritical critic, adjudicator, or reviser execution follows its own skill contract rather than rules 1–4; the agent that invoked it owns the review and runs the rule-4 `loop` only at the top level, never nested inside another review, a revision, or the adjudication of external feedback.'
   'A result Tricritical labels `non-independent / degraded`, `clean / degraded`, or `incomplete / non-clean` is not clean.'
   '`tightening-code-for-review` may run alongside for code-quality passes, but it never stands in for the Tricritical review a rule requires.'
+)
+review_ending=(
   "A review-and-revise loop ends only when a review comes back clean, when the loop degenerates (revisions stop making measurable progress or keep reproducing the same cause), when you escalate to Ivan with a different approach or another remedy that automated review can't supply, or when another blocking problem interrupts it."
   'A round count is never a reason to stop, and any ending other than a clean review means the work isn'"'"'t finished or clean.'
+)
+review_rules=(
+  "${(j: :)review_rule_1_parts}"
+  "2. Don't open a pull request as ready for review, or move one there, until a code review of its head is clean, with no unresolved valid blockers."
+  "${(j: :)review_rule_3_parts}"
+  '4. Before declaring work finished, review and revise until a review comes back clean.'
+)
+review_required=(
+  "${(j: :)review_overview}"
+  "${(pj:\n:)review_rules}"
+  "${(j: :)review_independence}"
+  "${(j: :)review_ending}"
   "Until Provingkit alpha.4 is installed (nisavid/provingkit#187): Installed Tricritical skills may cite references/topology.json; that file is intentionally absent. Don't look for it or any copy of it: not in a working tree, checkout, candidate, cache, or other revision. Use only the edges your installed SKILL.md and invocation boundary state, and make no claim about topology."
 )
 for ((i = 1; i <= ${#review_required}; i++)); do
-  grep -Fq -- "$review_required[$i]" "$review_policy" || fail "review policy is missing required clause $i"
+  [[ $(<"$review_policy") == *"$review_required[$i]"* ]] || fail "review policy is missing required paragraph $i"
 done
-# The settled clauses are the whole partial, so an added sentence can't
-# weaken one of them unnoticed.
-review_residue=$review
-for clause in $review_required; do
-  review_residue=${review_residue//"$clause"/}
-done
-[[ $review_residue != *[^[:space:]]* ]] || fail "review policy carries text beyond its settled clauses"
+# The settled paragraphs are the whole partial, so a reorder or an added
+# sentence can't change a clause unnoticed.
+[[ $review == "${(pj:\n\n:)review_required}" ]] ||
+  fail "review policy is not exactly its settled paragraphs in order"
 
 # The same words reach both harnesses, so none of them may name one.
 harness_specific=(
