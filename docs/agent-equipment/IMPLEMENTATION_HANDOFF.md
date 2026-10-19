@@ -140,6 +140,7 @@ home/private_dot_local/lib/agent-equipment/agent_equipment/checkpoint.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/authorization.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/executor.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/evidence.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/direct_mcp.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/base.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/standalone_skills.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/claude_projection.py
@@ -942,6 +943,11 @@ Later steps do not begin until the named evidence passes.
 
 - Move only accepted MCP keys from the existing Claude JSON, Codex TOML, and
   Cursor JSON overlays behind adapter-owned narrow merges.
+- Build every Codex and Cursor stdio server entry with
+  `direct_mcp.stdio_overlay_entry`, which applies the working-directory rule in
+  `ARCHITECTURE.md`. Its `command` is the catalog command token, so replace
+  `secret-exec` with its absolute installed path (`$HOME/.local/bin/secret-exec`
+  with the home directory expanded), as the current overlays do.
 - Preserve the existing `secret-exec` child-process boundary. Catalog, lock,
   plan, logs, receipts, diagnostics, and diffs carry secret-reference names
   only.
