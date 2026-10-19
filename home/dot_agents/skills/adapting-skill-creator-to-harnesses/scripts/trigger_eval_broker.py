@@ -25,7 +25,7 @@ MAX_REQUESTS = 32
 REQUEST_TIMEOUT = 120.0
 CLIENT_TIMEOUT = 10.0
 UPSTREAMS = {
-    "api_key": ("api.openai.com", "/v1/responses"),
+    "openai": ("api.openai.com", "/v1/responses"),
     "chatgpt": ("chatgpt.com", "/backend-api/codex/responses"),
 }
 INVALID_REQUEST = "Inference request rejected by the trigger evaluation broker."
@@ -44,7 +44,7 @@ REQUEST_FIELDS = frozenset({
 @dataclass(frozen=True)
 class Credentials:
     kind: str
-    token: str = field(repr=False)
+    bearer: str = field(repr=False)
     account_id: str | None = field(default=None, repr=False)
 
     @classmethod
@@ -67,14 +67,76 @@ class Credentials:
         return cls(kind, token, account)
 
 
-def _contains_remote_content(value: Any) -> bool:
-    if isinstance(value, dict):
-        if value.get("type") in {"input_image", "input_file", "item_reference"} or {"file_id", "image_url"} & value.keys():
-            return True
-        return any(_contains_remote_content(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_remote_content(item) for item in value)
-    return False
+def _local_content(value: Any, kinds: set[str]) -> bool:
+    if not isinstance(value, list):
+        return False
+    for part in value:
+        if not isinstance(part, dict) or part.get("type") not in kinds:
+            return False
+        field = "encrypted_content" if part["type"] == "encrypted_content" else "text"
+        fields = {"type", field}
+        if part["type"] == "output_text":
+            fields |= {"annotations", "logprobs"}
+            if any(part.get(key) is not None and not isinstance(part[key], list)
+                   for key in ("annotations", "logprobs")):
+                return False
+        if set(part) - fields or not isinstance(part.get(field), str):
+            return False
+    return True
+
+
+def _local_input_item(item: Any) -> bool:
+    # Only inline history variants from Codex 0.163 ResponseItem are accepted.
+    # ItemReference also accepts omitted/null type, so a denylist is insufficient.
+    fields_by_kind = {
+        "message": {"role", "content", "phase", "encrypted_content", "status"},
+        "agent_message": {"author", "recipient", "content"},
+        "reasoning": {"summary", "content", "encrypted_content"},
+        "function_call": {"name", "namespace", "arguments", "call_id", "encrypted_content",
+                          "encrypted_function_args", "status"},
+        "function_call_output": {"call_id", "name", "namespace", "output"},
+        "custom_tool_call": {"call_id", "name", "namespace", "input", "encrypted_content", "status"},
+        "custom_tool_call_output": {"call_id", "name", "output"},
+    }
+    if not isinstance(item, dict):
+        return False
+    kind = item.get("type")
+    if not isinstance(kind, str) or kind not in fields_by_kind:
+        return False
+    common = {"type", "id", "internal_chat_message_metadata_passthrough"}
+    if set(item) - (fields_by_kind[kind] | common):
+        return False
+    for key in {"id", "phase", "encrypted_content", "status", "call_id", "name", "namespace"}:
+        if item.get(key) is not None and not isinstance(item[key], str):
+            return False
+    metadata = item.get("internal_chat_message_metadata_passthrough")
+    if metadata is not None and not isinstance(metadata, dict):
+        return False
+    if kind == "message":
+        return (item.get("role") in ("system", "developer", "user", "assistant")
+                and _local_content(item.get("content"), {"input_text", "output_text"}))
+    if kind == "agent_message":
+        return (all(isinstance(item.get(key), str) for key in ("author", "recipient"))
+                and _local_content(item.get("content"), {"input_text", "encrypted_content"}))
+    if kind == "reasoning":
+        return (_local_content(item.get("summary"), {"summary_text"})
+                and (item.get("content") is None
+                     or _local_content(item["content"], {"reasoning_text", "text"})))
+    if kind in {"function_call", "custom_tool_call"}:
+        field = "arguments" if kind == "function_call" else "input"
+        encrypted_args = item.get("encrypted_function_args")
+        return (all(isinstance(item.get(key), str) for key in ("name", "call_id", field))
+                and (encrypted_args is None
+                     or (isinstance(encrypted_args, list)
+                         and all(isinstance(value, str) for value in encrypted_args))))
+    if kind == "custom_tool_call_output" and not isinstance(item.get("call_id"), str):
+        return False
+    output = item.get("output")
+    return isinstance(output, str) or _local_content(output, {"input_text", "encrypted_content"})
+
+
+def _local_input(value: Any) -> bool:
+    return isinstance(value, str) or (isinstance(value, list) and all(_local_input_item(item) for item in value))
 
 
 def _local_tool(tool: Any, depth: int = 0) -> bool:
@@ -106,9 +168,7 @@ def prepare_request(body: bytes) -> bytes:
             raise ValueError(INVALID_REQUEST)
     elif choice not in ("auto", "none", "required"):
         raise ValueError(INVALID_REQUEST)
-    if value.get("previous_response_id") is not None or value.get("conversation") is not None:
-        raise ValueError(INVALID_REQUEST)
-    if _contains_remote_content(value.get("input")):
+    if not _local_input(value.get("input", [])):
         raise ValueError(INVALID_REQUEST)
     value["store"] = False
     output = json.dumps(value, allow_nan=False, separators=(",", ":")).encode("utf-8")
@@ -217,8 +277,9 @@ class BrokerHandler(http.server.BaseHTTPRequestHandler):
         deadline = time.monotonic() + REQUEST_TIMEOUT
         try:
             connection = self.server.connection_factory(host, REQUEST_TIMEOUT)
+            authorization = "Bearer " + credential.bearer
             headers = {
-                "Authorization": f"Bearer {credential.token}",
+                "Authorization": authorization,
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream, application/json",
                 "User-Agent": "codex-trigger-eval-broker",
@@ -328,7 +389,7 @@ class BrokerHandler(http.server.BaseHTTPRequestHandler):
 
     def _contains_token(self, value: Any) -> bool:
         if isinstance(value, str):
-            return self.server.credentials.token in value
+            return self.server.credentials.bearer in value
         if isinstance(value, dict):
             return any(self._contains_token(key) or self._contains_token(item) for key, item in value.items())
         if isinstance(value, list):

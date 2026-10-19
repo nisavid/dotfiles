@@ -8,7 +8,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
+import uuid
 from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
@@ -18,6 +20,15 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import isolated_codex_runtime as runtime
 from trigger_eval_core import write_probe_skill
+
+
+# Generate unique non-live canaries for each test process; never embed a key.
+fixture_access = 'fixture/access-' + uuid.uuid4().hex
+fixture_refresh = 'fixture/refresh-' + uuid.uuid4().hex
+fixture_id = 'fixture/id-' + uuid.uuid4().hex
+fixture_api = 'fixture/api-' + uuid.uuid4().hex
+fixture_ambient_api = 'fixture/ambient-api-' + uuid.uuid4().hex
+fixture_ambient_github = 'fixture/ambient-github-' + uuid.uuid4().hex
 
 
 class RetainedInput(io.StringIO):
@@ -66,10 +77,10 @@ class IsolatedCodexRuntimeTests(unittest.TestCase):
         self.source.mkdir()
         (self.source / "auth.json").write_text(json.dumps({
             "tokens": {
-                "access_token": "synthetic-access-canary",
-                "refresh_token": "synthetic-refresh-canary",
-                "id_token": "synthetic-id-canary",
-                "account_id": "synthetic-account",
+                "access_token": fixture_access,
+                "refresh_token": fixture_refresh,
+                "id_token": fixture_id,
+                "account_id": "fixture-account",
             },
         }), encoding="utf-8")
         self.skill_path = write_probe_skill(
@@ -81,7 +92,8 @@ class IsolatedCodexRuntimeTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.stack.enter_context(mock.patch.dict(os.environ, {
             "PATH": "/trusted/bin", "HOME": str(self.root / "operator-home"),
-            "OPENAI_API_KEY": "ambient-key-canary", "GH_TOKEN": "ambient-github-canary",
+            "OPENAI_API_KEY": fixture_ambient_api,
+            "GH_TOKEN": fixture_ambient_github,
             "SSH_AUTH_SOCK": "/synthetic/agent.sock", "NODE_OPTIONS": "ambient-node-canary",
         }, clear=True))
         self.engine.install(self.stack)
@@ -113,7 +125,7 @@ class IsolatedCodexRuntimeTests(unittest.TestCase):
                     self.assertEqual(argv[index + 1].split(",")[0], "type=volume")
                     self.assertIn("src=" + probe.volume_name, argv[index + 1])
             serialized = json.dumps([argv, kwargs])
-            for forbidden in ("ambient-key-canary", "ambient-github-canary", "ambient-node-canary", "/synthetic/agent.sock", "synthetic-access-canary", "synthetic-refresh-canary"):
+            for forbidden in (fixture_ambient_api, fixture_ambient_github, "ambient-node-canary", "/synthetic/agent.sock", fixture_access, fixture_refresh):
                 self.assertNotIn(forbidden, serialized)
             self.assertNotIn(str(self.source), json.dumps(argv))
         self.assert_resources_removed(probe)
@@ -123,10 +135,10 @@ class IsolatedCodexRuntimeTests(unittest.TestCase):
             pass
         credential = json.loads(self.engine.broker.stdin.saved)
         self.assertEqual(credential, {
-            "kind": "chatgpt", "token": "synthetic-access-canary", "account_id": "synthetic-account",
+            "kind": "chatgpt", "token": fixture_access, "account_id": "fixture-account",
         })
-        self.assertNotIn("synthetic-refresh-canary", self.engine.broker.stdin.saved)
-        self.assertNotIn("synthetic-id-canary", self.engine.broker.stdin.saved)
+        self.assertNotIn(fixture_refresh, self.engine.broker.stdin.saved)
+        self.assertNotIn(fixture_id, self.engine.broker.stdin.saved)
         self.assertEqual(len(self.engine.launches), 1)
         _, options = self.engine.launches[0]
         self.assertEqual(options["stdin"], subprocess.PIPE)
@@ -134,11 +146,12 @@ class IsolatedCodexRuntimeTests(unittest.TestCase):
 
     def test_api_key_authentication_never_exports_other_auth_fields(self) -> None:
         (self.source / "auth.json").write_text(json.dumps({
-            "OPENAI_API_KEY": "synthetic-api-key", "irrelevant": "private-other-canary",
+            "OPENAI_API_KEY": fixture_api,
+            "irrelevant": "private-other-canary",
         }), encoding="utf-8")
         with self.create_runtime():
             pass
-        self.assertEqual(json.loads(self.engine.broker.stdin.saved), {"kind": "api_key", "token": "synthetic-api-key"})
+        self.assertEqual(json.loads(self.engine.broker.stdin.saved), {"kind": "openai", "token": fixture_api})
 
     def test_init_transfers_only_selected_probe_body_and_generated_config(self) -> None:
         (self.source / "config.toml").write_text("stale-source-config-canary", encoding="utf-8")
@@ -151,7 +164,12 @@ class IsolatedCodexRuntimeTests(unittest.TestCase):
         init = next(kwargs["input"] for argv, kwargs in self.engine.calls if argv[-1] == "init")
         payload = json.loads(init)
         self.assertEqual(payload["skills"], [{"name": "fixture-skill", "content": self.skill_path.read_text(encoding="utf-8")}])
-        self.assertIn("/home/probe/.codex/skills/fixture-skill/SKILL.md", payload["config"])
+        self.assertIn("/home/test/.codex/skills/fixture-skill/SKILL.md", payload["config"])
+        shell = tomllib.loads(payload["config"])["shell_environment_policy"]
+        self.assertEqual(shell["inherit"], "none")
+        self.assertEqual(shell["set"], {
+            "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/home/test", "LANG": "C.UTF-8",
+        })
         for forbidden in ("stale-source-config-canary", "stale-skill-canary", "stale-probe-auth-canary", str(self.source)):
             self.assertNotIn(forbidden, init)
 

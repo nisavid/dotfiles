@@ -91,7 +91,8 @@ class CodexTriggerRunnerTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.source = self.root / "source-codex-home"
         self.source.mkdir()
-        self.auth_text = '{"OPENAI_API_KEY":"synthetic-source-auth-canary"}'
+        fixture_auth = "fixture/source-auth-canary"
+        self.auth_text = json.dumps({"OPENAI_API_KEY": fixture_auth})
         (self.source / "auth.json").write_text(self.auth_text, encoding="utf-8")
         BodyReadingRuntime.instances = []
         BodyReadingRuntime.failure = None
@@ -106,10 +107,10 @@ class CodexTriggerRunnerTests(unittest.TestCase):
         values = {
             "codex_home": self.source, "workspace": self.root / "results",
             "skill_name": "fixture-skill", "description": "Use when testing fixture-positive requests.",
-            "effort": "high", "model": "synthetic-model", "query_index": 0,
+            "effort": "high", "model": "fixture/model", "query_index": 0,
             "query": "fixture-positive request", "should_trigger": True,
             "timeout": 2, "keep_home": False,
-            "container_runtime": "synthetic-engine", "runtime_image": "synthetic-image",
+            "container_runtime": "fixture/engine", "runtime_image": "fixture/image",
         }
         values.update(overrides)
         return values
@@ -125,7 +126,7 @@ class CodexTriggerRunnerTests(unittest.TestCase):
         for path in (self.root / "results").rglob("*"):
             self.assertFalse(path.is_symlink(), str(path))
             if path.is_file():
-                self.assertNotIn("synthetic-source-auth-canary", path.read_text(encoding="utf-8"))
+                self.assertNotIn("fixture/source-auth-canary", path.read_text(encoding="utf-8"))
                 self.assertNotEqual(path.name, "auth.json")
 
     def test_native_positive_and_negative_preserve_body_sentinel_and_effort(self) -> None:
@@ -138,9 +139,9 @@ class CodexTriggerRunnerTests(unittest.TestCase):
                 self.assertNotIn(result["marker"], result["probe_prompt"])
                 probe = BodyReadingRuntime.instances[-1]
                 self.assertIn("model_reasoning_effort=high", probe.commands[0])
-                self.assertIn("synthetic-model", probe.commands[0])
-                self.assertEqual(probe.options["engine"], "synthetic-engine")
-                self.assertEqual(probe.options["image"], "synthetic-image")
+                self.assertIn("fixture/model", probe.commands[0])
+                self.assertEqual(probe.options["engine"], "fixture/engine")
+                self.assertEqual(probe.options["image"], "fixture/image")
                 self.assertTrue(probe.exited)
                 self.assertFalse((Path(result["run_dir"]) / "home").exists())
         self.assert_safe_artifacts()
@@ -153,7 +154,7 @@ class CodexTriggerRunnerTests(unittest.TestCase):
                 self.assertEqual(result["triggered"], positive)
                 self.assertEqual(result["tool_calls"]["allowed_skill_read_count"], int(positive))
                 self.assertEqual(result["tool_calls"]["disallowed_count"], 0)
-                self.assertEqual(result["applied_config"], {"model": "synthetic-model", "reasoning_effort": "high"})
+                self.assertEqual(result["applied_config"], {"model": "fixture/model", "reasoning_effort": "high"})
                 self.assertNotIn(result["marker"], result["probe_prompt"])
                 self.assertFalse(result["codex_home"]["auth_linked"])
                 self.assertTrue(BodyReadingRuntime.instances[-1].exited)
@@ -169,17 +170,17 @@ class CodexTriggerRunnerTests(unittest.TestCase):
     def test_acpx_preflights_use_same_boundary_and_no_host_subprocess(self) -> None:
         result = acpx.run_preflight(
             acpx_bin="acpx", workspace=self.root / "results" / "preflight", skill_name="fixture-skill",
-            description="Use when merging a PR.", timeout=2, model="synthetic-model", effort="high",
+            description="Use when merging a PR.", timeout=2, model="fixture/model", effort="high",
             strict_json=True, codex_home=self.source, require_file_trace=False,
-            container_runtime="synthetic-engine", runtime_image="synthetic-image",
+            container_runtime="fixture/engine", runtime_image="fixture/image",
         )
         self.assertTrue(result["ok"], result)
         self.assertEqual(len(BodyReadingRuntime.instances), 2)
         self.assertIsNotNone(BodyReadingRuntime.instances[0].options["skill_path"])
         self.assertIsNone(BodyReadingRuntime.instances[1].options["skill_path"])
         for probe in BodyReadingRuntime.instances:
-            self.assertEqual(probe.options["engine"], "synthetic-engine")
-            self.assertEqual(probe.options["image"], "synthetic-image")
+            self.assertEqual(probe.options["engine"], "fixture/engine")
+            self.assertEqual(probe.options["image"], "fixture/image")
             self.assertTrue(probe.exited)
         self.host_run.assert_not_called()
         self.assert_safe_artifacts()

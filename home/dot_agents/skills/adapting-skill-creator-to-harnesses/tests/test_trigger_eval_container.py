@@ -47,10 +47,10 @@ class TriggerEvalContainerTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.codex_home = self.root / "private-host-codex"
         self.codex_home.mkdir()
-        self.credential = "synthetic-broker-credential-" + self.root.name
+        self.credential = "fixture/broker-credential-" + self.root.name
         (self.codex_home / "auth.json").write_text(json.dumps({"OPENAI_API_KEY": self.credential}), encoding="utf-8")
         self.host_file = self.root / "private-host-file"
-        self.host_file.write_text("synthetic-host-file-secret", encoding="utf-8")
+        self.host_file.write_text("fixture/host-file-secret", encoding="utf-8")
         self.skill_path = self.root / "container-canary" / "SKILL.md"
         self.skill_path.parent.mkdir()
         self.skill_path.write_text(
@@ -74,7 +74,7 @@ class TriggerEvalContainerTests(unittest.TestCase):
 
     def test_kernel_boundary_keeps_skill_readable_and_host_credentials_inaccessible(self) -> None:
         runtime = self.runtime()
-        ambient = "synthetic-ambient-credential-" + self.root.name
+        ambient = "fixture/ambient-credential-" + self.root.name
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": ambient, "GH_TOKEN": ambient, "TRIGGER_CANARY_SECRET": ambient}):
             with runtime:
                 inspected = self.inspect(runtime)
@@ -111,10 +111,10 @@ except OSError:
     root_write_blocked = True
 print(json.dumps({
     'uid': os.getuid(), 'environment': dict(os.environ), 'proc': proc,
-    'skill': pathlib.Path('/home/probe/.codex/skills/container-canary/SKILL.md').read_text(),
+    'skill': pathlib.Path('/home/test/.codex/skills/container-canary/SKILL.md').read_text(),
     'host_file_visible': pathlib.Path(sys.argv[1]).exists(),
     'host_auth_visible': pathlib.Path(sys.argv[2]).exists(),
-    'runtime_auth_present': pathlib.Path('/home/probe/.codex/auth.json').exists(),
+    'runtime_auth_present': pathlib.Path('/home/test/.codex/auth.json').exists(),
     'interfaces': sorted(p.name for p in pathlib.Path('/sys/class/net').iterdir()),
     'network_errno': network_errno, 'root_write_blocked': root_write_blocked,
 }))
@@ -152,12 +152,12 @@ print(json.dumps({
     def test_next_probe_has_no_previous_session_files(self) -> None:
         first = self.runtime()
         with first:
-            result = first.run(["python3", "-c", "from pathlib import Path; Path('/home/probe/stale-session').write_text('previous')"], timeout=10)
+            result = first.run(["python3", "-c", "from pathlib import Path; Path('/home/test/stale-session').write_text('previous')"], timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_removed(first)
         second = self.runtime()
         with second:
-            result = second.run(["python3", "-c", "from pathlib import Path; assert not Path('/home/probe/stale-session').exists()"], timeout=10)
+            result = second.run(["python3", "-c", "from pathlib import Path; assert not Path('/home/test/stale-session').exists()"], timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_removed(second)
 
@@ -166,7 +166,7 @@ print(json.dumps({
         with runtime:
             result = runtime.run([
                 "codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check",
-                "--sandbox", "danger-full-access", "-m", "gpt-5.1-codex-mini",
+                "--sandbox", "danger-full-access", "-m", "gpt-6.1-sol",
                 "Use the container-canary skill and report its marker.",
             ], timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -182,14 +182,14 @@ print(json.dumps({
         from trigger_eval_core import tool_call_diagnostic
 
         runtime = self.runtime(fixture=True)
-        base = ["acpx", "--cwd", "/work", "--deny-all", "--non-interactive-permissions", "fail", "--no-terminal", "--format", "json", "--timeout", "60", "--model", "gpt-5.1-codex-mini"]
+        base = ["acpx", "--cwd", "/work", "--deny-all", "--non-interactive-permissions", "fail", "--no-terminal", "--format", "json", "--timeout", "60", "--model", "gpt-6.1-sol"]
         with runtime:
             setup = runtime.run([*base, "codex", "sessions", "new", "--name", "canary"], timeout=60)
             self.assertEqual(setup.returncode, 0, setup.stderr + setup.stdout)
             result = runtime.run([*base, "codex", "prompt", "-s", "canary", "Use the container-canary skill and report its marker."], timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             events, messages = parse_acpx_output(result.stdout)
-            diagnostic = tool_call_diagnostic(events, ["/home/probe/.codex/skills/container-canary/SKILL.md"])
+            diagnostic = tool_call_diagnostic(events, ["/home/test/.codex/skills/container-canary/SKILL.md"])
             self.assertGreater(diagnostic["allowed_skill_read_count"], 0, result.stdout)
             self.assertEqual(diagnostic["disallowed_count"], 0, result.stdout)
             self.assertIn(SENTINEL, "".join(messages))

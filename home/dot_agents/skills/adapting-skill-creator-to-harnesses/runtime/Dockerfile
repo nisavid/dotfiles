@@ -16,12 +16,12 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && test "$(acpx --version)" = "0.19.6"
 
 COPY scripts/trigger_eval_broker.py scripts/trigger_eval_worker.py ./
-RUN mkdir -p /broker-socket /home/probe /work \
-    && chown 1000:1000 /broker-socket /home/probe /work
+RUN mkdir -p /broker-socket /home/test /work \
+    && chown 1000:1000 /broker-socket /home/test /work
 
 ENV PATH="/opt/trigger/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-    HOME="/home/probe" \
-    CODEX_HOME="/home/probe/.codex" \
+    HOME="/home/test" \
+    CODEX_HOME="/home/test/.codex" \
     NO_COLOR="1"
 USER 1000:1000
 WORKDIR /work

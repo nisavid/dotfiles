@@ -31,8 +31,8 @@ def load_module(name: str):
 
 broker = load_module("trigger_eval_broker")
 worker = load_module("trigger_eval_worker")
-TOKEN = "synthetic.token.not-a-real-credential"
-UPSTREAM_SECRET = "SYNTHETIC_UPSTREAM_ERROR_CANARY"
+FIXTURE_BEARER = "fixture/broker-canary"
+FIXTURE_UPSTREAM_TEXT = "SYNTHETIC_UPSTREAM_ERROR_CANARY"
 
 
 class FakeResponse:
@@ -122,7 +122,7 @@ def decode_response(raw):
 @contextlib.contextmanager
 def running_broker(factory=None, kind="chatgpt"):
     factory = factory or FakeFactory()
-    credentials = broker.Credentials(kind, TOKEN, "synthetic-account" if kind == "chatgpt" else None)
+    credentials = broker.Credentials(kind, FIXTURE_BEARER, "fixture-account" if kind == "chatgpt" else None)
     server = SimpleNamespace(credentials=credentials, connection_factory=factory, requests_started=0)
     yield server, server, factory
 
@@ -143,38 +143,41 @@ def raw_request(path, data):
 
 class BrokerTests(unittest.TestCase):
     def test_credentials_reject_headers_and_unknown_controls(self):
+        fixture_invalid = "bad\r\nX-Extra: canary"
         for value in (
-            {"kind": "api_key", "token": "bad\r\nX-Extra: canary"},
-            {"kind": "chatgpt", "token": TOKEN, "account_id": "bad\naccount"},
-            {"kind": "api_key", "token": TOKEN, "upstream": "https://attacker.invalid"},
-            {"kind": "unknown", "token": TOKEN},
+            {"kind": "openai", "token": fixture_invalid},
+            {"kind": "chatgpt", "token": FIXTURE_BEARER, "account_id": "bad\naccount"},
+            {"kind": "openai", "token": FIXTURE_BEARER, "upstream": "https://attacker.invalid"},
+            {"kind": "unknown", "token": FIXTURE_BEARER},
         ):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 broker.Credentials.parse(value)
-        self.assertEqual(broker.Credentials.parse({"kind": "chatgpt", "token": TOKEN}).token, TOKEN)
-        self.assertNotIn(TOKEN, repr(broker.Credentials("chatgpt", TOKEN)))
+        self.assertEqual(broker.Credentials.parse({"kind": "chatgpt", "token": FIXTURE_BEARER}).bearer, FIXTURE_BEARER)
+        self.assertNotIn(FIXTURE_BEARER, repr(broker.Credentials("chatgpt", FIXTURE_BEARER)))
 
     def test_fixed_upstream_overrides_all_caller_identity_headers_and_env(self):
-        with mock.patch.dict(os.environ, {"HTTPS_PROXY": "http://attacker.invalid", "OPENAI_API_KEY": "ambient-canary"}):
+        fixture_ambient = "fixture/ambient-canary"
+        fixture_caller = "Bearer " + "fixture/caller-canary"
+        with mock.patch.dict(os.environ, {"HTTPS_PROXY": "http://attacker.invalid", "OPENAI_API_KEY": fixture_ambient}):
             with running_broker() as (path, server, factory):
                 status, headers, body = request(path, headers={
-                    "Content-Type": "application/json", "Authorization": "Bearer caller-canary",
+                    "Content-Type": "application/json", "Authorization": fixture_caller,
                     "Host": "attacker.invalid", "ChatGPT-Account-ID": "wrong-account",
                     "Cookie": "cookie-canary", "X-Upstream": "https://attacker.invalid",
                 })
         self.assertEqual(status, 200)
         host, method, target, value, sent = factory.calls[0]
         self.assertEqual((host, method, target), ("chatgpt.com", "POST", "/backend-api/codex/responses"))
-        self.assertEqual(sent["Authorization"], f"Bearer {TOKEN}")
-        self.assertEqual(sent["ChatGPT-Account-ID"], "synthetic-account")
+        self.assertEqual(sent["Authorization"], f"Bearer {FIXTURE_BEARER}")
+        self.assertEqual(sent["ChatGPT-Account-ID"], "fixture-account")
         self.assertNotIn("Cookie", sent)
         self.assertNotIn("X-Upstream", sent)
         self.assertNotIn("ambient-canary", json.dumps(sent))
-        self.assertNotIn(TOKEN.encode(), body)
+        self.assertNotIn(FIXTURE_BEARER.encode(), body)
         self.assertTrue(all(connection.closed for connection in factory.connections))
 
     def test_api_key_endpoint_and_stateless_requests(self):
-        with running_broker(kind="api_key") as (path, server, factory):
+        with running_broker(kind="openai") as (path, server, factory):
             status, _, _ = request(path, {"model": "gpt-test", "input": [], "store": True,
                                         "tools": [{"type": "function", "name": "read_skill"},
                                                   {"type": "custom", "name": "shell"}]})
@@ -219,6 +222,57 @@ class BrokerTests(unittest.TestCase):
                 self.assertEqual(request(path, value)[0], expected)
                 self.assertEqual(bool(factory.calls), expected == 200)
 
+    def test_input_references_and_control_items_fail_before_upstream(self):
+        bad_items = [
+            {"id": "fixture/stored-item"},
+            {"id": "fixture/stored-item", "type": None},
+            {"id": "fixture/stored-item", "type": "item_reference"},
+            {"id": "fixture/stored-item", "type": "message"},
+            {"id": "fixture/stored-item", "type": "reasoning"},
+            {"id": "fixture/stored-item", "type": "function_call_output"},
+            {"type": "additional_tools", "role": "developer", "tools": [{"type": "web_search"}]},
+            {"type": "configuration_update", "reasoning": {"effort": "high"}},
+            {"type": "program", "program": "fixture/program"},
+            {"type": "tool_search_call", "execution": "server", "arguments": {}},
+            {"type": "tool_search_output", "tools": [{"type": "mcp", "server_url": "https://attacker.invalid"}]},
+            {"type": "web_search_call", "action": {"type": "search", "query": "canary"}},
+            {"type": "message", "role": "user", "content": [{"type": "input_audio", "audio_url": "https://attacker.invalid"}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "canary", "file_id": "file-canary"}]},
+            {"type": "function_call_output", "call_id": "call-local", "output": [{"id": "fixture/stored-item"}]},
+            {"type": "function_call_output", "call_id": "call-local", "output": [{"type": "input_image", "image_url": "https://attacker.invalid"}]},
+            {"type": "custom_tool_call_output", "call_id": "call-local", "output": {"type": "item_reference", "id": "fixture/stored-item"}},
+            {"type": "message", "role": "user", "content": [], "tools": [{"type": "web_search"}]},
+        ]
+        for item in bad_items:
+            with self.subTest(item=item), running_broker() as (path, _, factory):
+                self.assertEqual(request(path, {"model": "gpt-test", "input": [item]})[0], 400)
+                self.assertFalse(factory.calls)
+        for value in (None, {}, 1, [None], ["text"]):
+            with self.subTest(input=value), running_broker() as (path, _, factory):
+                self.assertEqual(request(path, {"model": "gpt-test", "input": value})[0], 400)
+                self.assertFalse(factory.calls)
+
+    def test_inline_message_reasoning_and_local_call_history_is_preserved(self):
+        history = [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Select a skill"}]},
+            {"type": "message", "id": "fixture/message", "role": "assistant", "phase": "commentary",
+             "content": [{"type": "output_text", "text": "Reading the skill", "annotations": [], "logprobs": []}]},
+            {"type": "reasoning", "id": "fixture/reasoning", "encrypted_content": "fixture/encrypted-content",
+             "summary": [{"type": "summary_text", "text": "Read the matching skill"}],
+             "content": [{"type": "reasoning_text", "text": "Use local shell"}]},
+            {"type": "function_call", "id": "fixture/function", "name": "exec_command", "namespace": "functions",
+             "call_id": "fixture/call", "arguments": '{"cmd":"cat SKILL.md"}'},
+            {"type": "function_call_output", "call_id": "fixture/call", "output": "TRIGGER_SENTINEL"},
+            {"type": "function_call_output", "call_id": "fixture/call", "output": [{"type": "input_text", "text": "TRIGGER_SENTINEL"}]},
+            {"type": "custom_tool_call", "id": "fixture/custom", "call_id": "fixture/custom-call", "name": "shell", "input": "cat SKILL.md"},
+            {"type": "custom_tool_call_output", "call_id": "fixture/custom-call", "output": "TRIGGER_SENTINEL"},
+            {"type": "custom_tool_call_output", "call_id": "fixture/custom-call", "output": [{"type": "input_text", "text": "TRIGGER_SENTINEL"}]},
+            {"type": "agent_message", "author": "assistant", "recipient": "all", "content": [{"type": "input_text", "text": "Done"}]},
+        ]
+        with running_broker() as (path, _, factory):
+            self.assertEqual(request(path, {"model": "gpt-test", "input": history})[0], 200)
+            self.assertEqual(factory.calls[0][3]["input"], history)
+
     def test_path_method_and_http_framing_bypasses_fail_closed(self):
         with running_broker() as (path, server, factory):
             for target in ("/v1/responses?url=https://attacker.invalid", "http://attacker.invalid/v1/responses",
@@ -241,38 +295,38 @@ class BrokerTests(unittest.TestCase):
 
     def test_upstream_errors_and_redirects_never_forward_body(self):
         for status in (301, 302, 401, 403, 429, 500):
-            factory = FakeFactory(lambda: FakeResponse(UPSTREAM_SECRET.encode(), status))
+            factory = FakeFactory(lambda: FakeResponse(FIXTURE_UPSTREAM_TEXT.encode(), status))
             with self.subTest(status=status), running_broker(factory) as (path, server, _):
                 returned, _, body = request(path)
             self.assertEqual(returned, 401 if status in (401, 403) else 502)
-            self.assertNotIn(UPSTREAM_SECRET.encode(), body)
+            self.assertNotIn(FIXTURE_UPSTREAM_TEXT.encode(), body)
             self.assertEqual(len(factory.calls), 1)
             if status in (401, 403):
                 self.assertIn(b"Refresh the host login", body)
 
     def test_json_and_sse_errors_are_sanitized(self):
         bodies = [
-            (b'{"error":{"message":"' + UPSTREAM_SECRET.encode() + b'"}}', "application/json"),
-            (b'data: {"type":"error","message":"' + UPSTREAM_SECRET.encode() + b'"}\n\n', "text/event-stream"),
-            (b'data: {"type":"response.failed","response":{"error":{"message":"' + UPSTREAM_SECRET.encode() + b'"}}}\n\n', "text/event-stream"),
+            (b'{"error":{"message":"' + FIXTURE_UPSTREAM_TEXT.encode() + b'"}}', "application/json"),
+            (b'data: {"type":"error","message":"' + FIXTURE_UPSTREAM_TEXT.encode() + b'"}\n\n', "text/event-stream"),
+            (b'data: {"type":"response.failed","response":{"error":{"message":"' + FIXTURE_UPSTREAM_TEXT.encode() + b'"}}}\n\n', "text/event-stream"),
         ]
         for body, content_type in bodies:
             with self.subTest(content_type=content_type):
                 with running_broker(FakeFactory(lambda: FakeResponse(body, content_type=content_type))) as (path, _, _):
                     status, _, returned = request(path)
                 self.assertEqual(status, 502)
-                self.assertNotIn(UPSTREAM_SECRET.encode(), returned)
+                self.assertNotIn(FIXTURE_UPSTREAM_TEXT.encode(), returned)
 
     def test_sse_stream_preserves_model_output_but_not_error_details(self):
         body = (b'event: response.output_text.delta\r\ndata: {"type":"response.output_text.delta","delta":"TRIGGER_SENTINEL"}\r\n\r\n'
-                b'event: error\ndata: {"type":"error","message":"' + UPSTREAM_SECRET.encode() + b'"}\n\n')
+                b'event: error\ndata: {"type":"error","message":"' + FIXTURE_UPSTREAM_TEXT.encode() + b'"}\n\n')
         with running_broker(FakeFactory(lambda: FakeResponse(body, content_type="text/event-stream"))) as (path, _, _):
             status, headers, returned = request(path)
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "text/event-stream")
         self.assertIn(b"TRIGGER_SENTINEL", returned)
         self.assertIn(b"Inference failed", returned)
-        self.assertNotIn(UPSTREAM_SECRET.encode(), returned)
+        self.assertNotIn(FIXTURE_UPSTREAM_TEXT.encode(), returned)
 
     def test_request_response_and_time_limits(self):
         with running_broker() as (path, server, factory):
@@ -289,20 +343,20 @@ class BrokerTests(unittest.TestCase):
 
     def test_success_response_cannot_reflect_broker_credential(self):
         for content_type, body in (
-            ("application/json", json.dumps({"output": TOKEN}).encode()),
-            ("text/event-stream", b'data: ' + json.dumps({"type": "response.output_text.delta", "delta": TOKEN}).encode() + b'\n\n'),
+            ("application/json", json.dumps({"output": FIXTURE_BEARER}).encode()),
+            ("text/event-stream", b'data: ' + json.dumps({"type": "response.output_text.delta", "delta": FIXTURE_BEARER}).encode() + b'\n\n'),
         ):
             with self.subTest(content_type=content_type):
                 with running_broker(FakeFactory(lambda: FakeResponse(body, content_type=content_type))) as (path, _, _):
                     status, _, returned = request(path)
                 self.assertEqual(status, 502)
-                self.assertNotIn(TOKEN.encode(), returned)
-        escaped = "".join(f"\\u{ord(character):04x}" for character in TOKEN)
+                self.assertNotIn(FIXTURE_BEARER.encode(), returned)
+        escaped = "".join(f"\\u{ord(character):04x}" for character in FIXTURE_BEARER)
         body = ('{"output":[{"text":"prefix' + escaped + 'suffix"}]}').encode()
         with running_broker(FakeFactory(lambda: FakeResponse(body))) as (path, _, _):
             status, _, returned = request(path)
         self.assertEqual(status, 502)
-        self.assertNotIn(TOKEN.encode(), returned)
+        self.assertNotIn(FIXTURE_BEARER.encode(), returned)
 
     def test_upstream_network_factory_ignores_proxy_environment(self):
         with mock.patch.dict(os.environ, {"HTTPS_PROXY": "http://attacker.invalid", "ALL_PROXY": "http://attacker.invalid"}):
@@ -370,9 +424,9 @@ class WorkerTests(unittest.TestCase):
                     raw = f"POST {target} HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nAuthorization: caller-canary\r\n\r\n".encode() + body
                     status, headers, returned = decode_response(run_handler(worker.RelayHandler, raw, SimpleNamespace()))
                     self.assertEqual(status, expected)
-                    self.assertNotIn(TOKEN.encode(), returned)
+                    self.assertNotIn(FIXTURE_BEARER.encode(), returned)
             self.assertEqual(len(factory.calls), 1)
-            self.assertEqual(factory.calls[0][4]["Authorization"], f"Bearer {TOKEN}")
+            self.assertEqual(factory.calls[0][4]["Authorization"], f"Bearer {FIXTURE_BEARER}")
 
     def test_relay_connection_is_fixed_unix_socket(self):
         with mock.patch.object(worker.socket, "socket") as create:
@@ -389,7 +443,7 @@ class WorkerTests(unittest.TestCase):
             self.skipTest("This execution environment forbids AF_UNIX sockets")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "inference.sock"
-            with broker.BrokerServer(path, broker.Credentials("api_key", TOKEN), connection_factory=FakeFactory()) as server:
+            with broker.BrokerServer(path, broker.Credentials("openai", FIXTURE_BEARER), connection_factory=FakeFactory()) as server:
                 thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
                 thread.start()
                 try:
@@ -397,7 +451,7 @@ class WorkerTests(unittest.TestCase):
                     connection.request("POST", "/v1/responses", json.dumps({"model": "gpt-test", "input": []}), {"Content-Type": "application/json"})
                     response = connection.getresponse()
                     self.assertEqual(response.status, 200)
-                    self.assertNotIn(TOKEN.encode(), response.read())
+                    self.assertNotIn(FIXTURE_BEARER.encode(), response.read())
                     connection.close()
                     self.assertEqual(path.stat().st_mode & 0o777, 0o600)
                 finally:

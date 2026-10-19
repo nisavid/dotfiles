@@ -228,7 +228,7 @@ def run_prompt(
     container_runtime: str = "docker",
     runtime_image: str = DEFAULT_IMAGE,
 ) -> dict[str, Any]:
-    skill_name = skill_path.parent.name if skill_path else "empty-probe"
+    skill_name = skill_path.parent.name if skill_path else None
     allowed_skill_body_paths = (
         [str(PROBE_HOME / ".agents" / "skills" / skill_name / "SKILL.md"),
          str(PROBE_CODEX_HOME / "skills" / skill_name / "SKILL.md")]

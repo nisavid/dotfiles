@@ -20,7 +20,7 @@ from typing import Any
 
 
 DEFAULT_IMAGE = "nisavid-trigger-eval:codex-0.163.0-acpx-0.19.6"
-PROBE_HOME = Path("/home/probe")
+PROBE_HOME = Path("/home/test")
 PROBE_CWD = Path("/work")
 PROBE_CODEX_HOME = PROBE_HOME / ".codex"
 BROKER_COMMAND = ["python3", "-I", "/opt/trigger/trigger_eval_broker.py"]
@@ -57,6 +57,7 @@ shell_tool = true
 
 [shell_environment_policy]
 inherit = "none"
+set = { PATH = "/usr/local/bin:/usr/bin:/bin", HOME = "/home/test", LANG = "C.UTF-8" }
 
 [model_providers.trigger-broker]
 name = "Isolated trigger evaluation"
@@ -87,7 +88,7 @@ def load_credentials(codex_home: Path) -> dict[str, str]:
             raise ValueError("invalid auth object")
         api_key = auth.get("OPENAI_API_KEY")
         if isinstance(api_key, str) and api_key:
-            return {"kind": "api_key", "token": api_key}
+            return {"kind": "openai", "token": api_key}
         tokens = auth.get("tokens")
         if isinstance(tokens, dict):
             access_token = tokens.get("access_token")
@@ -203,7 +204,7 @@ class IsolatedCodexRuntime:
             self._checked([
                 "run", "--rm", "--detach", "--name", self.worker_name, *common,
                 "--network=none",
-                "--tmpfs=/home/probe:rw,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=700",
+                "--tmpfs=/home/test:rw,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=700",
                 "--tmpfs=/work:rw,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700",
                 "--mount", f"type=volume,src={self.volume_name},dst=/broker-socket,readonly",
                 "--entrypoint=env", self.image, "-i", *[f"{k}={v}" for k, v in WORKER_ENV.items()],

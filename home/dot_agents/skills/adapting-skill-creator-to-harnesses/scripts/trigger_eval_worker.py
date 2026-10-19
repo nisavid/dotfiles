@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-HOME = Path("/home/probe")
+HOME = Path("/home/test")
 SOCKET_PATH = "/broker-socket/inference.sock"
 MAX_BODY = 4 * 1024 * 1024
 MAX_RESPONSE = 16 * 1024 * 1024

@@ -18,7 +18,7 @@ from trigger_eval_broker import BrokerServer, Credentials  # noqa: E402
 
 
 SOCKET_PATH = Path("/broker-socket/inference.sock")
-SKILL_PATH = "/home/probe/.codex/skills/container-canary/SKILL.md"
+SKILL_PATH = "/home/test/.codex/skills/container-canary/SKILL.md"
 SENTINEL = "CONTAINER_CANARY_SENTINEL"
 
 
@@ -118,7 +118,7 @@ class FixtureConnection:
     def request(self, method: str, path: str, *, body: bytes, headers: dict[str, str]) -> None:
         if method != "POST" or path not in {"/v1/responses", "/backend-api/codex/responses"}:
             raise ValueError("Unexpected broker request")
-        if not headers.get("Authorization", "").startswith("Bearer synthetic-broker-credential-"):
+        if not headers.get("Authorization", "").startswith("Bearer " + "fixture/broker-credential-"):
             raise ValueError("Fixture accepts only synthetic credentials")
         self.request_body = json.loads(body)
 
