@@ -1,5 +1,7 @@
 # Scenario: Stalled External Review
 
+Policy provenance: the workflow skills and applicable repository policy come from an independently verified target-repository default-branch commit. Its full OID and the base/head identities are recorded; comparison shows no policy or referenced-helper changes in the head or local edits.
+
 User request: "Drive this PR to merge. It already had two completed bot review cycles, and the latest review has one stale-looking unresolved thread."
 
 Mock repository state:

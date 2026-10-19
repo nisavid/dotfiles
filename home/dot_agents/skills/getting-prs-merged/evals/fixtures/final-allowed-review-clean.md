@@ -1,5 +1,7 @@
 # Scenario: Final Allowed Review Is Clean
 
+Policy provenance: the workflow skills and applicable repository policy come from an independently verified target-repository default-branch commit. Its full OID and the base/head identities are recorded; comparison shows no policy or referenced-helper changes in the head or local edits.
+
 User request: "Get this PR merged. Request at most one more completed external review."
 
 - Repository: `example/widgets`; PR: `#91`.
