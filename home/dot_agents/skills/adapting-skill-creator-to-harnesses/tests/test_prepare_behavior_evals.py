@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import runpy
+import shlex
 import stat
 import subprocess
 import sys
@@ -16,6 +18,7 @@ SKILL_DIR = Path(__file__).resolve().parents[1]
 PREPARER = SKILL_DIR / "scripts" / "prepare_behavior_evals.py"
 REPO_ROOT = SKILL_DIR.parents[3]
 EVALS_ROOT = REPO_ROOT / "home" / "dot_agents" / "skills"
+LEGACY_PREPARER = EVALS_ROOT / "getting-prs-merged" / "scripts" / "prepare_behavior_evals.py"
 
 
 def shipped_eval_paths() -> list[Path]:
@@ -23,6 +26,135 @@ def shipped_eval_paths() -> list[Path]:
 
 
 class PrepareBehaviorEvalsTests(unittest.TestCase):
+    def assert_literal_commands(self, workspace: Path, root: Path, skill_name: str) -> None:
+        instructions = (workspace / "RUN_INSTRUCTIONS.md").read_text(encoding="utf-8")
+        opening = re.search(r"^(`{3,})bash\n", instructions, re.MULTILINE)
+        self.assertIsNotNone(opening)
+        fence = opening.group(1)
+        body, closing, _ = instructions[opening.end():].partition(f"\n{fence}\n")
+        self.assertTrue(closing, "shell block must have a closing fence")
+        self.assertIsNone(
+            re.search(r"^ {0,3}`{" + str(len(fence)) + r",}[ \t]*$", body, re.MULTILINE),
+            "literal arguments must not terminate the Markdown command block",
+        )
+        commands = body.replace(
+            "cd <skill-creator-skill-dir>", f"cd -- {shlex.quote(str(root))}", 1
+        )
+        recorder_dir = root / "bin"
+        recorder_dir.mkdir()
+        recorder = recorder_dir / "python"
+        recorder.write_text(
+            f"#!{sys.executable}\n"
+            "import json, os, sys\n"
+            "with open(os.environ['ARGV_CAPTURE'], 'a', encoding='utf-8') as capture:\n"
+            "    capture.write(json.dumps(sys.argv[1:]) + '\\n')\n",
+            encoding="utf-8",
+        )
+        recorder.chmod(0o700)
+        capture = root / "argv.jsonl"
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc"],
+            input="set -eu\n" + commands,
+            cwd=root,
+            env={**os.environ, "PATH": f"{recorder_dir}{os.pathsep}{os.environ['PATH']}",
+                 "ARGV_CAPTURE": str(capture)},
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout or result.stderr)
+        self.assertFalse((root / "injected-marker").exists())
+        self.assertEqual(
+            [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()],
+            [
+                ["-m", "scripts.aggregate_benchmark", str(workspace), f"--skill-name={skill_name}"],
+                ["eval-viewer/generate_review.py", str(workspace), f"--skill-name={skill_name}",
+                 "--benchmark", str(workspace / "benchmark.json"),
+                 "--static", str(workspace / "review.html")],
+            ],
+        )
+
+    def test_generated_commands_preserve_literal_names_and_paths(self) -> None:
+        cases = (
+            ("example-skill", "workspace"),
+            ("Skill author's café", "workspace with spaces and 'quotes'"),
+            ("--benchmark=elsewhere", "workspace"),
+            ("example$(touch injected-marker)", "workspace"),
+            ("example`touch injected-marker`", "workspace"),
+            ("example; touch injected-marker #", "workspace"),
+            ("example'\"; touch injected-marker #", "workspace"),
+            ("example\n````\ntouch injected-marker\n```bash\n", "workspace"),
+            ("example-skill", "workspace $(touch injected-marker) `touch injected-marker` ; & *"),
+            ("example-skill", "workspace\n````\ntouch injected-marker\n```bash\n"),
+        )
+        for preparer in (PREPARER, LEGACY_PREPARER):
+            for skill_name, workspace_name in cases:
+                with self.subTest(preparer=preparer, name=skill_name, workspace=workspace_name):
+                    with tempfile.TemporaryDirectory() as tempdir:
+                        root = Path(tempdir).resolve()
+                        skill_dir = root / "skill"
+                        (skill_dir / "evals").mkdir(parents=True)
+                        (skill_dir / "SKILL.md").write_text("candidate skill", encoding="utf-8")
+                        (skill_dir / "evals" / "evals.json").write_text(
+                            json.dumps({"skill_name": skill_name, "evals": []}), encoding="utf-8"
+                        )
+                        workspace = root / workspace_name
+                        result = subprocess.run(
+                            [sys.executable, str(preparer), f"--skill-dir={skill_dir}",
+                             "--workspace", str(workspace)],
+                            text=True, capture_output=True, check=False, timeout=10,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stdout or result.stderr)
+                        self.assert_literal_commands(workspace, root, skill_name)
+
+    def test_direct_renderer_preserves_literal_shell_arguments(self) -> None:
+        preparer = runpy.run_path(str(PREPARER))
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir).resolve()
+            workspace, workspace_fd = preparer["create_workspace"](root / "workspace 'quoted'")
+            skill_name = "example$(touch injected-marker)\n````\n"
+            try:
+                preparer["write_run_instructions"](workspace_fd, workspace, skill_name, 1)
+            finally:
+                os.close(workspace_fd)
+            self.assert_literal_commands(workspace, root, skill_name)
+
+    def test_rejects_invalid_skill_names_before_creating_workspace(self) -> None:
+        preparer = runpy.run_path(str(PREPARER))
+        documents = [{"evals": []}]
+        documents.extend(
+            {"skill_name": value, "evals": []}
+            for value in (None, False, 123, [], {}, "", " \n\t", "bad\0name")
+        )
+        for document in documents:
+            with self.subTest(document=document), tempfile.TemporaryDirectory() as tempdir:
+                root = Path(tempdir).resolve()
+                skill_dir = root / "skill"
+                (skill_dir / "evals").mkdir(parents=True)
+                (skill_dir / "evals" / "evals.json").write_text(
+                    json.dumps(document), encoding="utf-8"
+                )
+                workspace = root / "workspace"
+                result = subprocess.run(
+                    [sys.executable, str(PREPARER), "--skill-dir", str(skill_dir),
+                     "--workspace", str(workspace)],
+                    text=True, capture_output=True, check=False, timeout=10,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("skill_name must be a nonempty string", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertFalse(workspace.exists())
+                workspace, workspace_fd = preparer["create_workspace"](workspace)
+                try:
+                    with self.assertRaisesRegex(ValueError, "skill_name must be a nonempty string"):
+                        preparer["write_run_instructions"](
+                            workspace_fd, workspace, document.get("skill_name"), 1
+                        )
+                finally:
+                    os.close(workspace_fd)
+                self.assertFalse((workspace / "RUN_INSTRUCTIONS.md").exists())
+
     def test_reports_a_missing_skill_directory_as_a_cli_error(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
