@@ -14,12 +14,37 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
+import trigger_eval_broker as broker  # noqa: E402
 from trigger_eval_broker import BrokerServer, Credentials  # noqa: E402
 
 
 SOCKET_PATH = Path("/broker-socket/inference.sock")
 SKILL_PATH = "/home/test/.codex/skills/container-canary/SKILL.md"
 SENTINEL = "CONTAINER_CANARY_SENTINEL"
+
+
+def request_shape(value: Any) -> Any:
+    """Keep schema failures actionable without returning prompt or credential text."""
+    if isinstance(value, dict):
+        return {key: child if key == "type" and isinstance(child, str) else request_shape(child)
+                for key, child in value.items()}
+    if isinstance(value, list):
+        return [request_shape(child) for child in value[:8]]
+    return type(value).__name__
+
+
+production_prepare_request = broker.prepare_request
+
+
+def prepare_fixture_request(body: bytes) -> bytes:
+    try:
+        return production_prepare_request(body)
+    except ValueError:
+        broker.INVALID_REQUEST = "Fixture request schema rejected: " + json.dumps(request_shape(json.loads(body)))
+        raise
+
+
+broker.prepare_request = prepare_fixture_request
 
 
 def objects(value: Any):
@@ -32,6 +57,14 @@ def objects(value: Any):
             yield from objects(child)
 
 
+def local_functions(tools: list[dict[str, Any]], namespace: str | None = None):
+    for tool in tools:
+        if tool.get("type") == "namespace":
+            yield from local_functions(tool["tools"], tool["name"])
+        elif tool.get("type") == "function":
+            yield tool["name"], namespace
+
+
 def output_item(request: dict[str, Any]) -> dict[str, Any]:
     for item in objects(request.get("input", [])):
         if item.get("type") == "function_call_output" and SENTINEL in str(item.get("output", "")):
@@ -41,7 +74,11 @@ def output_item(request: dict[str, Any]) -> dict[str, Any]:
                     {"type": "output_text", "text": SENTINEL, "annotations": []},
                 ],
             }
-    available = {item.get("name"): item for item in objects(request.get("tools", [])) if isinstance(item.get("name"), str)}
+    tools = list(request.get("tools", []))
+    for item in request.get("input", []):
+        if isinstance(item, dict) and item.get("type") == "additional_tools":
+            tools.extend(item["tools"])
+    available = dict(local_functions(tools))
     for candidate in ("exec_command", "shell_command", "shell"):
         name = next((key for key in available if key.split(".")[-1] == candidate), None)
         if name is None:
@@ -56,7 +93,8 @@ def output_item(request: dict[str, Any]) -> dict[str, Any]:
             args = {"command": ["/bin/sh", "-c", command]}
         return {
             "type": "function_call", "id": "fc_canary", "status": "completed",
-            "call_id": "call_canary", "name": name, "arguments": json.dumps(args),
+            "call_id": "call_canary", "name": name, "namespace": available[name],
+            "arguments": json.dumps(args),
         }
     raise ValueError("The harness did not advertise a supported shell tool")
 

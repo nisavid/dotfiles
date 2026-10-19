@@ -252,6 +252,39 @@ class BrokerTests(unittest.TestCase):
                 self.assertEqual(request(path, {"model": "gpt-test", "input": value})[0], 400)
                 self.assertFalse(factory.calls)
 
+    def test_responses_lite_declarations_allow_only_local_tools(self):
+        declarations = {
+            "type": "additional_tools", "id": "fixture/local-tools", "role": "developer",
+            "tools": [{"type": "namespace", "name": "functions", "description": "Local tools", "tools": [
+                {"type": "function", "name": "exec_command", "description": "Run a local command",
+                 "strict": False, "parameters": {"type": "object", "properties": {}}},
+                {"type": "custom", "name": "apply_patch", "description": "Edit a local file", "format": {"type": "text"}},
+            ]}],
+        }
+        with running_broker() as (path, _, factory):
+            self.assertEqual(request(path, {"model": "gpt-6.1-sol", "input": [declarations]})[0], 200)
+            self.assertEqual(factory.calls[0][3]["input"], [declarations])
+            self.assertNotIn("tools", factory.calls[0][3])
+        bad_items = [
+            {**declarations, "role": "user"},
+            {**declarations, "id": {"id": "fixture/stored-item"}},
+            {**declarations, "tools": None},
+            {**declarations, "tools": {"type": "function"}},
+            {**declarations, "unknown_control": True},
+            {"type": "additional_tools", "id": "fixture/stored-item"},
+        ]
+        for hosted in ("web_search", "file_search", "mcp", "code_interpreter", "tool_search"):
+            bad_items.extend([
+                {**declarations, "tools": [{"type": hosted}]},
+                {**declarations, "tools": [{"type": "namespace", "name": "functions", "tools": [
+                    {"type": "namespace", "name": "nested", "tools": [{"type": hosted}]},
+                ]}]},
+            ])
+        for item in bad_items:
+            with self.subTest(item=item), running_broker() as (path, _, factory):
+                self.assertEqual(request(path, {"model": "gpt-6.1-sol", "input": [item]})[0], 400)
+                self.assertFalse(factory.calls)
+
     def test_inline_message_reasoning_and_local_call_history_is_preserved(self):
         history = [
             {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Select a skill"}]},

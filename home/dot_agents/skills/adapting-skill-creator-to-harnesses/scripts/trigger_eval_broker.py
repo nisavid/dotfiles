@@ -101,6 +101,15 @@ def _local_input_item(item: Any) -> bool:
     if not isinstance(item, dict):
         return False
     kind = item.get("type")
+    if kind == "additional_tools":
+        # Responses Lite carries the same local tool declarations in input.
+        # Validate them here as strictly as top-level tools before forwarding.
+        declarations = item.get("tools")
+        return (not (set(item) - {"type", "id", "role", "tools"})
+                and (item.get("id") is None or isinstance(item["id"], str))
+                and item.get("role") == "developer"
+                and isinstance(declarations, list)
+                and all(_local_tool(tool) for tool in declarations))
     if not isinstance(kind, str) or kind not in fields_by_kind:
         return False
     common = {"type", "id", "internal_chat_message_metadata_passthrough"}
