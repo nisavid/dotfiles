@@ -26,7 +26,7 @@ SENTINEL = "CONTAINER_CANARY_SENTINEL"
 def request_shape(value: Any) -> Any:
     """Keep schema failures actionable without returning prompt or credential text."""
     if isinstance(value, dict):
-        return {key: child if key == "type" and isinstance(child, str) else request_shape(child)
+        return {key: child if key in {"type", "name", "namespace"} and isinstance(child, str) else request_shape(child)
                 for key, child in value.items()}
     if isinstance(value, list):
         return [request_shape(child) for child in value[:8]]
@@ -57,17 +57,17 @@ def objects(value: Any):
             yield from objects(child)
 
 
-def local_functions(tools: list[dict[str, Any]], namespace: str | None = None):
+def local_tools(tools: list[dict[str, Any]], namespace: str | None = None):
     for tool in tools:
         if tool.get("type") == "namespace":
-            yield from local_functions(tool["tools"], tool["name"])
-        elif tool.get("type") == "function":
-            yield tool["name"], namespace
+            yield from local_tools(tool["tools"], tool["name"])
+        elif tool.get("type") in {"function", "custom"}:
+            yield tool, namespace
 
 
 def output_item(request: dict[str, Any]) -> dict[str, Any]:
     for item in objects(request.get("input", [])):
-        if item.get("type") == "function_call_output" and SENTINEL in str(item.get("output", "")):
+        if item.get("type") in {"function_call_output", "custom_tool_call_output"} and SENTINEL in str(item.get("output", "")):
             return {
                 "type": "message", "id": "msg_canary", "status": "completed",
                 "role": "assistant", "content": [
@@ -78,7 +78,8 @@ def output_item(request: dict[str, Any]) -> dict[str, Any]:
     for item in request.get("input", []):
         if isinstance(item, dict) and item.get("type") == "additional_tools":
             tools.extend(item["tools"])
-    available = dict(local_functions(tools))
+    declarations = list(local_tools(tools))
+    available = {tool["name"]: namespace for tool, namespace in declarations if tool["type"] == "function"}
     for candidate in ("exec_command", "shell_command", "shell"):
         name = next((key for key in available if key.split(".")[-1] == candidate), None)
         if name is None:
@@ -96,6 +97,17 @@ def output_item(request: dict[str, Any]) -> dict[str, Any]:
             "call_id": "call_canary", "name": name, "namespace": available[name],
             "arguments": json.dumps(args),
         }
+    for tool, namespace in declarations:
+        if tool["type"] == "custom" and tool["name"].split(".")[-1] == "exec":
+            # Current models expose shell tools through the real JavaScript
+            # executor. The sentinel must still come from the subsequent tool
+            # output; it is never included in the synthetic tool call itself.
+            command = json.dumps(f"cat {SKILL_PATH}")
+            return {
+                "type": "custom_tool_call", "id": "ctc_canary", "status": "completed",
+                "call_id": "call_canary", "name": tool["name"], "namespace": namespace,
+                "input": "text(await tools.exec_command({cmd: " + command + ", max_output_tokens: 1000}));",
+            }
     raise ValueError("The harness did not advertise a supported shell tool")
 
 
@@ -161,7 +173,11 @@ class FixtureConnection:
         self.request_body = json.loads(body)
 
     def getresponse(self) -> FixtureResponse:
-        return FixtureResponse(self.request_body)
+        try:
+            return FixtureResponse(self.request_body)
+        except Exception as exc:
+            broker.UPSTREAM_ERROR = "Fixture response failure: " + type(exc).__name__ + "; " + json.dumps(request_shape(self.request_body))
+            raise
 
     def close(self) -> None:
         pass
