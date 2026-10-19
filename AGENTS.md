@@ -28,6 +28,10 @@ Before publication, run the test suites that own the touched surface: `zsh tests
 
 Never commit plaintext secrets. Secret-bearing snippets live as `.age` envelopes under `home/`; treat any plaintext credential in the working tree as a stop-and-report gate.
 
+## After merging to `main`
+
+Applying the merge to the dotfiles host is part of the merge: the merger does it before calling the merge finished, following `docs/agents/post-merge-apply.md`. While any hold exists, never run a bare `chezmoi apply`, `chezmoi update` or `chezmoi init --apply`, because each also applies held targets.
+
 ## Operating Policy
 
 - This repository uses agentic engineering and operations. Agents should perform assigned tasks autonomously until they reach a boundary that requires stakeholder policy or an unavailable control surface.
