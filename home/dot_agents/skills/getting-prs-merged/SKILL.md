@@ -63,10 +63,10 @@ Read the applicable sub-skill before acting. Do not copy a weaker local substitu
 
 ## Stop Conditions
 
-Stop and report the exact blocker when:
+Stop the affected action and report its exact blocker; continue independently authorized evidence gathering and fixes. The relevant action is blocked when:
 
 - GitHub authentication, repository scope, or PR identity is missing.
-- Policy provenance is unverified or an authority-affecting policy/helper change lacks a scoped trusted operator decision for the affected action.
+- Publication or closeout depends on unverified policy provenance, or an authority-affecting policy/helper change lacks a scoped trusted operator decision for that action.
 - Required checks fail, required approvals are absent, or branch protection blocks merge after thread-aware state confirms unresolved conversations are not the blocker.
 - A review item needs a human decision or conflicts with accepted requirements.
 - Merge actuation is not agent-owned.

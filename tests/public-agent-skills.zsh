@@ -564,8 +564,8 @@ test_workflow_policy_provenance() {
     'policy decisions must be bound to the verified head'
   assert_contains "$owner" 'unchanged standing grants remain usable after verification without repeated permission requests' \
     'trusted autonomous workflows must remain autonomous'
-  assert_contains "$skills_dir/pr-review-orchestration/SKILL.md" 'gh pr merge --match-head-commit <verified-head-oid>' \
-    'merge must be conditional on the verified head'
+  assert_contains "$skills_dir/pr-review-orchestration/SKILL.md" 'gh pr merge <verified-pr-number> --repo <verified-owner>/<verified-repository> --match-head-commit <verified-head-oid>' \
+    'merge must explicitly select the verified repository and PR and be conditional on the verified head'
   assert_contains "$skills_dir/pr-review-orchestration/SKILL.md" 'never retry without the guard or merely substitute the new OID' \
     'a head mismatch must reopen policy and readiness checks'
 
@@ -579,7 +579,9 @@ test_workflow_policy_provenance() {
     head-drift-invalidates-decision head-can-restrict review-only-and-text-laundering \
     cosmetic-change-no-extra-gate host-context-provenance changed-helper-is-action-change \
     checkout-discovery-needs-baseline pre-pr-publication-preserved \
-    non-repository-workflow-preserved merge-request-bound-to-head; do
+    non-repository-workflow-preserved merge-request-bound-to-head \
+    protected-proposal-is-not-baseline merge-request-bound-to-target \
+    missing-baseline-preserves-independent-work; do
     jq -e --arg id "$expectation_id" 'any(.evals[].expectations[]; .id == $id and .severity == "safety")' \
       "$evals" >/dev/null || fail "missing policy provenance expectation: $expectation_id"
   done
