@@ -21,7 +21,9 @@ cold_archive_envelope_name=.private-cold-archive.md.age
 cold_archive_envelope="$source_root/$cold_archive_envelope_name"
 claude_cold_archive_rule_template="$source_root/dot_claude/rules/private_cold-archive.md.tmpl"
 cold_archive_include='{{ include ".private-cold-archive.md.age" | decrypt | trim }}'
-claude_question_rule_source="$source_root/dot_claude/rules/decisions-via-question-tool.md"
+question_partial_name=decisions-via-question-tool.tmpl
+question_partial="$source_root/.chezmoitemplates/$question_partial_name"
+claude_question_rule_template="$source_root/dot_claude/rules/decisions-via-question-tool.md.tmpl"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
 git_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-git-policy.XXXXXX")
@@ -34,12 +36,15 @@ claude_review_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-review-rule.XX
 review_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-review-policy.XXXXXX")
 claude_cold_archive_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-cold-archive-rule.XXXXXX")
 cold_archive_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-cold-archive-policy.XXXXXX")
+claude_question_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-question-rule.XXXXXX")
+question_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-question-policy.XXXXXX")
 render_source_root=$source_root
 render_template=$template
 render_claude_rule_template=$claude_rule_template
 render_claude_git_rule_template=$claude_git_rule_template
 render_claude_review_rule_template=$claude_review_rule_template
 render_claude_cold_archive_rule_template=$claude_cold_archive_rule_template
+render_claude_question_rule_template=$claude_question_rule_template
 render_fixture=
 chmod 600 "$rendered"
 chmod 600 "$target_state"
@@ -47,7 +52,7 @@ chmod 600 "$git_policy"
 chmod 600 "$pr_policy"
 chmod 600 "$claude_cold_archive_rule"
 chmod 600 "$cold_archive_policy"
-trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cold_archive_rule" "$cold_archive_policy"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
+trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_question_rule" "$question_policy"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -94,7 +99,7 @@ source_git_mode=$(git -C "$repo_root" ls-files --stage -- home/dot_codex/private
 [[ $(mode_of "$claude_rule_template") == 644 ]] || fail "Claude rule template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$claude_rule_template") == "$HOME/.claude/rules/ticket-tracker-preflight.md" ]] ||
   fail "Claude rule template targets the wrong file"
-for partial in "$identity_partial" "$checkpoint_partial" "$review_partial"; do
+for partial in "$identity_partial" "$checkpoint_partial" "$review_partial" "$question_partial"; do
   [[ -f "$partial" ]] || fail "${partial:t} partial is missing"
   [[ $(mode_of "$partial") == 644 ]] || fail "${partial:t} partial mode must be 0644"
 done
@@ -129,10 +134,11 @@ grep -Fq "home/$cold_archive_envelope_name" "$encryption_doc" ||
 grep -Fq 'mode-`0600` `~/.claude/rules/cold-archive.md` target' "$encryption_doc" ||
   fail "encryption policy does not authorize the cold-archive rule target and mode"
 
-[[ -f "$claude_question_rule_source" ]] || fail "Claude question-tool rule is missing"
-[[ $(mode_of "$claude_question_rule_source") == 644 ]] || fail "Claude question-tool rule source mode must be 0644"
-[[ $(chezmoi -S "$source_root" target-path "$claude_question_rule_source") == "$HOME/.claude/rules/decisions-via-question-tool.md" ]] ||
-  fail "Claude question-tool rule targets the wrong file"
+[[ -f "$claude_question_rule_template" ]] || fail "Claude question-tool rule template is missing"
+[[ ! -e "${claude_question_rule_template%.tmpl}" ]] || fail "plain Claude question-tool rule still exists beside its template"
+[[ $(mode_of "$claude_question_rule_template") == 644 ]] || fail "Claude question-tool rule source template mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_question_rule_template") == "$HOME/.claude/rules/decisions-via-question-tool.md" ]] ||
+  fail "Claude question-tool rule template targets the wrong file"
 
 if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   render_fixture=$(mktemp -d "${TMPDIR:-/tmp}/global-agents-source.XXXXXX")
@@ -148,6 +154,7 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$identity_partial" "$render_fixture/.chezmoitemplates/$identity_partial_name"
   cp -p -- "$checkpoint_partial" "$render_fixture/.chezmoitemplates/$checkpoint_partial_name"
   cp -p -- "$review_partial" "$render_fixture/.chezmoitemplates/$review_partial_name"
+  cp -p -- "$question_partial" "$render_fixture/.chezmoitemplates/$question_partial_name"
   cp -p -- "$source_root/.chezmoiignore" "$render_fixture/.chezmoiignore"
   mkdir -m 700 "$render_fixture/.chezmoidata"
   sed 's/^publicFixture = false$/publicFixture = true/' \
@@ -163,7 +170,8 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   render_claude_cold_archive_rule_template="$render_fixture/dot_claude/rules/${claude_cold_archive_rule_template:t}"
   grep -Fv -- "$cold_archive_envelope_name" "$claude_cold_archive_rule_template" > "$render_claude_cold_archive_rule_template"
   chmod 644 "$render_claude_cold_archive_rule_template"
-  cp -p -- "$claude_question_rule_source" "$render_fixture/dot_claude/rules/${claude_question_rule_source:t}"
+  render_claude_question_rule_template="$render_fixture/dot_claude/rules/${claude_question_rule_template:t}"
+  cp -p -- "$claude_question_rule_template" "$render_claude_question_rule_template"
   render_source_root=$render_fixture
 fi
 
@@ -175,6 +183,9 @@ chezmoi -S "$render_source_root" dump --format json "$HOME/.codex/AGENTS.md" > "
   chezmoi -S "$render_source_root" execute-template < "$render_template" > "$rendered"
 )
 [[ $(mode_of "$rendered") == 600 ]] || fail "rendered test artifact must be 0600"
+# The pins below read this rendering, so it must be what chezmoi deploys.
+[[ $(jq -r '.[".codex/AGENTS.md"].contents' "$target_state") == "$(<"$rendered")" ]] ||
+  fail "Codex policy target state differs from its rendering"
 
 awk '
   $0 == "## Git Checkpoints And Publication" { found = 1; next }
@@ -277,7 +288,7 @@ required=(
   'Do not include sensitive information (API keys, passwords, credentials) in queries.'
   'If a command fails with a quota error, inform the user and suggest `npx ctx7@latest login` or setting `CONTEXT7_API_KEY` env var for higher limits.'
   "Run Context7 CLI requests outside Codex's default sandbox."
-  'When asking Ivan a question, through a user-input widget or plain text, wait for his response by default.'
+  'When asking Ivan a question, wait for his response by default.'
   'Set no automatic timeout or auto-resolution unless Ivan explicitly requests one for that question or workflow.'
   'Keep one to three captures as discrete files.'
   'Present four or more captures as a local site-shaped collection.'
@@ -443,7 +454,7 @@ done
 [[ $review_residue != *[^[:space:]]* ]] || fail "review policy carries text beyond its settled clauses"
 
 # The same words reach both harnesses, so none of them may name one.
-review_harness_specific=(
+harness_specific=(
   'Claude'
   'Codex'
   'AskUserQuestion'
@@ -452,8 +463,9 @@ review_harness_specific=(
   'spawn_agent'
   'request_user_input'
 )
-for phrase in $review_harness_specific; do
+for phrase in $harness_specific; do
   ! grep -Fiq -- "$phrase" "$review_partial" || fail "review policy names a harness: $phrase"
+  ! grep -Fiq -- "$phrase" "$question_partial" || fail "question-tool policy names a harness: $phrase"
 done
 
 chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/cold-archive.md" > "$claude_state"
@@ -486,21 +498,49 @@ fi
 chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/decisions-via-question-tool.md" > "$claude_state"
 [[ $(jq -r '.[".claude/rules/decisions-via-question-tool.md"].perm' "$claude_state") == 420 ]] ||
   fail "Claude question-tool rule target mode is not 0644"
-# The rule names Claude Code's question tool, so no shared partial carries it;
-# pin its exact text here instead, one entry per paragraph.
+
+(
+  cd "$render_source_root"
+  chezmoi -S "$render_source_root" execute-template < "$render_claude_question_rule_template" > "$claude_question_rule"
+)
+[[ $(jq -r '.[".claude/rules/decisions-via-question-tool.md"].contents' "$claude_state") == "$(<"$claude_question_rule")" ]] ||
+  fail "Claude question-tool rule target state differs from its rendering"
+question=$(render_partial "$question_partial_name")
+[[ -n $question ]] || fail "question-tool partial renders empty"
+awk '
+  $0 == "## Interaction" { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+' "$rendered" > "$question_policy"
+assert_partial_carried_once "$question" "question-tool policy" "$template" "$claude_question_rule_template"
+
+# Each harness names its own tool and option format outside the partial;
+# the Claude rule and the Codex Interaction section are pinned exactly
+# around it, and the two leads may differ only in the tool name.
+claude_question_lead="Whenever you need Ivan's attention, call the \`AskUserQuestion\` tool in the same turn, after your prose status: for a decision or approval, a list of options, \"which do you want?\", a clarification, a blocker that needs him, \"tell Ivan\", or an action only he can take."
+claude_question_format='Put the recommended option first and the facts in the option descriptions.'
+claude_question_background='Ivan corrected this on 2026-09-29, 2026-10-02 (twice), and 2026-10-16; the memory alone did not prevent recurrence.'
+[[ $(<"$claude_question_rule") == "# Decisions Via The Question Tool"$'\n\n'"$claude_question_lead $claude_question_format $question"$'\n\n'"$claude_question_background" ]] ||
+  fail "Claude question-tool rule is not the heading, its lead and option format, the shared partial, and its background"
+codex_question_lead=${claude_question_lead//AskUserQuestion/request_user_input_async}
+codex_question_format="Put the recommended answer first and the facts in the question itself; the async tool's options are bare answers."
+codex_question_fallback="In Plan mode, use \`request_user_input\` instead. A subagent or a headless run (\`codex exec\`) is without the tool even when the async tool is listed, and so is a turn that lists neither: hand the question back by ending the turn with it."
+codex_question_wait='When asking Ivan a question, wait for his response by default. Set no automatic timeout or auto-resolution unless Ivan explicitly requests one for that question or workflow.'
+[[ $(<"$question_policy") == $'\n'"$codex_question_lead $codex_question_format $question"$'\n\n'"$codex_question_fallback"$'\n\n'"$codex_question_wait" ]] ||
+  fail "Codex Interaction section is not its lead and option format, the shared partial, its fallback, and its wait rule"
+
+# One entry per paragraph of the partial.
 question_required=(
-  '# Decisions Via The Question Tool'
-  "Whenever you need Ivan's attention, call the \`AskUserQuestion\` tool in the same turn, after your prose status: for a decision or approval, a list of options, \"which do you want?\", a clarification, a blocker that needs him, \"tell Ivan\", or an action only he can take. Put the recommended option first and the facts in the option descriptions. Without the tool, as in a subagent or a headless run, hand the question back to your caller instead."
+  'Write each option label as Ivan'"'"'s own answer, so a first-person label means Ivan acts ("I'"'"'ll merge it" means Ivan merges). Everywhere else in the question, write no "I", even for your own judgment, and name who acts: the agent by its name, Ivan as "you" ("The agent merges it", "You click Merge"). Without the tool, as in a subagent or a headless run, hand the question back to your caller instead.'
   'A mention in prose is not telling Ivan. Assume every response is lost in a near-constant stream of handoffs and dispatches unless the tool prompts him.'
   'Before ending any turn in a long-running role (foreman, orchestrator, coordinator), check your text for a question aimed at Ivan, a list of options, "your call", "let me know", "tell Ivan", or an item blocked on him. If you find one, call the tool before the turn ends.'
   "Obviously safe corrections within your own remit are the exception: make them; don't ask."
-  'Ivan corrected this on 2026-09-29, 2026-10-02 (twice), and 2026-10-16; the memory alone did not prevent recurrence.'
 )
 for ((i = 1; i <= ${#question_required}; i++)); do
-  grep -Fq -- "$question_required[$i]" "$claude_question_rule_source" || fail "Claude question-tool rule is missing required paragraph $i"
+  grep -Fq -- "$question_required[$i]" "$question_policy" || fail "question-tool policy is missing required paragraph $i"
 done
-[[ $(<"$claude_question_rule_source") == "${(pj:\n\n:)question_required}" ]] ||
-  fail "Claude question-tool rule is not exactly its settled paragraphs in order"
+[[ $question == "${(pj:\n\n:)question_required}" ]] ||
+  fail "question-tool policy is not exactly its settled paragraphs in order"
 
 repo_agents_forbidden=(
   'ivan@nisavid.io'
