@@ -240,6 +240,28 @@ class IsolatedCodexRuntimeTests(unittest.TestCase):
             self.assertNotEqual(signal.getsignal(signal.SIGTERM), previous[signal.SIGTERM])
         self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
 
+    def test_termination_during_setup_finalization_still_cleans_up(self) -> None:
+        class InterruptOnClear(dict):
+            interrupted = False
+
+            def clear(self):
+                super().clear()
+                if not self.interrupted:
+                    self.interrupted = True
+                    signal.raise_signal(signal.SIGTERM)
+
+        credentials = InterruptOnClear(kind="openai", token=fixture_api)
+        probe = self.create_runtime()
+        previous = signal.getsignal(signal.SIGTERM)
+        with mock.patch.object(runtime, "load_credentials", return_value=credentials):
+            with self.assertRaises(SystemExit) as caught:
+                with probe:
+                    self.fail("Terminated setup must not enter the probe body")
+        self.assertEqual(caught.exception.code, 128 + signal.SIGTERM)
+        self.assertFalse(credentials)
+        self.assert_resources_removed(probe)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
+
     def test_nonzero_container_removal_is_reported_while_other_cleanup_continues(self) -> None:
         probe = self.create_runtime()
         probe.__enter__()

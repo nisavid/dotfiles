@@ -243,14 +243,18 @@ class IsolatedCodexRuntime:
                 "python3", "-I", "/opt/trigger/trigger_eval_worker.py", "init",
             ], input=json.dumps({"skills": skills, "config": probe_config(name)}))
             self._entered = True
+            # Keep setup finalization inside the cleanup-protected region:
+            # __exit__ is not registered until __enter__ actually returns.
+            credentials.clear()
             self._starting = False
             self._check_termination()
             return self
         except BaseException:
-            self.close()
+            try:
+                self.close()
+            finally:
+                credentials.clear()
             raise
-        finally:
-            credentials.clear()
 
     def run(self, argv: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
         if not self._entered:
