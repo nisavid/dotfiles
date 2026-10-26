@@ -1,4 +1,8 @@
 [".config/zsh"]
-type = "git-repo"
-url = "https://github.com/nisavid/zsh-config"
-refreshPeriod = "24h"
+type = "archive"
+url = "https://github.com/nisavid/zsh-config/archive/0a6578eedc20fda283408046b52722c95d830267.tar.gz"
+checksum.sha256 = "952b5487aa12cb367f93cfec00a61209cd60fb28a80ab29dcf36e396910c1696"
+stripComponents = 1
+# Keep host-local profiles and runtime state, including existing Git metadata.
+# Chezmoi must never pull that old checkout; updates change this pin and digest.
+exact = false
