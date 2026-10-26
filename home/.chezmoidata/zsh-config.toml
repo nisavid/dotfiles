@@ -1,0 +1,4 @@
+[zshConfig]
+releaseCommit = "0a6578eedc20fda283408046b52722c95d830267"
+# SHA-256 of: git -c tar.umask=0002 archive --format=tar <releaseCommit>
+gitArchiveSha256 = "19b1871be71673037dc95f779ce8bc5abeb48bc75210a48057a609b3e1404f09"

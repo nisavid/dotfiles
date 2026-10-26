@@ -14,6 +14,24 @@ This incorporates my other configuration repositories by reference as
 
 - [zsh-config](https://github.com/nisavid/zsh-config)
 
+The Zsh checkout is installed by `run_before_install-zsh-config.zsh.tmpl`,
+not a refreshing Git external. The full commit and SHA-256 in
+`home/.chezmoidata/zsh-config.toml` bind its startup code to this repository.
+The hook verifies a Git-generated tar archive before checking out that commit;
+repeated applies do not pull the upstream default branch. It retains `.git`
+and untracked local profiles, removes retired tracked files through Git, and
+refuses tracked or staged local edits rather than overwriting them. An existing
+checkout moves to a detached HEAD when the pin changes; its branches remain.
+An already matching checkout keeps its current branch and file metadata.
+
+To advance the pin, review the proposed upstream commit, then update both
+values in a dotfiles change. Compute the digest in a clean upstream checkout
+with `git -c tar.umask=0002 archive --format=tar FULL_COMMIT | shasum -a 256`.
+This digest is for Git's tar output, not GitHub's generated `.tar.gz` download.
+Run `python3 -m unittest tests.test_zsh_config_pin` and the deployment suites
+before applying the change. Commit or otherwise preserve tracked local work
+before applying; local development branches and untracked profiles are retained.
+
 ## 🛠️ Installation
 
 #### [Install chezmoi](https://chezmoi.io/install)

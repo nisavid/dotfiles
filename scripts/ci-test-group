@@ -205,6 +205,7 @@ group_age_provisioning() {
 }
 
 group_zsh_deployment() {
+  python3 -m unittest tests.test_zsh_config_pin
   zsh tests/zsh-gui-path.zsh
   zsh tests/proton-pass-startup-bindings.zsh
 }

@@ -499,16 +499,10 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
             destination.mkdir()
             environment, arguments = self.environment(root, destination)
 
-            zsh = (SOURCE / ".chezmoiexternals/zsh-config.toml").read_text(
-                encoding="utf-8"
-            )
-            self.assertEqual(
-                zsh,
-                '[".config/zsh"]\n'
-                'type = "git-repo"\n'
-                'url = "https://github.com/nisavid/zsh-config"\n'
-                'refreshPeriod = "24h"\n',
-            )
+            # Zsh acquisition is separately pinned and verified before checkout;
+            # it must not remain eligible for an automatic Git branch refresh.
+            self.assertFalse((SOURCE / ".chezmoiexternals/zsh-config.toml").exists())
+            self.assertTrue((SOURCE / "run_before_install-zsh-config.zsh.tmpl").is_file())
 
             for name in CATPPUCCIN_CONFIG_EXTERNALS:
                 with self.subTest(name=name):

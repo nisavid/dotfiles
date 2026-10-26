@@ -1,0 +1,75 @@
+{{- if not (regexMatch "^[0-9a-f]{40}$" .zshConfig.releaseCommit) -}}
+{{- fail "zsh-config requires a full lowercase commit ID" -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9a-f]{64}$" .zshConfig.gitArchiveSha256) -}}
+{{- fail "zsh-config requires a SHA-256 Git archive digest" -}}
+{{- end -}}
+#!/bin/zsh -f
+
+# Keep a real Git checkout for local profiles and upstream development, but
+# never let a branch refresh select the code used by shell and GUI startup.
+function main {
+  emulate -L zsh
+  setopt err_return no_unset pipe_fail
+
+  local -r target={{ joinPath .chezmoi.homeDir ".config/zsh" | quote }}
+  local -r revision={{ .zshConfig.releaseCommit | quote }}
+  local -r expected_digest={{ .zshConfig.gitArchiveSha256 | quote }}
+  local -r upstream=https://github.com/nisavid/zsh-config
+  local repository=$target staging_dir observed_digest
+
+  # Do not interpret replacement objects, hooks, or ambient archive attributes.
+  export GIT_NO_REPLACE_OBJECTS=1 GIT_ATTR_NOSYSTEM=1
+  local -a git_command=( git -c core.hooksPath=/dev/null
+    -c core.attributesFile=/dev/null -c tar.umask=0002 )
+
+  if [[ -e $target || -L $target ]]; then
+    if [[ ! -d $target || -L $target || ! -d $target/.git || -L $target/.git ]] ||
+      [[ $("$git_command[@]" -C "$target" rev-parse --show-toplevel) != $target ]]; then
+      print -ru2 -- 'zsh-config: expected a standalone Git checkout; leaving the target unchanged'
+      return 1
+    fi
+    if ! "$git_command[@]" -C "$target" diff --quiet HEAD -- ||
+      ! "$git_command[@]" -C "$target" diff --cached --quiet --; then
+      print -ru2 -- 'zsh-config: preserve or commit tracked local changes before applying the reviewed pin'
+      return 1
+    fi
+  fi
+
+  staging_dir=$(mktemp -d "${TMPDIR:-/tmp}/zsh-config.XXXXXXXX")
+  trap 'rm -rf -- "$staging_dir"' EXIT
+  if [[ ! -e $target ]]; then
+    repository=$staging_dir/repository
+    "$git_command[@]" init --quiet "$repository"
+    "$git_command[@]" -C "$repository" remote add origin "$upstream"
+  fi
+  if ! "$git_command[@]" -C "$repository" cat-file -e "$revision^{commit}" 2>/dev/null; then
+    "$git_command[@]" -C "$repository" fetch --quiet --no-tags --depth=1 "$upstream" "$revision"
+  fi
+  [[ $("$git_command[@]" -C "$repository" rev-parse "$revision^{commit}") == $revision ]] || return 1
+
+  # Hash the exact Git archive before checkout can make any new bytes live.
+  "$git_command[@]" -C "$repository" archive --format=tar "$revision" > "$staging_dir/release.tar"
+  observed_digest=$(python3 -c 'import hashlib, sys
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as archive:
+    for block in iter(lambda: archive.read(1024 * 1024), b""):
+        digest.update(block)
+print(digest.hexdigest())' "$staging_dir/release.tar")
+  if [[ $observed_digest != $expected_digest ]]; then
+    print -ru2 -- 'zsh-config: reviewed archive checksum mismatch; leaving the target unchanged'
+    return 1
+  fi
+  if [[ $("$git_command[@]" -C "$repository" rev-parse --verify HEAD 2>/dev/null) != $revision ]]; then
+    # No reset/clean/force: Git must refuse collisions with local files.
+    "$git_command[@]" -C "$repository" checkout --no-overwrite-ignore --quiet --detach "$revision"
+  fi
+  if [[ $repository != $target ]]; then
+    mkdir -p -- "${target:h}"
+    # Do not replace a directory created while the acquisition was in flight.
+    [[ ! -e $target && ! -L $target ]] || return 1
+    mv -- "$repository" "$target"
+  fi
+}
+
+main "$@"
