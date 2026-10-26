@@ -11,7 +11,8 @@
 #   - macOS developer-tool writable_roots
 #   - private writable roots and project trusts (from an age catalog)
 #
-# Requires `uv` on PATH; tomlkit is fetched+cached ephemerally (no global install).
+# Requires Python 3.9+; embedded TOMLKit bytes are verified before import.
+# No package manager, network access, or global install is used.
 set -euo pipefail
 
 export HOMEDIR={{ .chezmoi.homeDir | quote }}
@@ -30,9 +31,34 @@ export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64en
 {{- end }}
 
 # python3 reads the script via process substitution; the live config arrives on stdin.
-uv run --quiet --with tomlkit python3 <(cat <<'PYEOF'
-import os, sys, base64, tomlkit
+python3 -I -S <(cat <<'PYEOF'
+import base64
+import binascii
+import hashlib
+import os
+import sys
+import tempfile
 from pathlib import Path
+
+# Isolated Python excludes environment overrides, the working directory, and
+# site hooks. Verify exact repository-reviewed bytes before exposing private
+# inputs to third-party code. Never fall back to another package source.
+# Encode the included file at render time, so even substituted source/string
+# delimiters remain data rather than becoming Python or shell statements.
+wheel_text = base64.b64decode("{{ include ".chezmoitemplates/vendor/tomlkit-0.15.2.whl.b64" | b64enc }}")
+try:
+    wheel = base64.b64decode(b"".join(wheel_text.split()), validate=True)
+except (binascii.Error, ValueError):
+    raise SystemExit("Codex modifier: bundled TOMLKit integrity check failed")
+if hashlib.sha256(wheel).hexdigest() != "05562412163a3037b94497385fb7f9204c637bc605af7a48199e41cf2272f437":
+    raise SystemExit("Codex modifier: bundled TOMLKit integrity check failed")
+# Keep this private directory alive until interpreter shutdown; its finalizer
+# removes the archive, which contains only public dependency bytes.
+vendor_directory = tempfile.TemporaryDirectory(prefix="codex-tomlkit-")
+wheel_path = Path(vendor_directory.name) / "tomlkit.whl"
+wheel_path.write_bytes(wheel)
+sys.path.insert(0, str(wheel_path))
+import tomlkit
 
 home = os.environ["HOMEDIR"]
 editor = os.environ["EDITOR_TARGET"]

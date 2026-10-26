@@ -5,6 +5,9 @@ setopt extended_glob
 repo_root=${0:A:h:h}
 cd "$repo_root"
 
+# Test assertions use stdlib tomllib (Python 3.11+); the modifier supports 3.9+.
+python3 -I -S -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else "secret-injection-bindings tests require Python 3.11+")'
+
 # exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
@@ -69,11 +72,12 @@ bearer_token_env_var = "GITHUB_PERSONAL_ACCESS_TOKEN"
 EOF
 "$codex_modifier" < "$test_dir/codex-input.toml" > "$test_dir/codex-output.toml"
 
-uv run --quiet --with tomlkit python3 - "$test_dir/codex-output.toml" "$fixture_home" <<'PYEOF'
-import sys, tomlkit
+python3 -I -S - "$test_dir/codex-output.toml" "$fixture_home" <<'PYEOF'
+import sys, tomllib
 
 path, home = sys.argv[1:]
-doc = tomlkit.load(open(path))
+with open(path, "rb") as config:
+    doc = tomllib.load(config)
 assert doc["unrelated"] == "preserved"
 expected = {
     "context7": ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"],

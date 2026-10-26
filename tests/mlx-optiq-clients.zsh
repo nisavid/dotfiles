@@ -27,7 +27,7 @@ mkdir -p -- "$fixture_home"
 fixture_home=${fixture_home:A}
 
 darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","hostname":"test-host"},"gitIdentity":{"publicFixture":true}}'
-chezmoi execute-template --override-data "$darwin_data" \
+chezmoi -S "$repo_root/home" execute-template --override-data "$darwin_data" \
   < home/dot_codex/modify_private_config.toml.tmpl > "$rendered"
 bash -n "$rendered"
 chmod +x "$rendered"
