@@ -38,6 +38,13 @@ _MAX_SIGNING_KEY_BYTES = 64 * 1024
 _MAX_PUBLIC_KEY_BYTES = 1024
 _MAX_RECEIPT_BYTES = 256 * 1024
 _MAX_PREFLIGHT_OUTPUT_BYTES = 32
+_MAX_RUNTIME_HELPER_BYTES = 128 * 1024
+# This manifest is part of the externally reviewed, protected adapter. Helper
+# changes require updating these pins and renewing the reviewed-source record.
+_RUNTIME_HELPER_DIGESTS = {
+    "proton-pass-ensure-ready": "6872f9c756a6a7a462bae6dc0dc8df6f72b890454d133a3ed143014974724794",
+    "secret-exec-native-store": "4f1b8ddb79e6a6796132a14e1ad77ca3d8b5c619fd03e205e16c38469a0d6e8e",
+}
 # Proton IDs are 64-byte URL-safe base64 values; pass-cli's is_id requires 88
 # characters ending in "==". They may begin with "-", so argv attaches them.
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{86}==\Z", re.ASCII)
@@ -611,22 +618,69 @@ def _provider_environment() -> dict[str, str]:
     return environment
 
 
-def _validated_readiness_command() -> Path:
+def _verified_runtime_helper(name: str, expected_digest: str) -> bytes:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    no_block = getattr(os, "O_NONBLOCK", None)
+    if no_follow is None or no_block is None:
+        raise AdmissionAdapterError("safe runtime helper validation is unavailable")
     script_directory = Path(__file__).resolve().parent
-    for name in ("proton-pass-ensure-ready", "executable_proton-pass-ensure-ready"):
-        candidate = script_directory / name
+    for alias in (name, f"executable_{name}"):
         try:
-            info = candidate.stat(follow_symlinks=False)
-        except OSError:
+            descriptor = os.open(
+                script_directory / alias,
+                os.O_RDONLY | no_follow | no_block | getattr(os, "O_CLOEXEC", 0),
+            )
+        except FileNotFoundError:
             continue
-        if (
-            stat.S_ISREG(info.st_mode)
-            and info.st_uid in {0, os.geteuid()}
-            and info.st_mode & 0o111
-            and not info.st_mode & 0o022
+        try:
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid not in {0, os.geteuid()}
+                or not info.st_mode & 0o111
+                or info.st_mode & 0o022
+                or info.st_size > _MAX_RUNTIME_HELPER_BYTES
+            ):
+                raise AdmissionAdapterError("runtime helper is not authoritative")
+            chunks: list[bytes] = []
+            remaining = _MAX_RUNTIME_HELPER_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, min(remaining, 64 * 1024))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            data = b"".join(chunks)
+        finally:
+            os.close(descriptor)
+        if len(data) > _MAX_RUNTIME_HELPER_BYTES or not hmac.compare_digest(
+            hashlib.sha256(data).hexdigest(), expected_digest
         ):
-            return candidate
-    raise AdmissionAdapterError("proton-pass-ensure-ready is required")
+            raise AdmissionAdapterError("runtime helper differs from reviewed source")
+        return data
+    raise AdmissionAdapterError("reviewed runtime helper is required")
+
+
+def _stage_runtime_helpers(private_root: Path) -> Path:
+    # Verify the whole closure before executing any member. The readiness
+    # helper resolves native-store beside itself, so both staged names matter.
+    sources = {
+        name: _verified_runtime_helper(name, digest)
+        for name, digest in _RUNTIME_HELPER_DIGESTS.items()
+    }
+    for name, data in sources.items():
+        descriptor = os.open(
+            private_root / name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        try:
+            _write_all(descriptor, data)
+            os.fchmod(descriptor, 0o500)
+        finally:
+            os.close(descriptor)
+    return private_root / "proton-pass-ensure-ready"
 
 
 def _public_key_fingerprint(public_key: bytes) -> str:
@@ -1027,7 +1081,6 @@ def create_receipt(arguments: argparse.Namespace) -> None:
     global _ACTIVE_PRIVATE_ROOT, _ACTIVE_PRIVATE_ROOT_IDENTITY, _PRIVATE_ROOT_STATE
     base, head = _validate_arguments(arguments)
     provider_environment = _provider_environment()
-    readiness = _validated_readiness_command()
     _raise_if_interrupted()
     _PRIVATE_ROOT_STATE = "acquiring"
     try:
@@ -1065,6 +1118,7 @@ def create_receipt(arguments: argparse.Namespace) -> None:
             }
         )
         _require_admission_preflight(arguments, environment=launcher_environment)
+        readiness = _stage_runtime_helpers(private_root)
         _run_quiet(
             [os.fspath(readiness)],
             environment=provider_environment,

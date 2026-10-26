@@ -587,6 +587,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 "home/private_dot_local/bin/executable_proton-pass-age-admission": (
                     PROTON_PASS_ADAPTER.read_bytes()
                 ),
+                "home/private_dot_local/bin/executable_proton-pass-ensure-ready": b"readiness\n",
+                "home/private_dot_local/bin/executable_secret-exec-native-store": b"native store\n",
                 "home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py": b"secrets\n",
                 "home/private.age": ciphertext,
                 "scripts/admit-age-envelopes": b"admit\n",
@@ -621,6 +623,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             (base / "scripts/create-age-admission-receipt").chmod(0o755)
             (base / "scripts/privacy-scan").chmod(0o755)
             (base / "scripts/run-trusted-age-admission").chmod(0o755)
+            (base / "home/private_dot_local/bin/executable_proton-pass-ensure-ready").chmod(0o755)
             signing_key = root / "signing-key"
             _run(
                 "ssh-keygen",
@@ -776,6 +779,19 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 encoding="ascii",
             )
             readiness.chmod(0o700)
+            native_store = adapter_tools / "secret-exec-native-store"
+            native_store.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+            native_store.chmod(0o700)
+            # This integration explicitly reviews disposable helper stubs;
+            # production pins are checked against source by adapter unit tests.
+            adapter_source = adapter.read_text(encoding="ascii")
+            for helper in (readiness, native_store):
+                production = PROTON_PASS_ADAPTER.parent / f"executable_{helper.name}"
+                adapter_source = adapter_source.replace(
+                    hashlib.sha256(production.read_bytes()).hexdigest(),
+                    hashlib.sha256(helper.read_bytes()).hexdigest(),
+                )
+            adapter.write_text(adapter_source, encoding="ascii")
             # Proton IDs are 88-character URL-safe base64 and may lead with "-".
             share_id = base64.urlsafe_b64encode(
                 bytes([0xF8]) + hashlib.sha512(b"fixture share").digest()[1:]

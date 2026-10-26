@@ -88,6 +88,8 @@ REAL_SOURCE_FILES = (
     "scripts/run-trusted-age-admission",
     "scripts/privacy_age_integrity_gate.py",
     "home/private_dot_local/bin/executable_proton-pass-age-admission",
+    "home/private_dot_local/bin/executable_proton-pass-ensure-ready",
+    "home/private_dot_local/bin/executable_secret-exec-native-store",
     ".github/workflows/platform-portability.yml",
     ".github/workflows/privacy-age-integrity.yml",
     "docs/ENCRYPTION.md",
@@ -135,6 +137,7 @@ def write_files(root: Path) -> None:
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((ROOT / relative).read_bytes())
+        path.chmod((ROOT / relative).stat().st_mode & 0o777)
     for relative, mode in BOOTSTRAP_REQUIRED_MODES.items():
         (root / relative).chmod(mode)
 
@@ -185,6 +188,26 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         self.assertIn(adapter, PROTECTED_EXACT_PATHS)
         self.assertIn(adapter, ACTIVE_REQUIRED_PATHS)
         self.assertNotIn(adapter, BOOTSTRAP_REQUIRED_PATHS)
+
+    def test_credential_helpers_require_owner_admission(self) -> None:
+        for name in ("proton-pass-ensure-ready", "secret-exec-native-store"):
+            relative = f"home/private_dot_local/bin/executable_{name}"
+            with self.subTest(helper=name):
+                self.assertIn(relative.encode(), PROTECTED_EXACT_PATHS)
+                self.assertIn(relative.encode(), ACTIVE_REQUIRED_PATHS)
+                self.assertNotIn(relative.encode(), BOOTSTRAP_REQUIRED_PATHS)
+                _, base, head, base_commit = self.make_checkouts()
+                (head / relative).write_text("candidate mutation\n", encoding="ascii")
+                head_commit = commit_all(head, "change credential helper")
+                self.assertEqual(
+                    classify_admission_requirement(
+                        base_repository=base, base_commit=base_commit,
+                        head_repository=head, head_commit=head_commit,
+                    ),
+                    "required",
+                )
+                with self.assertRaisesRegex(RuntimeError, r"candidate changes .* protected path"):
+                    self.verify(base, head, base_commit, head_commit)
 
     def make_checkouts(self) -> tuple[TemporaryDirectory[str], Path, Path, str]:
         temporary = TemporaryDirectory()
