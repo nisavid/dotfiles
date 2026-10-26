@@ -20,12 +20,15 @@ revision, verify the archive, and change its full commit and checksum together
 in a reviewed dotfiles change. Refreshing externals cannot advance the revision
 or accept changed archive bytes.
 
-Applying the archive preserves host-local profiles, legacy profile links, and
-runtime state in `~/.config/zsh`. Existing Git metadata is also retained to avoid
-discarding local work, but chezmoi no longer pulls that checkout. Use the
-dotfiles pin to update managed startup code; direct Git pulls or a host-defined
-`ZDOTDIR_ORIGIN` bypass this deployment policy. This pin controls acquisition,
-not subsequent local edits or separately downloaded Zsh plugins.
+Applying the archive installs the paths it supplies from the reviewed contents
+and preserves additional host-local profiles and runtime state outside those
+paths in `~/.config/zsh`. The no-tracking hook retires the legacy
+`zshrc.d/no-tracking.local.zsh` link when the modern profile is available.
+Existing Git metadata is also retained to avoid discarding local work, but
+chezmoi no longer pulls that checkout. Use the dotfiles pin to update managed
+startup code; direct Git pulls or a host-defined `ZDOTDIR_ORIGIN` bypass this
+deployment policy. This pin controls acquisition, not subsequent local edits or
+separately downloaded Zsh plugins.
 
 ## 🛠️ Installation
 

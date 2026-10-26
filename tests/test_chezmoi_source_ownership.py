@@ -286,9 +286,14 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                 path = installed / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(content)
+            local_links = {
+                name: ZSH_ARCHIVE_SYMLINKS[name] for name in (".zprofile", ".zshrc")
+            }
+            for name, target in local_links.items():
+                (installed / name).symlink_to(target)
             original_git = self.zsh_tree_snapshot(installed / ".git")
             before = self.zsh_tree_snapshot(installed)
-            original_local = {name: before[name] for name in local_files}
+            original_local = {name: before[name] for name in (*local_files, *local_links)}
             for refresh in ("never", "always"):
                 with self.subTest(refresh=refresh):
                     applied = self.apply_zsh_external(source, environment, arguments, refresh)
