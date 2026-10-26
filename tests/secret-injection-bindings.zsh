@@ -69,11 +69,12 @@ bearer_token_env_var = "GITHUB_PERSONAL_ACCESS_TOKEN"
 EOF
 "$codex_modifier" < "$test_dir/codex-input.toml" > "$test_dir/codex-output.toml"
 
-uv run --quiet --with tomlkit python3 - "$test_dir/codex-output.toml" "$fixture_home" <<'PYEOF'
-import sys, tomlkit
+python3 -I -S - "$test_dir/codex-output.toml" "$fixture_home" <<'PYEOF'
+import sys, tomllib
 
 path, home = sys.argv[1:]
-doc = tomlkit.load(open(path))
+with open(path, "rb") as config:
+    doc = tomllib.load(config)
 assert doc["unrelated"] == "preserved"
 expected = {
     "context7": ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"],

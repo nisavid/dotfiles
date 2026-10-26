@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import tomllib
@@ -39,18 +41,16 @@ def skill_entries(config: str) -> list[dict[str, object]]:
     return entries
 
 
-def modifier_python(*, darwin: bool = False) -> str:
-    source = TEMPLATE.read_text(encoding="utf-8")
-    start = source.index("import os, sys, base64, tomlkit")
-    end = source.index("\nPYEOF", start)
-    code = source[start:end]
-    return code.replace(
-        'if {{ if eq .chezmoi.os "darwin" }}True{{ else }}False{{ end }} else []',
-        f"if {darwin} else []",
-    ).replace(
-        'if {{ if eq .chezmoi.os "linux" }}True{{ else }}False{{ end }} else []',
-        f"if {not darwin} else []",
-    )
+def rendered_modifier(home: Path, darwin: bool = False) -> str:
+    data = {
+        "chezmoi": {"homeDir": str(home), "os": "darwin" if darwin else "linux", "hostname": "test-host"},
+        "gitIdentity": {"publicFixture": True, "selection": {"default": "personal", "byHostname": {}},
+                        "identities": {"personal": {"editorTarget": "cursor", "branchPrefix": "nisavid/"}}},
+    }
+    return subprocess.run(
+        ["chezmoi", "-S", str(ROOT / "home"), "execute-template", "--override-data", json.dumps(data)],
+        input=TEMPLATE.read_text(), text=True, capture_output=True, check=True, timeout=10,
+    ).stdout
 
 
 class DynamicSkillDisableModifierTests(unittest.TestCase):
@@ -75,31 +75,52 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
         path.write_text(f"# {skill}\n", encoding="utf-8")
         return path
 
-    def apply(self, config: str, *, darwin: bool = False) -> str:
-        environment = os.environ | {
-            "HOMEDIR": str(self.home),
-            "EDITOR_TARGET": "cursor",
-            "GIT_BRANCH_PREFIX": "nisavid/",
-            "WORK_TOML_B64": self.work,
-        }
-        result = subprocess.run(
-            [
-                "uv",
-                "run",
-                "--quiet",
-                "--with",
-                "tomlkit",
-                "python3",
-                "-c",
-                modifier_python(darwin=darwin),
-            ],
-            input=config,
-            text=True,
-            capture_output=True,
-            check=True,
-            env=environment,
+    def run_modifier(self, config: str, *, darwin: bool = False, script: str | None = None,
+                     environment: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        script = rendered_modifier(self.home, darwin) if script is None else script
+        # Exercise the full launcher with synthetic catalog data only.
+        script = script.replace("# python3 reads the script", f"export WORK_TOML_B64={self.work}\n# python3 reads the script")
+        return subprocess.run(
+            ["/bin/bash", "-c", script], input=config, text=True, capture_output=True,
+            env=os.environ | (environment or {}), timeout=10,
         )
+
+    def apply(self, config: str, *, darwin: bool = False) -> str:
+        result = self.run_modifier(config, darwin=darwin)
+        self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
+
+    def test_rejects_modified_or_missing_wheel(self) -> None:
+        script = rendered_modifier(self.home)
+        encoded = (ROOT / "home/.chezmoitemplates/vendor/tomlkit-0.15.2.whl.b64").read_text()
+        for replacement in ("", base64.b64encode(b"substituted wheel").decode()):
+            with self.subTest(replacement=replacement):
+                result = self.run_modifier("", script=script.replace(encoded, replacement))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("integrity check failed", result.stderr)
+
+    def test_runs_without_package_manager_cache_or_ambient_imports(self) -> None:
+        poison = self.home / "poison"
+        poison.mkdir()
+        marker = self.home / "poison-ran"
+        for name in ("tomlkit.py", "sitecustomize.py", "usercustomize.py"):
+            (poison / name).write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\nraise RuntimeError('ambient code')\n")
+        bin_dir = self.home / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "python3").symlink_to(sys.executable)
+        (bin_dir / "cat").symlink_to("/bin/cat")
+        for name in ("uv", "pip", "pip3", "curl", "wget"):
+            tool = bin_dir / name
+            tool.write_text(f"#!/bin/sh\n: > '{marker}'\nexit 92\n")
+            tool.chmod(0o755)
+        result = self.run_modifier('unrelated = "preserved" # keep comment\n', environment={
+            "PATH": str(bin_dir), "PYTHONPATH": str(poison), "PYTHONHOME": str(poison),
+            "PYTHONUSERBASE": str(poison), "UV_CACHE_DIR": str(self.home / "empty-cache"),
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertIn('unrelated = "preserved" # keep comment', result.stdout)
 
     def test_discovers_all_versions_provenances_and_retired_skills(self) -> None:
         expected: set[str] = set()
