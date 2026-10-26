@@ -26,6 +26,7 @@ BUILDER = ROOT / "scripts/build-age-admission-provider-fixture"
 SOURCE_MODES = {
     "home/private_dot_local/bin/executable_proton-pass-age-admission": "100644",
     "home/private_dot_local/bin/executable_proton-pass-ensure-ready": "100755",
+    "home/private_dot_local/bin/executable_secret-exec-native-store": "100644",
     "scripts/admit-age-envelopes": "100755",
     "scripts/agent_equipment_public_data.py": "100644",
     "scripts/build-age-admission-provider-fixture": "100755",

@@ -65,6 +65,7 @@ SOURCE_PATH = re.compile(r"[A-Za-z0-9._/-]+\Z", re.ASCII)
 SOURCE_MODES = {
     "home/private_dot_local/bin/executable_proton-pass-age-admission": "100644",
     "home/private_dot_local/bin/executable_proton-pass-ensure-ready": "100755",
+    "home/private_dot_local/bin/executable_secret-exec-native-store": "100644",
     "scripts/admit-age-envelopes": "100755",
     "scripts/agent_equipment_public_data.py": "100644",
     "scripts/build-age-admission-provider-fixture": "100755",
@@ -1314,6 +1315,10 @@ def _stage_source_tools(
         "provider_readiness": (
             "proton-pass-ensure-ready",
             "home/private_dot_local/bin/executable_proton-pass-ensure-ready",
+        ),
+        "provider_native_store": (
+            "secret-exec-native-store",
+            "home/private_dot_local/bin/executable_secret-exec-native-store",
         ),
         "trusted_launcher": (
             "run-trusted-age-admission",
