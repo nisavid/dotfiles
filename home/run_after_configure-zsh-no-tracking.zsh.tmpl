@@ -4,7 +4,7 @@
 {{- end -}}
 {{- $identityName := default $bindingData.selection.default (index $bindingData.selection.byHostname .chezmoi.hostname) -}}
 {{- $identity := index $bindingData.identities $identityName -}}
-#!/usr/bin/env zsh
+#!/bin/zsh -f
 
 function main {
   emulate -L zsh
@@ -18,6 +18,25 @@ function main {
     return 1
   fi
 
+  local -r profile_dir={{ joinPath .chezmoi.homeDir ".config/zsh/profile.d" | quote }}
+  if [[ -r $profile_dir/no-tracking.zshenv ]]; then
+    local -r marker=$profile_dir/no-tracking.enabled
+    if [[ -L $marker || ( -e $marker && ! -f $marker ) ]]; then
+      print -ru2 -- "Cannot manage no-tracking: ${(q-)marker} is not a regular marker file."
+      return 1
+    fi
+    if {{ if $identity.noTracking }}true{{ else }}false{{ end }}; then
+      touch -- "$marker"
+    else
+      rm -f -- "$marker"
+    fi
+    # The profile dispatcher also treats a legacy link as an enable marker.
+    # Retire it so switching to a personal identity really disables the policy.
+    rm -f -- "$local_fragment"
+    return
+  fi
+
+  # Retain compatibility with hosts that have not installed the pinned archive.
   if {{ if $identity.noTracking }}true{{ else }}false{{ end }}; then
     if [[ ! -r $source_fragment ]]; then
       print -ru2 -- "Cannot enable no-tracking: ${(q-)source_fragment} is not readable."
