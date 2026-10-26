@@ -5,6 +5,9 @@ setopt extended_glob
 repo_root=${0:A:h:h}
 cd "$repo_root"
 
+# Test assertions use stdlib tomllib (Python 3.11+); the modifier supports 3.9+.
+python3 -I -S -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else "secret-injection-bindings tests require Python 3.11+")'
+
 # exit, not return: errexit inside a function skips zsh's EXIT trap.
 fail() {
   print -u2 -r -- "$1"
