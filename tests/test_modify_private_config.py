@@ -41,14 +41,14 @@ def skill_entries(config: str) -> list[dict[str, object]]:
     return entries
 
 
-def rendered_modifier(home: Path, darwin: bool = False) -> str:
+def rendered_modifier(home: Path, darwin: bool = False, *, source: Path | None = None) -> str:
     data = {
         "chezmoi": {"homeDir": str(home), "os": "darwin" if darwin else "linux", "hostname": "test-host"},
         "gitIdentity": {"publicFixture": True, "selection": {"default": "personal", "byHostname": {}},
                         "identities": {"personal": {"editorTarget": "cursor", "branchPrefix": "nisavid/"}}},
     }
     return subprocess.run(
-        ["chezmoi", "-S", str(ROOT / "home"), "execute-template", "--override-data", json.dumps(data)],
+        ["chezmoi", "-S", str(source or ROOT / "home"), "execute-template", "--override-data", json.dumps(data)],
         input=TEMPLATE.read_text(), text=True, capture_output=True, check=True, timeout=10,
     ).stdout
 
@@ -91,11 +91,20 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
         return result.stdout
 
     def test_rejects_modified_or_missing_wheel(self) -> None:
-        script = rendered_modifier(self.home)
-        encoded = (ROOT / "home/.chezmoitemplates/vendor/tomlkit-0.15.2.whl.b64").read_text()
-        for replacement in ("", base64.b64encode(b"substituted wheel").decode()):
+        source = self.home / "source"
+        vendor = source / ".chezmoitemplates/vendor/tomlkit-0.15.2.whl.b64"
+        vendor.parent.mkdir(parents=True)
+        # Replace the actual included file before rendering, including source
+        # delimiters that would execute before a check in an unescaped include.
+        for replacement in (
+            "", base64.b64encode(b"substituted wheel").decode(),
+            '\"\"\"); print(os.environ["WORK_TOML_B64"]); raise SystemExit(91); #',
+            "PYEOF\nprintf injected\n#",
+        ):
             with self.subTest(replacement=replacement):
-                result = self.run_modifier("", script=script.replace(encoded, replacement))
+                vendor.write_text(replacement)
+                script = rendered_modifier(self.home, source=source)
+                result = self.run_modifier("", script=script)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
                 self.assertIn("integrity check failed", result.stderr)

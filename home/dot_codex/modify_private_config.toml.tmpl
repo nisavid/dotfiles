@@ -33,6 +33,7 @@ export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64en
 # python3 reads the script via process substitution; the live config arrives on stdin.
 python3 -I -S <(cat <<'PYEOF'
 import base64
+import binascii
 import hashlib
 import os
 import sys
@@ -42,7 +43,13 @@ from pathlib import Path
 # Isolated Python excludes environment overrides, the working directory, and
 # site hooks. Verify exact repository-reviewed bytes before exposing private
 # inputs to third-party code. Never fall back to another package source.
-wheel = base64.b64decode("""{{ include ".chezmoitemplates/vendor/tomlkit-0.15.2.whl.b64" }}""")
+# Encode the included file at render time, so even substituted source/string
+# delimiters remain data rather than becoming Python or shell statements.
+wheel_text = base64.b64decode("{{ include ".chezmoitemplates/vendor/tomlkit-0.15.2.whl.b64" | b64enc }}")
+try:
+    wheel = base64.b64decode(b"".join(wheel_text.split()), validate=True)
+except (binascii.Error, ValueError):
+    raise SystemExit("Codex modifier: bundled TOMLKit integrity check failed")
 if hashlib.sha256(wheel).hexdigest() != "05562412163a3037b94497385fb7f9204c637bc605af7a48199e41cf2272f437":
     raise SystemExit("Codex modifier: bundled TOMLKit integrity check failed")
 # Keep this private directory alive until interpreter shutdown; its finalizer
