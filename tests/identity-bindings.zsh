@@ -149,6 +149,38 @@ zsh "$no_tracking"
 [[ -L $fixture_home/.config/zsh/zshrc.d/no-tracking.local.zsh ]] ||
   fail 'No-tracking hook did not enable the synthetic work policy'
 
+# The pinned archive uses environment profiles and must not load host startup
+# while configuring its marker. Retire the obsolete legacy enable link.
+profile_dir=$fixture_home/.config/zsh/profile.d
+mkdir -p -- "$profile_dir"
+print -r -- 'export DO_NOT_TRACK=1' > "$profile_dir/no-tracking.zshenv"
+print -r -- '# disabled by default' > "$profile_dir/no-tracking.disabled"
+print -r -- 'exit 91' > "$fixture_home/.zshenv"
+chmod +x "$no_tracking"
+HOME=$fixture_home "$no_tracking"
+[[ -f $profile_dir/no-tracking.enabled ]] ||
+  fail 'No-tracking hook did not enable the modern environment profile'
+[[ ! -L $fixture_home/.config/zsh/zshrc.d/no-tracking.local.zsh ]] ||
+  fail 'Modern no-tracking configuration retained a second enable marker'
+HOME=$fixture_home "$no_tracking"
+
+no_tracking_personal=$test_dir/configure-no-tracking-personal
+chezmoi -S "$repo_root/home" execute-template --override-data "$unbound_data" \
+  < home/run_after_configure-zsh-no-tracking.zsh.tmpl > "$no_tracking_personal"
+chmod +x "$no_tracking_personal"
+HOME=$fixture_home "$no_tracking_personal"
+[[ ! -e $profile_dir/no-tracking.enabled ]] ||
+  fail 'No-tracking hook did not disable the modern profile for a personal identity'
+
+# A dangling link must not redirect marker creation outside the profile tree.
+ln -s "$test_dir/unmanaged-marker" "$profile_dir/no-tracking.enabled"
+if HOME=$fixture_home "$no_tracking" >/dev/null 2>&1; then
+  fail 'No-tracking hook accepted a symlinked environment-profile marker'
+fi
+[[ ! -e $test_dir/unmanaged-marker ]] ||
+  fail 'No-tracking hook followed the marker symlink'
+rm -- "$profile_dir/no-tracking.enabled"
+
 ! rg -n \
   'defaultByHostname|defaultByIdentity' \
   home/.chezmoidata/git-identity.toml \
