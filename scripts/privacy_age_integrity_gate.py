@@ -49,6 +49,8 @@ MAX_GIT_OBJECT_BYTES = 16 * 1024 * 1024
 ADMISSION_SIGNING_ADAPTER_PATH = (
     b"home/private_dot_local/bin/executable_proton-pass-age-admission"
 )
+ADMISSION_READINESS_PATH = b"home/private_dot_local/bin/executable_proton-pass-ensure-ready"
+ADMISSION_NATIVE_STORE_PATH = b"home/private_dot_local/bin/executable_secret-exec-native-store"
 
 # Changes to these paths require a signed owner admission after local
 # identity-backed validation. The pull_request_target workflow executes this
@@ -60,6 +62,8 @@ PROTECTED_EXACT_PATHS = frozenset(
         b"docs/ENCRYPTION.md",
         b"home/.chezmoi.toml.tmpl",
         ADMISSION_SIGNING_ADAPTER_PATH,
+        ADMISSION_READINESS_PATH,
+        ADMISSION_NATIVE_STORE_PATH,
         b"home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py",
         b"scripts/admit-age-envelopes",
         b"scripts/agent_equipment_public_data.py",
@@ -111,6 +115,8 @@ BOOTSTRAP_REQUIRED_ENTRIES = {
 # installed.
 POST_BOOTSTRAP_REQUIRED_ENTRIES = {
     ADMISSION_SIGNING_ADAPTER_PATH: (b"blob", b"100644"),
+    ADMISSION_READINESS_PATH: (b"blob", b"100755"),
+    ADMISSION_NATIVE_STORE_PATH: (b"blob", b"100644"),
 }
 # Once activated, every trusted verifier, scanner, parser, launcher, and the
 # protected workflow remains a required regular entry. A signed receipt may

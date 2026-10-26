@@ -96,6 +96,7 @@ SOURCE_PATH = re.compile(r"[A-Za-z0-9._/-]+\Z", re.ASCII)
 SOURCE_MODES = {
     "home/private_dot_local/bin/executable_proton-pass-age-admission": "100644",
     "home/private_dot_local/bin/executable_proton-pass-ensure-ready": "100755",
+    "home/private_dot_local/bin/executable_secret-exec-native-store": "100644",
     "scripts/admit-age-envelopes": "100755",
     "scripts/agent_equipment_public_data.py": "100644",
     "scripts/build-age-admission-provider-fixture": "100755",
@@ -1734,6 +1735,7 @@ def _validate_fixture(
             "age_keygen",
             "provider_adapter",
             "provider_readiness",
+            "provider_native_store",
             "trusted_launcher",
         },
         "fixture staged tools",
@@ -1744,6 +1746,7 @@ def _validate_fixture(
         "age_keygen": ("tools/age-keygen", 0o700),
         "provider_adapter": ("tools/proton-pass-age-admission", 0o700),
         "provider_readiness": ("tools/proton-pass-ensure-ready", 0o700),
+        "provider_native_store": ("tools/secret-exec-native-store", 0o700),
         "trusted_launcher": ("tools/run-trusted-age-admission", 0o755),
     }
     tools = {

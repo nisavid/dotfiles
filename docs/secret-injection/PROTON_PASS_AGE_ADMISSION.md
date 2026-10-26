@@ -93,6 +93,15 @@ accepts only the exact bytes `required\n` with exit `0`; all three classified
 results have empty standard error. Every other status, output, or diagnostic
 stops before readiness and `pass-cli`.
 
+After preflight, the adapter reads both installed `proton-pass-ensure-ready`
+and `secret-exec-native-store` through non-symlink regular-file descriptors,
+checks their executable ownership/modes and exact SHA-256 values against the
+manifest embedded in the reviewed adapter, and stages those same bytes in its
+private operation directory. Readiness executes there with the verified
+native-store helper beside it. Missing or changed bytes fail before either
+helper or the provider runs, even when an existing session needs no bootstrap.
+Helper updates require new adapter pins and a fresh reviewed-source record.
+
 ## Entry conditions for routine signing
 
 Before the provider-free preflight:
@@ -125,11 +134,12 @@ that phase:
 3. The machine-local age identity is a mode-`0600` regular file outside both
    checkouts, and `AGE_TOOLING_DIRECTORY` selects checksum-verified age v1.3.1
    tools outside both checkouts.
-4. The installed adapter and readiness helper are regular, non-symlinked
-   executables under `$HOME/.local/bin`. The adapter bytes equal the reviewed
-   source bytes.
-5. The operation-directory filesystem permits execution of the creator's
-   private staged `ssh-keygen` copy on Linux.
+4. The installed adapter, readiness helper, and native-store helper are regular,
+   non-symlinked executables under `$HOME/.local/bin`. The adapter bytes equal the reviewed
+   source bytes; both helper digests match its embedded manifest.
+5. The operation-directory filesystem permits execution of the private staged
+   runtime helpers on Linux and macOS and the creator's staged `ssh-keygen`
+   copy on Linux.
 
 ## Create a receipt
 
@@ -488,12 +498,13 @@ one reviewed commit and checksum-bound manifest, one signer public key, and a
 checksum-bound age 1.3.1 archive. It accepts no provider, session, credential,
 private-key, GitHub, base/head, remote, or real-transition input.
 
-The canonical `issue286-reviewed-source-manifest/v1` contains exactly these 13
+The canonical `issue286-reviewed-source-manifest/v1` contains exactly these 14
 sorted paths and each path's Git mode and raw-blob SHA-256:
 
 ```text
 home/private_dot_local/bin/executable_proton-pass-age-admission
 home/private_dot_local/bin/executable_proton-pass-ensure-ready
+home/private_dot_local/bin/executable_secret-exec-native-store
 scripts/admit-age-envelopes
 scripts/agent_equipment_public_data.py
 scripts/build-age-admission-provider-fixture

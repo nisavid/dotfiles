@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -151,6 +153,7 @@ class ProtonPassAgeAdmissionTests(unittest.TestCase):
             """,
         )
         self._write_provider(self.signing_key)
+        self._write_executable("secret-exec-native-store", "#!/bin/sh\nexit 0\n")
         self.wrapper = self.root / "trusted-wrapper"
         self._write_wrapper(
             """
@@ -166,6 +169,18 @@ class ProtonPassAgeAdmissionTests(unittest.TestCase):
         path = self.bin / name
         path.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
         path.chmod(0o700)
+        if name in {"proton-pass-ensure-ready", "secret-exec-native-store"}:
+            # These tests explicitly review disposable helper stubs. Production
+            # pins remain bound to the repository bytes by the test below.
+            adapter = self.adapter.read_text(encoding="utf-8")
+            adapter = re.sub(
+                rf'("{re.escape(name)}": ")[0-9a-f]{{64}}(")',
+                lambda match: (
+                    match[1] + hashlib.sha256(path.read_bytes()).hexdigest() + match[2]
+                ),
+                adapter,
+            )
+            self.adapter.write_text(adapter, encoding="utf-8")
         return path
 
     def _fingerprint(self, key: Path) -> str:
@@ -458,6 +473,132 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         process_group = int(fault_marker.read_text(encoding="ascii"))
         assert process.returncode is not None
         return (process.returncode, stdout, stderr), process_group
+
+    def test_runtime_helper_pins_match_reviewed_source(self) -> None:
+        tree = ast.parse(ADAPTER_SOURCE.read_text(encoding="utf-8"))
+        manifest = next(
+            ast.literal_eval(node.value)
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "_RUNTIME_HELPER_DIGESTS"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(
+            set(manifest), {"proton-pass-ensure-ready", "secret-exec-native-store"}
+        )
+        for name, digest in manifest.items():
+            expected = hashlib.sha256(
+                (ADAPTER_SOURCE.parent / f"executable_{name}").read_bytes()
+            ).hexdigest()
+            self.assertEqual(digest, expected)
+
+    def test_changed_runtime_helpers_fail_before_credentials(self) -> None:
+        for name in ("proton-pass-ensure-ready", "secret-exec-native-store"):
+            with self.subTest(helper=name):
+                path = self.bin / name
+                original = path.read_bytes()
+                path.write_bytes(original + b"# unsigned change\n")
+                result = subprocess.run(
+                    self._command(), capture_output=True,
+                    env=self._environment(), timeout=30,
+                )
+                self.assertEqual(
+                    (result.returncode, result.stdout, result.stderr),
+                    (1, b"", b"proton-pass age admission failed\n"),
+                )
+                self.assertFalse(self.readiness_marker.exists())
+                self.assertFalse(self.provider_marker.exists())
+                self.assertFalse(self.output.exists())
+                self.assertEqual(list(self.root.glob("proton-pass-age-admission.*")), [])
+                path.write_bytes(original)
+
+    def test_unsafe_runtime_helpers_fail_before_credentials(self) -> None:
+        for name in ("proton-pass-ensure-ready", "secret-exec-native-store"):
+            path = self.bin / name
+            original = path.read_bytes()
+            for kind in (
+                "missing", "symlink", "not-executable", "writable",
+                "directory", "fifo", "oversized",
+            ):
+                with self.subTest(helper=name, kind=kind):
+                    path.unlink()
+                    if kind == "symlink":
+                        # A valid fallback must not hide an invalid preferred name.
+                        fallback = self.bin / f"executable_{name}"
+                        fallback.write_bytes(original)
+                        fallback.chmod(0o700)
+                        path.symlink_to(fallback)
+                    elif kind == "directory":
+                        path.mkdir()
+                    elif kind == "fifo":
+                        os.mkfifo(path, 0o700)
+                    elif kind != "missing":
+                        data = b"x" * (128 * 1024 + 1) if kind == "oversized" else original
+                        mode = {"not-executable": 0o600, "writable": 0o722}.get(kind, 0o700)
+                        path.write_bytes(data)
+                        path.chmod(mode)
+                    result = subprocess.run(
+                        self._command(), capture_output=True,
+                        env=self._environment(), timeout=30,
+                    )
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (1, b"", b"proton-pass age admission failed\n"),
+                    )
+                    self.assertFalse(self.readiness_marker.exists())
+                    self.assertFalse(self.provider_marker.exists())
+                    self.assertFalse(self.output.exists())
+                    self.assertEqual(list(self.root.glob("proton-pass-age-admission.*")), [])
+                    if kind == "directory":
+                        path.rmdir()
+                    else:
+                        path.unlink(missing_ok=True)
+                    (self.bin / f"executable_{name}").unlink(missing_ok=True)
+                    path.write_bytes(original)
+                    path.chmod(0o700)
+
+    def test_source_name_aliases_create_receipt(self) -> None:
+        for name in ("proton-pass-ensure-ready", "secret-exec-native-store"):
+            (self.bin / name).rename(self.bin / f"executable_{name}")
+        result = subprocess.run(
+            self._command(), capture_output=True, env=self._environment(), timeout=30,
+        )
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr), (0, b"", b""),
+        )
+        self.assertEqual(self.output.read_text(), "fixture receipt\n")
+
+    def test_staged_pair_survives_installed_helper_replacement(self) -> None:
+        native_marker = self.root / "native-store.marker"
+        self._write_executable("secret-exec-native-store", f"""
+            #!/usr/bin/env python3
+            from pathlib import Path
+            Path({os.fspath(native_marker)!r}).write_text("verified native store")
+        """)
+        self._write_executable("proton-pass-ensure-ready", f"""
+            #!/usr/bin/env python3
+            from pathlib import Path
+            import stat
+            import subprocess
+            staged = Path(__file__)
+            assert staged.parent != Path({os.fspath(self.bin)!r})
+            assert stat.S_IMODE(staged.stat().st_mode) == 0o500
+            assert stat.S_IMODE(staged.parent.stat().st_mode) == 0o700
+            for name in ("proton-pass-ensure-ready", "secret-exec-native-store"):
+                (Path({os.fspath(self.bin)!r}) / name).write_text("unreviewed replacement")
+            subprocess.run([str(staged.parent / "secret-exec-native-store")], check=True)
+        """)
+        result = subprocess.run(
+            self._command(), capture_output=True, env=self._environment(), timeout=30,
+        )
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr), (0, b"", b""),
+        )
+        self.assertEqual(native_marker.read_text(), "verified native store")
+        self.assertEqual(self.output.read_text(), "fixture receipt\n")
+        self.assertEqual(list(self.root.glob("proton-pass-age-admission.*")), [])
 
     def test_selected_field_creates_receipt_and_removes_private_copies(self) -> None:
         result = subprocess.run(
