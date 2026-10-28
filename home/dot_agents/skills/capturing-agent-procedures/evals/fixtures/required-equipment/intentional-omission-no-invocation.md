@@ -1,0 +1,1 @@
+The operator asks for a routine source check. The active catalog intentionally omits incident-diagnosis for this harness, and no current instruction or active task invokes it. No reusable procedure is being established or corrected, and no downstream procedure is being consumed. The omission has its own settled owner disposition.
