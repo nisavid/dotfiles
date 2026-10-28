@@ -155,6 +155,7 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$checkpoint_partial" "$render_fixture/.chezmoitemplates/$checkpoint_partial_name"
   cp -p -- "$review_partial" "$render_fixture/.chezmoitemplates/$review_partial_name"
   cp -p -- "$question_partial" "$render_fixture/.chezmoitemplates/$question_partial_name"
+  cp -p -- "$source_root/.chezmoitemplates/outcome-reassessment.tmpl" "$render_fixture/.chezmoitemplates/outcome-reassessment.tmpl"
   cp -p -- "$source_root/.chezmoiignore" "$render_fixture/.chezmoiignore"
   mkdir -m 700 "$render_fixture/.chezmoidata"
   sed 's/^publicFixture = false$/publicFixture = true/' \
