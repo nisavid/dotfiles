@@ -562,6 +562,7 @@ expected_linux_source_inventory=$(
     'dot_config/systemd/user/builds.slice' \
     'dot_config/systemd/user/codex-usage-safeguard.service.tmpl' \
     'dot_config/systemd/user/default.target.wants/symlink_memory-telemetry.service' \
+    'dot_config/systemd/user/kde-baloo.service.d/10-display-ready.conf' \
     'dot_config/systemd/user/memory-telemetry.service' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
     'dot_config/systemd/user/proton-drive-desktop.service' \
