@@ -55,9 +55,9 @@ If a peer launch is blocked by sandboxed access to harness state, trust prompts,
 | --- | --- | --- |
 | Cursor | Use a native Cursor subagent only if the current Cursor harness/UI exposes one. The validated local CLI surface is peer-only. | Use Cursor peer commands above. |
 | Claude Code | Use the native Task/subagent surface when available. | Use Claude peer commands above or Claude background agents; inspect `claude agents --help` first. |
-| Codex | Use the native Codex subagent tool when available; in current Codex app `spawn_agent` exposes `model` and `reasoning_effort`. | Use Codex peer commands above, or app thread tools when exposed; inspect whether they use `thinking` or `reasoning_effort`. |
+| Codex | Use the native Codex subagent tool when available; in the ChatGPT desktop app, `spawn_agent` exposes `model` and `reasoning_effort`. | Use Codex peer commands above, or app thread tools when exposed; inspect whether they use `thinking` or `reasoning_effort`. |
 
-Use the model and effort selected by [choosing-agent-models](../choosing-agent-models/SKILL.md), expressed through the exact fields and slugs exposed by the target harness. Codex CLI effort uses `model_reasoning_effort`. Codex app tools may expose `thinking` for peer threads or `reasoning_effort` for subagents; inspect the current schema.
+Use the model and effort selected by [choosing-agent-models](../choosing-agent-models/SKILL.md), expressed through the exact fields and slugs exposed by the target harness. Codex CLI effort uses `model_reasoning_effort`. ChatGPT desktop app tools may expose `thinking` for peer threads or `reasoning_effort` for subagents; inspect the current schema.
 
 ## Routing
 
