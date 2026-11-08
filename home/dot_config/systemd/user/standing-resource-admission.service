@@ -1,0 +1,17 @@
+[Unit]
+Description=Standing resource admission monitor
+
+[Service]
+Type=exec
+# The admission equipment installation supplies recorder_fallback.py and its
+# sibling modules. Its OPERATING.md describes the grant and reader interface.
+ExecStart="%h/.local/bin/standing-resource-admission" "%h/Documents/Codex/2026-09-26/you-are-my-foreman-when-i/equipment/serial_admission/routine_standing/recorder_fallback.py" "%S/standing-resource-admission" "%t/standing-resource-admission-runtime" "%S/memory-telemetry"
+Restart=on-failure
+RestartSec=30s
+RuntimeDirectory=standing-resource-admission-runtime
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

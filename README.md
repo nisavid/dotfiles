@@ -52,6 +52,12 @@ chezmoi apply
   Plasma session, with explicit activation and start, status, and stop controls.
 - [Hindsight](docs/HINDSIGHT.md): retain reusable templates and a reviewed
   release pin, with no active consumer binding.
+- [Standing resource admission](home/dot_config/systemd/user/standing-resource-admission.service)
+  supervises the admission companion on Linux using the existing memory
+  telemetry stream. See `OPERATING.md` alongside the installed companion for
+  the standing grant and launcher check. Enable and start the service only at
+  the coordinated activation step after artifact readback, grant provisioning,
+  and launcher binding.
 
 ## Optional Codex quota safeguard
 

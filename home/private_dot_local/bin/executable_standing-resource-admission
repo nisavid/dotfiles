@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 4 ]; then
+    printf 'Usage: %s RECORDER_FALLBACK AUTHORITY_DIR RUNTIME_DIR RECORDER_DIR\n' "$0" >&2
+    exit 2
+fi
+
+exec /usr/bin/python3 -B "$1" standing-run \
+    --authority-dir "$2" --state-dir "$3" --recorder-dir "$4"
