@@ -1,0 +1,1 @@
+The operator asks you to summarize a dated inventory note that mentions the retired incident-diagnosis route. Current task instructions select an exposed supported route and do not require incident-diagnosis. No reusable procedure is being established or corrected, and this task does not consume another task's procedure. The dated reference is explanatory evidence only.

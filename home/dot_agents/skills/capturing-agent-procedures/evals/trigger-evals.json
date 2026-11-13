@@ -30,5 +30,89 @@
   {
     "query": "What is 17 times 4?",
     "should_trigger": false
+  },
+  {
+    "query": "Current troubleshooting instructions require incident-diagnosis, but the active harness cannot resolve it after complete scoped discovery. Handle the requirement and its owned follow-up.",
+    "should_trigger": true
+  },
+  {
+    "query": "A current required skill name initially looks unresolved. Check its supported namespace and alias before deciding whether a repair is needed.",
+    "should_trigger": true
+  },
+  {
+    "query": "Current instructions require a skill, but the catalog lookup is partial and one documented root is unreadable. Resolve the current requirement without turning this observation into an absence claim.",
+    "should_trigger": true
+  },
+  {
+    "query": "The required skill files and symlink exist, but the active harness cannot expose or load the route. Carry this current mismatch through its owning source.",
+    "should_trigger": true
+  },
+  {
+    "query": "A current unusable requirement has a matching accepted owner on the second tracker page, and the latest exposure evidence is new. Carry the existing repair forward.",
+    "should_trigger": true
+  },
+  {
+    "query": "The same current missing requirement already has accepted repair work. Its evidence, owner, scope, and remaining joins are unchanged on this second encounter.",
+    "should_trigger": true
+  },
+  {
+    "query": "A current required skill is unresolved and its source owner is known, but the governed tracker is unavailable. Keep the follow-up concrete.",
+    "should_trigger": true
+  },
+  {
+    "query": "Current instructions require an unresolved skill. Evidence and tracker reads are authorized, but this task has no tracker-write authority.",
+    "should_trigger": true
+  },
+  {
+    "query": "A missing current requirement can be tracked, but this task is not authorized to dispatch the receiving worker even though a coordination tool exists.",
+    "should_trigger": true
+  },
+  {
+    "query": "Tracking and worker dispatch for the current missing requirement are authorized, but the harness has no supported dispatch actuator.",
+    "should_trigger": true
+  },
+  {
+    "query": "The worker dispatch for a current missing requirement was delivered, but the separate receiving status is pending. Assess the follow-up.",
+    "should_trigger": true
+  },
+  {
+    "query": "A worker declined the dispatched scope for the current missing-required-equipment repair. Preserve the repair and resolve its next owner action.",
+    "should_trigger": true
+  },
+  {
+    "query": "Standing instructions still require an intentionally retired troubleshooting route. Its settled disposition calls for correcting the maintained caller while retaining the supported diagnosis route.",
+    "should_trigger": true
+  },
+  {
+    "query": "A current required skill is unresolved. A similar installed skill exists, but its replacement coverage is unsettled and an accepted owner is investigating.",
+    "should_trigger": true
+  },
+  {
+    "query": "The current task requires unresolved equipment, and capturing-agent-procedures or its required ownership helper is unavailable. Use the maintained standing bootstrap.",
+    "should_trigger": true
+  },
+  {
+    "query": "A current required skill is unresolved. The governing workflow separately authorizes an exposed route for immediate troubleshooting while the accepted canonical repair remains open.",
+    "should_trigger": true
+  },
+  {
+    "query": "The source correction for a current missing-required-equipment repair is reviewed and published, but targeted materialization and affected-consumer invocation are unverified.",
+    "should_trigger": true
+  },
+  {
+    "query": "A supported exposed alias is newly discovered during an established accepted repair, whose canonical correction and affected-consumer acceptance remain unverified.",
+    "should_trigger": true
+  },
+  {
+    "query": "Summarize this dated inventory mentioning a retired skill. No current instruction invokes it, and this task adds or consumes no reusable procedure.",
+    "should_trigger": false
+  },
+  {
+    "query": "Perform a routine source check. The catalog intentionally omits a skill that no current instruction or active task invokes; no reusable procedure is being produced or consumed.",
+    "should_trigger": false
+  },
+  {
+    "query": "Finish today's routine comparison. A roadmap names a skill for a later release exercise, but that prerequisite is not invoked by the active task and no procedure is being produced or consumed.",
+    "should_trigger": false
   }
 ]
