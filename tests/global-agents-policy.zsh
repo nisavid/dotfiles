@@ -475,7 +475,6 @@ review_required=(
   "${(pj:\n:)review_rules}"
   "${(j: :)review_independence}"
   "${(j: :)review_ending}"
-  "Until Provingkit alpha.4 is installed (nisavid/provingkit#187): Installed Tricritical skills may cite references/topology.json; that file is intentionally absent. Don't look for it or any copy of it: not in a working tree, checkout, candidate, cache, or other revision. Use only the edges your installed SKILL.md and invocation boundary state, and make no claim about topology."
 )
 for ((i = 1; i <= ${#review_required}; i++)); do
   [[ $(<"$review_policy") == *"$review_required[$i]"* ]] || fail "review policy is missing required paragraph $i"
