@@ -59,6 +59,12 @@ chezmoi apply
   the coordinated activation step after artifact readback, grant provisioning,
   and launcher binding.
 
+## Qualification procedures
+
+- [PQ Sequoia on GitHub-hosted macOS](docs/crypto/pq-sequoia-macos/PROCEDURE.md):
+  validate, build, and exercise the pinned public RFC 9980 candidate and its
+  live bidirectional Hatchery fixture protocol.
+
 ## Optional Codex quota safeguard
 
 The [quota safeguard adapter](docs/CODEX_QUOTA_SAFEGUARD.md) installs a reviewed
