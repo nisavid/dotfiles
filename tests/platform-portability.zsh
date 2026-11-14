@@ -585,6 +585,8 @@ expected_linux_source_inventory=$(
 [[ $linux_source_inventory == $expected_linux_source_inventory ]] ||
   fail 'Linux-only source inventory changed without updating the non-Linux gate'
 
+python3 -B -m unittest discover -s "$repo_root/tests" -p test_baloo_startup.py
+
 fixture_source=$test_root/source
 fixture_home=$test_root/home
 fixture_config=$test_root/chezmoi.toml
