@@ -224,6 +224,42 @@
           "severity": "quality"
         }
       ]
+    },
+    {
+      "id": 30,
+      "name": "superseding-active-chain",
+      "prompt": "Using the supplied fixture, respond as the agent handling the request. This is a no-tools simulation: do not inspect files, run commands, or perform external actions. Return concrete next actions, completion criteria, and any question you would ask. Do not evaluate your own response.",
+      "expected_output": "Corrects the affected operative instruction chain within authority and retains scoped incomplete adoption until owner readback, reviewed-revision loading, and naturally useful post-reentry use are observed.",
+      "fixture_paths": [
+        "evals/fixtures/superseding-active-chain.md"
+      ],
+      "expectations": [
+        {
+          "id": "active-chain",
+          "text": "Traces entry brief, consumer instructions, maintained procedure, installed projection, and decision record. Correcting the record alone or adding a conditional branch does not retire contradictory universal rules.",
+          "severity": "quality"
+        },
+        {
+          "id": "ownership",
+          "text": "Corrects owned operative rules, obtains the installed-projection owner's correction and active-chain readback, or records that specific unresolved projection without assuming authority.",
+          "severity": "quality"
+        },
+        {
+          "id": "adoption-stages",
+          "text": "A file checksum alone does not prove what loaded. Readback and loading without useful subsequent use leave adoption incomplete; observed useful use completes only that consumer's evidence, with other consumers still open.",
+          "severity": "quality"
+        },
+        {
+          "id": "preservation",
+          "text": "Preserves frozen historical records and continues the unrelated eligible report rather than imposing a global gate.",
+          "severity": "quality"
+        },
+        {
+          "id": "useful-work",
+          "text": "Retains the naturally useful result and does not create marker work merely to complete evidence.",
+          "severity": "quality"
+        }
+      ]
     }
   ]
 }
