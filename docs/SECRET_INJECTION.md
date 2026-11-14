@@ -639,9 +639,9 @@ Claude Code, Claude Desktop, and Codex read `TYPESAFE_API_KEY` only from their
 environment, a project `.env`, or a plaintext configuration file, and
 `jev-axi setup` owns their hook entries. The command map therefore maps the
 hosts best-effort (`claude-desktop=typesafe?`, `chatgpt=typesafe?`,
-`claude=typesafe?`, and `codex=typesafe?`; `chatgpt` hosts the Codex app), and
-each host's hook subprocesses inherit the key. [ADR
-0002](adr/0002-app-boundary-secret-injection.md) records the decision.
+`claude=typesafe?`, and `codex=typesafe?`). The `chatgpt` shim launches the
+ChatGPT desktop app. Each host's hook subprocesses inherit the key.
+[ADR 0002](adr/0002-app-boundary-secret-injection.md) records the decision.
 
 The rule is narrow:
 
