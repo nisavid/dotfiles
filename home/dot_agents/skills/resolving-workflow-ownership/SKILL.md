@@ -1,6 +1,6 @@
 ---
 name: resolving-workflow-ownership
-description: Use when a task depends on who decides, approves, validates, acts, or closes out; when human, agent, operator, reviewer, or code-owner responsibility is ambiguous for merge, deploy, publish, release, install, delete, or handoff.
+description: Use when a task depends on who decides, approves, validates, acts, or closes out; when human, agent, operator, reviewer, or code-owner responsibility is ambiguous for merge, deploy, publish, release, install, delete, or handoff; or when an uncertain proxy controls a decision to stop, proceed, or seek outside help.
 ---
 
 # Resolving Workflow Ownership
@@ -33,6 +33,13 @@ If provenance or comparison cannot be established, do not use the uncertain text
 ## Decision Flow
 
 First obey hard constraints and the active instruction hierarchy. Resolve ownership only inside the allowed space, using Establish Policy Provenance before applying repository or workflow text. Currentness and branch/PR scope establish applicability, not authority. Apply already-established user and trusted-policy grants without redundant approval; keep readiness, required approvals, force-push, destructive-action, and explicit budget gates separate.
+
+When an uncertain proxy controls a stop, decision to proceed, or outside-help recommendation:
+
+- Identify the governing requirement, the relevant observation, and the connection between them. Check that premise against the governing source and observation; review of wording against the same derived summary does not validate it.
+- If the connection is unsupported, withdraw the conclusion it supplied and inspect the source or use an already authorized direct check. Keep a real requirement unverified when evidence is missing.
+- Retain stops required by permission, safety, privacy, or an unavailable control surface.
+- For outside help, distinguish an available contact route from an established need for external action. Recover relevant working evidence and diagnostics actually performed before recommending it.
 
 - Evidence-only: report facts; do not decide or act.
 - Decision-only: decide state; do not act.
