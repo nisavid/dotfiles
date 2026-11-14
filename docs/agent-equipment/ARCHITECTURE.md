@@ -14,11 +14,14 @@ semantics.
 | Native manager locks | native manager | Observation and provenance evidence only |
 | Harness files and CLIs | harness or native manager | Observable runtime state |
 | Caches, databases, credentials, usage state | harness or native manager | Never catalog state |
+| Preparation gate | separately packaged preparation authority | Candidate-independent static validation and manifest-bound read-only preparation only |
+| Preparation store | preparation authority | Atomic create-only storage of one complete preparation bundle and evidence-only receipt |
+| Preparation bundle and receipt | preparation authority | Exact sealed pre-authorization evidence; never apply authority or a nonce claim |
 | Apply authorization | external operator authority | One time-bounded, one-run grant for one exact pre-mutation binding tuple and execution domain |
 | Execution domain | external operator authority | Independently trusted identity of the one authoritative CAS nonce-ledger namespace and target |
 | Authorization ledger | reconciler runtime state directory | Durable one-time nonce claims inside the exact execution domain; never authority issuance |
-| Capture observation authority set | trusted pre-invocation validator | Sealed all-and-only plan-action projection of normalized capture observations, with identity/digest later bound by apply authority |
-| Prepared action authority set | trusted pre-invocation validator | Sealed all-and-only plan-action projection of adapter-derived normalized pre-state and expected post-state |
+| Capture observation authority set | separately packaged preparation authority | Sealed all-and-only plan-action projection of normalized capture observations, with identity/digest later bound by apply authority |
+| Prepared action authority set | separately packaged preparation authority | Sealed all-and-only plan-action projection of adapter-derived normalized pre-state and expected post-state |
 | Compensation authorization | external operator authority | Time-bounded grant for one fresh public compensation invocation against one original run and checkpoint set |
 | Apply checkpoints | reconciler runtime state directory | Recovery evidence for one immutable plan |
 | Expected acceptance cases | production evidence writer | Exact release cases projected from one validated plan and authorized binding tuple |
@@ -158,17 +161,48 @@ URLs, native output, or secret values. Manager and harness version strings are
 public native-manager observations; diagnostics never echo their supplied
 contents.
 
-`execution-authority-v1.schema.json` owns ten closed records with independent
-purposes. `CaptureObservationAuthoritySet` replaces the former raw observation-
-list input with one closed, canonically sealed artifact. Its bindings name the
+`execution-authority-v1.schema.json` owns preparation, execution, and release
+records with independent purposes. A candidate-independent, separately packaged
+`PreparationGate` first validates all static inputs before any adapter call. It
+may invoke only the exact `prepare` seam named by a member of the closed
+`AdapterManifestSet`; that seam has read-only effect and its exact
+request and response records are `PrepareRequest` and `PreparedStateFacts`.
+The gate manifest directly binds its runtime executable, installed files, and
+captured Schema bytes. Gate construction consumes the supplied Schema mapping
+once, rejects duplicate names or non-exact string/byte members, and uses that
+same immutable snapshot both to build active validators and to authenticate the
+manifest's Schema digests. Each adapter manifest separately binds one independently
+measured adapter implementation identity and digest, exact capability, and
+read-only `prepare` seam. The protected deployment gives the gate only a
+prepare-only adapter handle whose reviewed implementation matches that manifest;
+a handle that declares any other public callable is rejected, and deployment
+qualification excludes dynamically exposed mutation seams. The gate captures
+the exact adapter and store call targets during construction, so later method
+replacement on a supplied object does not change the invoked capability. A candidate
+manifest, capability record, or caller-supplied adapter cannot substitute for
+either manifest.
+
+`PreparedStateFacts` is a closed, request-bound response. It echoes the exact
+request and adapter-manifest bindings and supplies only complete normalized
+captured pre-state and expected post-state with their self-digests. It supplies
+no surface scope, controlled-component membership, authority identity or digest,
+or mutation capability. The gate rejects static input before an adapter call;
+after one read-only `prepare` call, an invalid response creates neither an
+authority set nor a store record and cannot lead to mutation or a checkpoint.
+
+`CaptureObservationAuthoritySet` replaces the former raw observation-list input
+with one closed, canonically sealed artifact. Its bindings name the
 exact candidate, installed implementation, plan, plan-action set, capability
 set, and captured-state identity/digest. It contains one canonically ordered
 observation for every plan action and no others. Each observation binds the
 action identity and ordinal, exact surface and controlled-component identities,
-and complete normalized captured pre-state plus its canonical digest. Before
-apply issuance, an independent trust channel supplies and validates the set's
-exact identity and complete digest. `ApplyAuthorization` then binds that tuple;
-a coordinated projection reseal requires a new authorization.
+and complete normalized captured pre-state plus its canonical digest. The gate
+seals this set into the committed bundle. Before apply issuance, the issuer
+derives its exact identity and complete digest from the authenticated bundle;
+`ApplyAuthorization` binds that tuple. Post-issuance preclaim re-resolves the
+authorization-bound bundle digest through the resolver callable captured when
+the preclaim gate is constructed and independently revalidates the same tuple,
+so a coordinated projection reseal requires a new authorization.
 
 `PreparedActionAuthoritySet` is sealed after complete plan, capture-observation-
 authority, and adapter-context validation and before apply issuance. It contains one
@@ -179,9 +213,44 @@ capture identity/digest, and complete normalized captured pre-state and expected
 post-state with self-digests. Both normalized states contain a sorted, unique
 component identity set equal to the action's exact controlled-equipment set, and
 the expected post-state must include the action's desired-state fragment. The
-set has an independently trusted canonical identity and digest; a caller map or
-a coordinated reseal does not replace that trust. Every prepared pre-state must
+gate seals the set into the bundle, the issuer derives its canonical identity
+and digest from that authenticated bundle, and post-issuance preclaim
+independently revalidates the authorization-bound tuple. A caller map or a
+coordinated reseal does not replace that chain. Every prepared pre-state must
 equal its matching member of the validated `CaptureObservationAuthoritySet`.
+
+The gate commits one content-addressed `PreparationBundle` and closed,
+evidence-only `PreparationReceipt` atomically through its producer-owned,
+create-only store. The bundle retains exact byte streams for the plan-action
+set, captured state, capability-binding set, adapter-manifest set, gate
+manifest, and both authority sets, and binds their semantic digests with the
+candidate, installed implementation, catalog, lock, plan, gate identity,
+manifest digest, store identity, and generation. The receipt binds the bundle's
+identity, semantic and byte digests, gate identity and manifest digest, and
+store identity and generation. An identical complete envelope may be reused
+only after all bindings are revalidated; different bytes are a conflict. A
+crash or other durability uncertainty returns no receipt and retry begins with
+binding revalidation. A partial or corrupted store entry never resolves.
+The store directory must already exist with owner-only protection; creating and
+qualifying that protected path is a later deployment task, not a gate feature.
+
+Before issuing apply authority, the issuer retrieves the receipt and bundle
+through the authenticated producer-owned store, rehashes the exact bytes, and
+derives the preparation-bundle digest and both authority-set identity/digest
+tuples from that result. `ApplyAuthorization` binds those derived values and the
+operator-review-package digest. No caller provides a trusted expected tuple.
+After issuance, the installed `ApplyPreclaimGate` validates the raw
+authorization against independently trusted authorization inputs, re-resolves
+its exact preparation-bundle digest, and revalidates the receipt, bundle, and
+artifact streams without possessing an adapter, checkpoint store, authorization
+ledger, live-comparison seam, or nonce-claim operation. The ledger module
+exposes durable claim storage only; there is no direct validate-and-claim API.
+The resulting admitted preclaim value is the only apply input accepted by the
+#116 executor. Its final live comparison precedes the nonce compare-and-swap;
+only a durable nonce claim may precede checkpoint or mutation work. A valid empty action set
+is a terminal verified no-op: it creates no authority sets, bundle, receipt,
+authorization, nonce claim, checkpoint, or adapter call. The authority-set
+schemas remain nonempty.
 
 `ApplyAuthorization` is the only serialized authority that may start
 forward mutation. It binds `command: apply`, issuer and validity times, one run
@@ -189,7 +258,8 @@ identity, one issuer-generated execution nonce, the independently trusted
 `execution_domain_identity`, and the complete candidate, installed-
 implementation, catalog, lock, plan, plan-action-set, capture-observation-
 authority-set identity/digest, prepared-action-authority-set identity/digest,
-capability-set, sealed-capture, expected-case-manifest, and
+capability-set, sealed-capture, preparation-bundle digest,
+expected-case-manifest, and
 operator-review-package tuple. The review-
 package digest binds the exact proposed live mutations, rollback material, and
 operator review content presented to the issuer. Its identity is the canonical
@@ -375,6 +445,14 @@ the launcher verifies its installed bytes before parsing candidate evidence.
 Candidate code has no receipt-issuing or archive-commit capability. Release
 consumers accept only a receipt retrieved with the matching generation from the
 external authority store, never candidate output or a caller-selected path.
+
+The `PreparationGate` is likewise a separately packaged authority outside the
+candidate package and its installed-implementation manifest. It is narrower
+than the release launcher: it neither issues a release receipt nor evaluates
+release evidence. It validates and commits preparation evidence only, never
+imports candidate code, opens an authorization ledger or checkpoint store, or
+calls a mutating adapter surface. Its producer-owned store is the only source
+from which the apply issuer may resolve a receipt and bundle.
 
 ## Resolver interface
 
@@ -1235,20 +1313,20 @@ and produce reviewable before-and-after records; apply never converts records.
 
 ## Apply and recovery interface
 
-The executor should expose one deep interface:
+Preclaim and execution expose two ordered interfaces:
 
 ```text
+ApplyPreclaimGate(resolver).admit(
+  apply_authorization_bytes,
+  ApplyAuthorizationTrust(...),
+) -> AdmittedApplyAuthorization | ApplyAdmissionRejection
+
 execute(
   validated_plan,
-  apply_authorization_bytes,
+  admitted_apply_authorization,
   adapters,
   checkpoint_store,
   authorization_ledger,
-  *,
-  trusted_apply_authorization_digest,
-  trusted_execution_domain_identity,
-  trusted_operator_review_package_digest,
-  trusted_clock,
 ) -> apply_report
 
 compensate(
@@ -1264,15 +1342,19 @@ compensate(
 ) -> compensation_report
 ```
 
-The executor first validates `ApplyAuthorization`, then takes the expected
+The executor first receives an `ApplyPreclaimGate` result produced from exact
+canonical authorization bytes and the authenticated producer-owned resolver.
+That result contains the revalidated preparation receipt, bundle, and seven
+artifact streams but no nonce claim. The executor then performs the final live
+comparison and takes the expected
 capture-observation-authority identity/digest from its closed bindings. Every
 public validation path receives that expected tuple together with the exact
 `CaptureObservationAuthoritySet` artifact. The former raw observation-list and
 caller-supplied observation-digest API does not exist. Compensation recovery
 uses the same tuple from the archived, revalidated apply authorization.
 
-Before the first action checkpoint, the executor rejects a raw authority input
-larger than 256 KiB before UTF-8 decoding, JSON parsing, regex evaluation,
+Before returning an admitted preclaim value, `ApplyPreclaimGate` rejects a raw
+authority input larger than 256 KiB before UTF-8 decoding, JSON parsing, regex evaluation,
 credential scanning, or hashing. It strictly parses UTF-8 JSON, rejects
 duplicate members, non-finite numbers, and non-JSON values, then validates the
 closed `ApplyAuthorization`. Each parsed-object authority validator first
@@ -1286,20 +1368,17 @@ raw-byte ceiling is enforced before UTF-8
 decoding or parsing. After strict parsing, the parsed object is canonicalized
 only to enforce its corresponding canonical ceiling before Schema, regex,
 credential, or digest work.
-The executor
-validates its Schema and semantic digest/identity formulas, and requires its complete
-tuple to equal the independently validated local artifacts and
-`trusted_apply_authorization_digest` plus the trusted operator-review-package
-digest. Its top-level `execution_domain_identity` must equal
-`trusted_execution_domain_identity` and identify the same authoritative ledger
-namespace and CAS target used for the nonce claim. It requires
-`issued_at <= not_before <= trusted_clock.now < expires_at`, exact command,
-issuer, and run identity, and the same post-authorization live comparison
-required by the capture contract. It then exclusively creates an
+The admitted preclaim value already proves the authorization Schema, semantic
+digest and identity formulas, trusted UTC window, and complete tuple against the
+revalidated artifact streams and independently supplied authorization trust.
+The executor accepts only that typed value, requires its top-level
+`execution_domain_identity` to identify the same authoritative ledger namespace
+and CAS target used for the nonce claim, and performs the post-authorization live
+comparison required by the capture contract. It then exclusively creates an
 authorization-ledger record in that execution domain for the execution nonce,
 authorization digest, and run identity, fsyncing file and parent directory. A
-claimed nonce, expired window, missing field, foreign tuple or execution domain,
-digest mismatch, or ledger persistence failure rejects the run before the first
+claimed nonce, foreign execution domain, live mismatch, or ledger persistence
+failure rejects the run before the first
 action checkpoint and performs zero adapter calls.
 
 The nonce claim is never deleted or reused. A crash recovery may use an existing

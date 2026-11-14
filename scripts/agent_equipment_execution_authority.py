@@ -31,6 +31,9 @@ except ModuleNotFoundError:  # Loaded as a repo module rather than an executable
     )
 try:
     from agent_equipment_captured_state import (
+        _validate_captured_state_with_prepared_authority,
+    )
+    from agent_equipment_captured_state import (
         plan_action_digest as _plan_action_digest,
     )
     from agent_equipment_captured_state import (
@@ -41,12 +44,12 @@ try:
     )
     from agent_equipment_captured_state import (
         validate_captured_state as _validate_captured_state,
-    )
-    from agent_equipment_captured_state import (
-        _validate_captured_state_with_prepared_authority,
     )
 except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
     from scripts.agent_equipment_captured_state import (
+        _validate_captured_state_with_prepared_authority,
+    )
+    from scripts.agent_equipment_captured_state import (
         plan_action_digest as _plan_action_digest,
     )
     from scripts.agent_equipment_captured_state import (
@@ -57,9 +60,6 @@ except ModuleNotFoundError:  # Loaded as a repo module rather than an executable
     )
     from scripts.agent_equipment_captured_state import (
         validate_captured_state as _validate_captured_state,
-    )
-    from scripts.agent_equipment_captured_state import (
-        _validate_captured_state_with_prepared_authority,
     )
 
 
@@ -672,6 +672,7 @@ def _validated_capture_observation_authority_index(
     expected_plan_digest: str,
     expected_plan_action_set_digest: str,
     expected_capability_set_digest: str,
+    expected_preparation_adapter_manifest_set_digest: str,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
     plan_action_index: Mapping[tuple[str, int], Mapping[str, object]],
@@ -737,6 +738,9 @@ def _validated_capture_observation_authority_index(
         "plan_digest": expected_plan_digest,
         "plan_action_set_digest": expected_plan_action_set_digest,
         "capability_set_digest": expected_capability_set_digest,
+        "preparation_adapter_manifest_set_digest": (
+            expected_preparation_adapter_manifest_set_digest
+        ),
         "captured_state_identity": expected_captured_state_identity,
         "captured_state_digest": expected_captured_state_digest,
     }
@@ -820,6 +824,7 @@ def validate_capture_observation_authority_set(
     expected_plan_digest: str,
     expected_plan_action_set_digest: str,
     expected_capability_set_digest: str,
+    expected_preparation_adapter_manifest_set_digest: str,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
 ) -> tuple[Diagnostic, ...]:
@@ -845,6 +850,9 @@ def validate_capture_observation_authority_set(
         expected_plan_digest=expected_plan_digest,
         expected_plan_action_set_digest=expected_plan_action_set_digest,
         expected_capability_set_digest=expected_capability_set_digest,
+        expected_preparation_adapter_manifest_set_digest=(
+            expected_preparation_adapter_manifest_set_digest
+        ),
         expected_captured_state_identity=expected_captured_state_identity,
         expected_captured_state_digest=expected_captured_state_digest,
         plan_action_index=plan_action_index,
@@ -866,6 +874,7 @@ def validate_prepared_action_authority_set(
     expected_candidate_identity: str,
     expected_implementation_manifest_digest: str,
     expected_plan_digest: str,
+    expected_preparation_adapter_manifest_set_digest: str,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
 ) -> tuple[Diagnostic, ...]:
@@ -914,6 +923,9 @@ def validate_prepared_action_authority_set(
             expected_capability_set_digest=(
                 capability_set_digest if isinstance(capability_set_digest, str) else ""
             ),
+            expected_preparation_adapter_manifest_set_digest=(
+                expected_preparation_adapter_manifest_set_digest
+            ),
             expected_captured_state_identity=expected_captured_state_identity,
             expected_captured_state_digest=expected_captured_state_digest,
             plan_action_index=plan_action_index,
@@ -933,8 +945,19 @@ def validate_prepared_action_authority_set(
         expected_implementation_manifest_digest=(
             expected_implementation_manifest_digest
         ),
+        expected_plan_digest=expected_plan_digest,
+        expected_plan_action_set_digest=expected_plan_action_set_digest,
         expected_capability_set_digest=(
             capability_set_digest if isinstance(capability_set_digest, str) else ""
+        ),
+        expected_preparation_adapter_manifest_set_digest=(
+            expected_preparation_adapter_manifest_set_digest
+        ),
+        expected_capture_observation_authority_set_identity=(
+            expected_capture_observation_authority_set_identity
+        ),
+        expected_capture_observation_authority_set_digest=(
+            expected_capture_observation_authority_set_digest
         ),
     )
     prepared_authority_trusted = (
@@ -948,7 +971,16 @@ def validate_prepared_action_authority_set(
             key in plan_action_index
             and key in capture_observation_index
             and _prepared_authority_matches_plan_action(
-                authority, plan_action_index[key]
+                authority,
+                plan_action_index[key],
+                authoritative_captured_state=authoritative_captured_state,
+                expected_plan_action_set_digest=expected_plan_action_set_digest,
+                expected_capture_observation_authority_set_identity=(
+                    expected_capture_observation_authority_set_identity
+                ),
+                expected_capture_observation_authority_set_digest=(
+                    expected_capture_observation_authority_set_digest
+                ),
             )
             and authority.get("captured_pre_state")
             == capture_observation_index[key].get("normalized_pre_state")
@@ -1151,7 +1183,12 @@ def _validated_prepared_action_authority_index(
     expected_captured_state_digest: str,
     expected_candidate_identity: str,
     expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+    expected_plan_action_set_digest: str,
     expected_capability_set_digest: str,
+    expected_preparation_adapter_manifest_set_digest: str,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
 ) -> tuple[dict[tuple[str, int], Mapping[str, object]], bool]:
     """Validate and index one sealed complete pre-invocation authority set."""
 
@@ -1172,6 +1209,26 @@ def _validated_prepared_action_authority_index(
     authorities = document.get("authorities")
     if not isinstance(authorities, list):
         return {}, False
+    expected_bindings = {
+        "candidate_identity": expected_candidate_identity,
+        "implementation_manifest_digest": expected_implementation_manifest_digest,
+        "plan_digest": expected_plan_digest,
+        "plan_action_set_digest": expected_plan_action_set_digest,
+        "capability_set_digest": expected_capability_set_digest,
+        "preparation_adapter_manifest_set_digest": (
+            expected_preparation_adapter_manifest_set_digest
+        ),
+        "captured_state_identity": expected_captured_state_identity,
+        "captured_state_digest": expected_captured_state_digest,
+        "capture_observation_authority_set_identity": (
+            expected_capture_observation_authority_set_identity
+        ),
+        "capture_observation_authority_set_digest": (
+            expected_capture_observation_authority_set_digest
+        ),
+    }
+    if document.get("bindings") != expected_bindings:
+        return {}, False
     result: dict[tuple[str, int], Mapping[str, object]] = {}
     valid = True
     ordered_keys: list[tuple[int, str]] = []
@@ -1190,10 +1247,17 @@ def _validated_prepared_action_authority_index(
             or authority.get("candidate_identity") != expected_candidate_identity
             or authority.get("implementation_manifest_digest")
             != expected_implementation_manifest_digest
+            or authority.get("plan_digest") != expected_plan_digest
+            or authority.get("plan_action_set_digest")
+            != expected_plan_action_set_digest
             or authority.get("captured_state_identity")
             != expected_captured_state_identity
             or authority.get("captured_state_digest") != expected_captured_state_digest
             or authority.get("capability_set_digest") != expected_capability_set_digest
+            or authority.get("capture_observation_authority_set_identity")
+            != expected_capture_observation_authority_set_identity
+            or authority.get("capture_observation_authority_set_digest")
+            != expected_capture_observation_authority_set_digest
             or authority.get("captured_pre_state_digest") != canonical_digest(pre_state)
             or authority.get("expected_post_state_digest")
             != canonical_digest(post_state)
@@ -1217,21 +1281,120 @@ def _validated_prepared_action_authority_index(
     return result, valid
 
 
+def _expected_route_capture_binding(
+    captured_state: object,
+    action: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    if not isinstance(captured_state, Mapping):
+        return None
+    routes = captured_state.get("provider_routes")
+    surfaces = captured_state.get("surfaces")
+    if not isinstance(routes, list) or not isinstance(surfaces, list):
+        return None
+    route_matches = [
+        route
+        for route in routes
+        if isinstance(route, Mapping)
+        and route.get("route_id") == action.get("route_identity")
+        and route.get("route_digest") == action.get("route_digest")
+    ]
+    if len(route_matches) != 1:
+        return None
+    route = route_matches[0]
+    planned_actions = route.get("planned_actions")
+    restore_evidence = route.get("restore_evidence")
+    if not isinstance(planned_actions, list) or not isinstance(
+        restore_evidence,
+        Mapping,
+    ):
+        return None
+    action_matches = [
+        candidate
+        for candidate in planned_actions
+        if isinstance(candidate, Mapping)
+        and candidate.get("action_identity") == action.get("action_identity")
+    ]
+    if len(action_matches) != 1:
+        return None
+    planned_action = action_matches[0]
+    write_bindings = planned_action.get("write_bindings")
+    dependency_bindings = planned_action.get("verification_dependency_bindings")
+    if not isinstance(write_bindings, list) or not isinstance(
+        dependency_bindings,
+        list,
+    ):
+        return None
+    surface_ids = {
+        binding.get("surface_id")
+        for binding in [*write_bindings, *dependency_bindings]
+        if isinstance(binding, Mapping) and isinstance(binding.get("surface_id"), str)
+    }
+    if len(surface_ids) != len(write_bindings) + len(dependency_bindings):
+        return None
+    projected_recovery = [
+        {
+            "surface_id": surface.get("surface_id"),
+            "recovery": surface.get("recovery"),
+        }
+        for surface in surfaces
+        if isinstance(surface, Mapping) and surface.get("surface_id") in surface_ids
+    ]
+    if {item["surface_id"] for item in projected_recovery} != surface_ids:
+        return None
+    try:
+        return {
+            "route_identity": action.get("route_identity"),
+            "route_digest": action.get("route_digest"),
+            "restore_evidence_digest": canonical_digest(restore_evidence),
+            "recovery_material_digest": canonical_digest(
+                {
+                    "restore_evidence": restore_evidence,
+                    "surface_recovery": sorted(
+                        projected_recovery,
+                        key=lambda item: str(item["surface_id"]),
+                    ),
+                }
+            ),
+            "native_update_control": restore_evidence.get(
+                "native_update_control", "not_applicable"
+            ),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
 def _prepared_authority_matches_plan_action(
     authority: Mapping[str, object],
     action: Mapping[str, object],
+    *,
+    authoritative_captured_state: object,
+    expected_plan_action_set_digest: str,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
 ) -> bool:
     compensation = action.get("compensation")
     if not isinstance(compensation, Mapping):
         return False
+    adapter_binding = authority.get("adapter_binding")
+    expected_route_capture_binding = _expected_route_capture_binding(
+        authoritative_captured_state,
+        action,
+    )
+    if (
+        not isinstance(adapter_binding, Mapping)
+        or expected_route_capture_binding is None
+    ):
+        return False
     expected = {
         "action_identity": action.get("action_identity"),
+        "action_digest": _plan_action_digest(action),
         "ordinal": action.get("ordinal"),
         "candidate_identity": action.get("candidate_identity"),
         "implementation_manifest_digest": action.get("implementation_manifest_digest"),
         "catalog_digest": action.get("catalog_digest"),
         "lock_digest": action.get("lock_digest"),
         "plan_digest": action.get("plan_digest"),
+        "plan_action_set_digest": expected_plan_action_set_digest,
         "route_capability_binding": {
             "capability_identity": action.get("capability_identity"),
             "capability_digest": action.get("capability_digest"),
@@ -1239,9 +1402,28 @@ def _prepared_authority_matches_plan_action(
                 "manager_version_evidence_digest"
             ),
         },
+        "adapter_binding": {
+            **adapter_binding,
+            "adapter_identity": action.get("adapter_identity"),
+            "adapter_version": action.get("adapter_version"),
+        },
+        "capture_observation_authority_set_identity": (
+            expected_capture_observation_authority_set_identity
+        ),
+        "capture_observation_authority_set_digest": (
+            expected_capture_observation_authority_set_digest
+        ),
+        "route_capture_binding": expected_route_capture_binding,
         "route_digest": action.get("route_digest"),
+        "provider": action.get("provider"),
+        "provider_digest": canonical_digest(action.get("provider")),
+        "operation": action.get("operation"),
         "operation_digest": canonical_digest(action.get("operation")),
+        "compensation": compensation,
+        "compensation_digest": canonical_digest(compensation),
         "compensation_operation": compensation.get("kind"),
+        "desired_state": action.get("desired_state"),
+        "desired_state_digest": action.get("desired_state_digest"),
         "surface": action.get("surface_scope"),
     }
     controlled_identities = action.get("controlled_equipment_identities")
@@ -1918,6 +2100,11 @@ def validate_checkpoint_set_manifest(
         if isinstance(authoritative_captured_state, Mapping)
         else None
     )
+    capture_observation_bindings = (
+        capture_observation_authority_set.get("bindings")
+        if isinstance(capture_observation_authority_set, Mapping)
+        else None
+    )
     capture_observation_index, capture_observation_diagnostics = (
         _validated_capture_observation_authority_index(
             capture_observation_authority_set,
@@ -1936,6 +2123,13 @@ def validate_checkpoint_set_manifest(
             expected_capability_set_digest=(
                 captured_bindings.get("capability_set_digest", "")
                 if isinstance(captured_bindings, Mapping)
+                else ""
+            ),
+            expected_preparation_adapter_manifest_set_digest=(
+                capture_observation_bindings.get(
+                    "preparation_adapter_manifest_set_digest", ""
+                )
+                if isinstance(capture_observation_bindings, Mapping)
                 else ""
             ),
             expected_captured_state_identity=expected_captured_state_identity,
@@ -1958,10 +2152,25 @@ def validate_checkpoint_set_manifest(
             expected_implementation_manifest_digest=(
                 expected_implementation_manifest_digest
             ),
+            expected_plan_digest=expected_plan_digest,
+            expected_plan_action_set_digest=expected_plan_action_set_digest,
             expected_capability_set_digest=(
                 captured_bindings.get("capability_set_digest", "")
                 if isinstance(captured_bindings, Mapping)
                 else ""
+            ),
+            expected_preparation_adapter_manifest_set_digest=(
+                capture_observation_bindings.get(
+                    "preparation_adapter_manifest_set_digest", ""
+                )
+                if isinstance(capture_observation_bindings, Mapping)
+                else ""
+            ),
+            expected_capture_observation_authority_set_identity=(
+                expected_capture_observation_authority_set_identity
+            ),
+            expected_capture_observation_authority_set_digest=(
+                expected_capture_observation_authority_set_digest
             ),
         )
     )
@@ -1978,6 +2187,14 @@ def validate_checkpoint_set_manifest(
             or not _prepared_authority_matches_plan_action(
                 authority,
                 plan_action_index[key],
+                authoritative_captured_state=authoritative_captured_state,
+                expected_plan_action_set_digest=expected_plan_action_set_digest,
+                expected_capture_observation_authority_set_identity=(
+                    expected_capture_observation_authority_set_identity
+                ),
+                expected_capture_observation_authority_set_digest=(
+                    expected_capture_observation_authority_set_digest
+                ),
             )
             for key, authority in prepared_authority_index.items()
             if key in plan_action_index
