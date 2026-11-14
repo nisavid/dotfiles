@@ -8,6 +8,8 @@ Add capture to the producer's acceptance criteria before deepening the work, or 
 
 Capture the entry conditions, supported inputs, ordered procedure, decision branches, relevant references or helpers, and observable completion criteria. Keep specimen decisions and historical evidence in their owning artifacts, linking them where useful. Incorporate salient corrections from execution and review. Update authorized active guidance that contradicts a settled correction while preserving historical evidence.
 
+When an authorized policy or procedure supersedes an existing rule, trace each affected active invocation chain from entry instructions through its consumer and maintained procedure to the current decision record. Name the source and installed projections and their owners. Within the granted scope, replace or explicitly retire contradictory operative instructions at every affected layer; a new conditional branch or a corrected status record does not retire an older universal rule. Preserve frozen historical evidence. If a projection is outside the producer's authority, obtain its owner's correction and readback, or report that specific unresolved projection. Keep unrelated eligible work moving.
+
 For example, a repo's export task can extend its existing diagram skill with the new export branch and acceptance checks. The accepted diagram stays in the design artifact; later diagram tasks invoke the skill and depend on the producer's validated revision.
 
 ## Evaluate And Improve
