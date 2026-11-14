@@ -558,7 +558,8 @@ codex_question_lead=${claude_question_lead//AskUserQuestion/request_user_input_a
 codex_question_format="Put the recommended answer first and the facts in the question itself; the async tool's options are bare answers."
 codex_question_fallback="In Plan mode, use \`request_user_input\` instead. A subagent or a headless run (\`codex exec\`) is without the tool even when the async tool is listed, and so is a turn that lists neither: hand the question back by ending the turn with it."
 codex_question_wait='When asking Ivan a question, wait for his response by default. Set no automatic timeout or auto-resolution unless Ivan explicitly requests one for that question or workflow.'
-[[ $(<"$question_policy") == $'\n'"$codex_question_lead $codex_question_format $question"$'\n\n'"$codex_question_fallback"$'\n\n'"$codex_question_wait" ]] ||
+codex_question_recovery='On entry, reentry, or before returning with an outstanding request for Ivan, recover and apply any matching answer for its current scope. Keep each unanswered question or unfinished requested action accounted for until it is completed, transferred, superseded, or cancelled. Acknowledging an action is not its completion. Tool acceptance establishes issuance, not that the question remains visible or answerable. When applying the before-ending attention check to an existing request, preserve a known active question without issuing a duplicate. If its presentation is unknown, report that uncertainty and retain the obligation without automatically issuing it again. Keep unrelated requests distinct.'
+[[ $(<"$question_policy") == $'\n'"$codex_question_lead $codex_question_format $question"$'\n\n'"$codex_question_fallback"$'\n\n'"$codex_question_wait"$'\n\n'"$codex_question_recovery" ]] ||
   fail "Codex Interaction section is not its lead and option format, the shared partial, its fallback, and its wait rule"
 
 # One entry per paragraph of the partial.
