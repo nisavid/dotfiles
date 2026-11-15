@@ -2,10 +2,10 @@
 
 ## Contexts
 
-- [Process-Scoped Secret Injection](./docs/secret-injection/CONTEXT.md) —
+- [Process-Scoped Secret Injection](./docs/secret-injection/GLOSSARY.md) —
   grants selected credentials to individual consumer processes without
   creating ambient shell credentials
-- [Global Agent Equipment](./docs/agent-equipment/CONTEXT.md) —
+- [Global Agent Equipment](./docs/agent-equipment/GLOSSARY.md) —
   defines portable desired state, harness coverage outcomes, and operation
   dispositions across global agent harnesses
 

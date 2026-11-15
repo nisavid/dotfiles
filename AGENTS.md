@@ -14,7 +14,7 @@ The five canonical triage labels, verbatim: `needs-triage`, `needs-info`, `ready
 
 ### Domain docs
 
-Multi-context: root `CONTEXT-MAP.md` names each context and links its `CONTEXT.md` under `docs/<context>/`; system-wide ADRs live under `docs/adr/`. The map lists in-repo contexts only. See `docs/agents/domain.md`.
+Multi-context: root `GLOSSARY-MAP.md` names each context and links its `GLOSSARY.md` under `docs/<context>/`; system-wide ADRs live under `docs/adr/`. The map lists in-repo contexts only. See `docs/agents/domain.md`.
 
 When introducing or revising Sacrysty or Codiquary domain concepts in this repository's design work, follow the [shared domain naming convention](docs/research/CRYPTO_RELEASE_OPS_NAMING.md#domain-naming-convention).
 
