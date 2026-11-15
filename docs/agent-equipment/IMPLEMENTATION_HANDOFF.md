@@ -55,7 +55,7 @@ major rollout is never permitted.
 
 | Artifact | Role |
 | --- | --- |
-| `docs/agent-equipment/CONTEXT.md` | Domain language and identity boundaries |
+| `docs/agent-equipment/GLOSSARY.md` | Domain language and identity boundaries |
 | `docs/agent-equipment/ARCHITECTURE.md` | Resolver, command, adapter, and executor contract |
 | `docs/agent-equipment/catalog-v1.schema.json` | Authored catalog serialization contract |
 | `docs/agent-equipment/lock-v1.schema.json` | Expanded lock serialization contract |
