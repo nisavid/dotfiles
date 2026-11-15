@@ -98,16 +98,16 @@ for linux_pin in \
   'AGE_TOOLING_ARCHIVE=%s' \
   'AGE_TOOLING_ARCHIVE_SHA256=%s' \
   '"$RUNNER_TEMP/age/age-inspect"' \
-  'rclone_version=1.75.2' \
+  'rclone_version=1.76.0' \
   'rclone_archive=rclone-v${rclone_version}-linux-amd64.zip' \
   'https://downloads.rclone.org/v${rclone_version}/$rclone_archive' \
-  '349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702' \
+  'b00f00b3266c3764413afe599d3ec316f6f43b3e0ea8a0bc1d186d2133e46df7' \
   '"$rclone_package" | sha256sum --check' \
   'python3 -m zipfile -e "$rclone_package" "$RUNNER_TEMP/rclone"' \
   'sudo install -m 0755' \
   '"$RUNNER_TEMP/rclone/rclone-v${rclone_version}-linux-amd64/rclone" /usr/bin/rclone' \
   'rclone_output=$(/usr/bin/rclone version)' \
-  'test "${rclone_output%%$'"'"'\n'"'"'*}" = "rclone v1.75.2"'
+  'test "${rclone_output%%$'"'"'\n'"'"'*}" = "rclone v1.76.0"'
 do
   [[ $linux_install == *$linux_pin* ]] ||
     fail "Actions is missing the pinned Linux tooling contract: $linux_pin"

@@ -31,7 +31,7 @@ TEST_MOUNT_TAG = "proton-drive-desktop-" + "ab" * 32
 REAL_FSTAT = os.fstat
 REAL_POPEN = subprocess.Popen
 RCLONE_VERSION_COMMAND = ["/usr/bin/rclone", "version"]
-RCLONE_VERSION_OUTPUT = b"rclone v1.75.2\n- os/version: synthetic\n"
+RCLONE_VERSION_OUTPUT = b"rclone v1.76.0\n- os/version: synthetic\n"
 INTERRUPTED_CLEANUP_DIAGNOSTIC = (
     "interrupted retained mountpoint cleanup requires stopped recovery"
 )
@@ -2170,17 +2170,17 @@ class PublicCommandTests(unittest.TestCase):
     def test_prepare_rejects_unqualified_rclone_before_managed_state_mutation(self):
         outcomes = {
             "wrong": subprocess.CompletedProcess(
-                RCLONE_VERSION_COMMAND, 0, stdout=b"rclone v1.76.0\n"
+                RCLONE_VERSION_COMMAND, 0, stdout=b"rclone v1.75.2\n"
             ),
             "malformed": subprocess.CompletedProcess(
                 RCLONE_VERSION_COMMAND, 0, stdout=b"not-rclone\n"
             ),
             "invalid-utf8": subprocess.CompletedProcess(
-                RCLONE_VERSION_COMMAND, 0, stdout=b"rclone v1.75.2\xff\n"
+                RCLONE_VERSION_COMMAND, 0, stdout=b"rclone v1.76.0\xff\n"
             ),
             "oversized": subprocess.CompletedProcess(
                 RCLONE_VERSION_COMMAND, 0,
-                stdout=b"rclone v1.75.2\n" + b"x" * 8192,
+                stdout=b"rclone v1.76.0\n" + b"x" * 8192,
             ),
             "failing": subprocess.CompletedProcess(
                 RCLONE_VERSION_COMMAND, 23, stdout=b"secret-canary\n"
@@ -2311,7 +2311,7 @@ class PublicCommandTests(unittest.TestCase):
             mount = root / "data/proton-drive-desktop/files"
             mount_before = mount.stat()
             drifted = subprocess.CompletedProcess(
-                RCLONE_VERSION_COMMAND, 0, stdout=b"rclone v1.76.0\n"
+                RCLONE_VERSION_COMMAND, 0, stdout=b"rclone v1.75.2\n"
             )
 
             result = invoke(
@@ -11097,13 +11097,13 @@ def run_real_user_manager_cleanup_retention(
             check=False,
         )
     except OSError:
-        raise RuntimeError("rclone 1.75.2 is unavailable") from None
+        raise RuntimeError("rclone 1.76.0 is unavailable") from None
     if (
         rclone_version.returncode != 0
         or not isinstance(rclone_version.stdout, bytes)
-        or rclone_version.stdout.splitlines()[:1] != [b"rclone v1.75.2"]
+        or rclone_version.stdout.splitlines()[:1] != [b"rclone v1.76.0"]
     ):
-        raise RuntimeError("rclone 1.75.2 is unavailable")
+        raise RuntimeError("rclone 1.76.0 is unavailable")
 
     bus_address = os.environ.get(
         "DBUS_SESSION_BUS_ADDRESS", f"unix:path={runtime_base}/bus"
@@ -12678,7 +12678,7 @@ class RealUserManagerCleanupRetentionFixtureTests(unittest.TestCase):
 
         evidence, boundary = self.run_synthetic_fixture()
         with self.assertRaisesRegex(
-            RuntimeError, "rclone 1.75.2 is unavailable"
+            RuntimeError, "rclone 1.76.0 is unavailable"
         ):
             run_real_user_manager_cleanup_retention(
                 evidence, command_runner=command_runner,
@@ -12692,7 +12692,7 @@ class RealUserManagerCleanupRetentionFixtureTests(unittest.TestCase):
         evidence, boundary = self.run_synthetic_fixture("rclone-unavailable")
 
         with self.assertRaisesRegex(
-            RuntimeError, "rclone 1.75.2 is unavailable"
+            RuntimeError, "rclone 1.76.0 is unavailable"
         ):
             run_real_user_manager_cleanup_retention(
                 evidence,
