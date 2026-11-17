@@ -11,38 +11,51 @@
   "synthetic_cases": [
     {
       "id": "promotion-binding",
-      "fixture": "Authentic records, every channel/source/component/artifact/audience/version/trust mismatch and unsafe archive path; stub ChatGPT/Claude delivery paths and separate allowlisted journal/lock/log/notice domains. Vary omission of journal, lock, publication or correlated record; log-only, notice-only and combined publication; extra service locations and effects outside the attempt lifecycle.",
-      "observation": "Exercise each rejection fixture through both paths. Snapshot delivery destinations, protected material, extraction targets and repository state. Compare the exact correlated rejection record and the bounded allowlisted service effects, including duplicate rejection observations. For each rejection input on both paths, compare the declared rejection-effect acceptance examples independently of the unchanged forbidden-domain snapshots.",
-      "acceptance": "Rejection produces zero delivery target intents, no ChatGPT delivery calls, no Claude commits/ref changes/pushes, and unchanged forbidden snapshot domains. Require one correlated secret-free record with exactly event_id, input_digest, producer-controlled reason_code and outcome=rejected; duplicate observations preserve it. Journal/lock/log/notice effects stay within the declared attempt lifecycle and allowlist, with no raw rejected input or secrets. Synthetic success does not qualify live provider or repository controls. Journal and lock are both mandatory, as is the correlated rejection record. At least one log or notice is required; log-only, notice-only and combined publication satisfy only that publication requirement. Missing either mandatory effect, both publication alternatives or the record fails acceptance. Extra locations and effects outside the attempt lifecycle fail acceptance.",
+      "fixture": "Authentic records, every channel/source/component/artifact/audience/version/trust mismatch and unsafe archive path; stub ChatGPT/Claude delivery paths and separate allowlisted service-effect domains. Use synthetic producer-controlled actionable and declared non-actionable reason codes, unknown reasons, accepted/unbound/failed attention routes, and single-fault mandatory-obligation vectors.",
+      "observation": "Exercise each rejection fixture through both paths. Snapshot delivery destinations, protected material, extraction targets and repository state; compare the correlated secret-free journal record, lock and bounded service effects. Derive disposition from the reviewed producer map with unknown reasons actionable. Observe accepted attention-route binding and delivery separately from effect presence. For each mandatory obligation hold every other obligation valid and compare the expected result with an oracle that ignores only that obligation, including a journal-blind oracle. Static examples do not execute these observations.",
+      "acceptance": "Rejection produces zero delivery target intents, no ChatGPT delivery calls or Claude commits/ref changes/pushes, and unchanged forbidden domains. Require durable journal storage, maintained lock and one correlated secret-free record with exactly event_id, input_digest, producer-controlled reason_code and outcome=rejected; identical observations preserve it without downgrading attention. Actionable reasons require accepted delivery via a notice or log interface bound to the established operator-attention route. Plain-log-only, unbound, unavailable or failed attention publication does not satisfy it. Unknown/unclassified reasons and authenticity/trust/unsafe-path violations are actionable. Only explicitly classified routine no-action reasons may use non-actionable log-only, notice-only or combined publication. All service effects stay within declared locations and the same attempt lifecycle. A present record outside the journal cannot satisfy journaling. Each single-fault vector fails exactly its named obligation, and the corresponding obligation-blind oracle must disagree. No raw rejected input or secrets; no live control is qualified by synthetic success.",
       "kind": "synthetic",
       "owner": "host-qualification-producer",
       "rejection_effect_acceptance_examples": [
         {
-          "id": "log-only",
+          "id": "non-actionable-log-only",
+          "producer_reason_code": "fixture-non-actionable",
           "service_effects": [
             "journal",
             "lock",
             "log"
           ],
           "correlated_record_present": true,
+          "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "expected_acceptance": true
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": true,
+          "expected_failed_obligations": []
         },
         {
-          "id": "notice-only",
+          "id": "non-actionable-notice-only",
+          "producer_reason_code": "fixture-non-actionable",
           "service_effects": [
             "journal",
             "lock",
             "notice"
           ],
           "correlated_record_present": true,
+          "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "expected_acceptance": true
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": true,
+          "expected_failed_obligations": []
         },
         {
-          "id": "log-and-notice",
+          "id": "non-actionable-log-and-notice",
+          "producer_reason_code": "fixture-non-actionable",
           "service_effects": [
             "journal",
             "lock",
@@ -50,80 +63,381 @@
             "notice"
           ],
           "correlated_record_present": true,
+          "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "expected_acceptance": true
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": true,
+          "expected_failed_obligations": []
         },
         {
-          "id": "missing-journal",
-          "service_effects": [
-            "lock",
-            "log"
-          ],
-          "correlated_record_present": false,
-          "only_declared_locations": true,
-          "within_attempt_lifecycle": true,
-          "expected_acceptance": false
-        },
-        {
-          "id": "missing-lock",
-          "service_effects": [
-            "journal",
-            "log"
-          ],
-          "correlated_record_present": true,
-          "only_declared_locations": true,
-          "within_attempt_lifecycle": true,
-          "expected_acceptance": false
-        },
-        {
-          "id": "missing-publication",
-          "service_effects": [
-            "journal",
-            "lock"
-          ],
-          "correlated_record_present": true,
-          "only_declared_locations": true,
-          "within_attempt_lifecycle": true,
-          "expected_acceptance": false
-        },
-        {
-          "id": "extra-location",
+          "id": "actionable-plain-log-only",
+          "producer_reason_code": "fixture-actionable",
           "service_effects": [
             "journal",
             "lock",
             "log"
           ],
           "correlated_record_present": true,
-          "only_declared_locations": false,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "expected_acceptance": false
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-interface",
+            "attention-route-binding",
+            "attention-delivery"
+          ]
         },
         {
-          "id": "outside-attempt-lifecycle",
+          "id": "actionable-attention-notice",
+          "producer_reason_code": "fixture-actionable",
           "service_effects": [
             "journal",
             "lock",
             "notice"
           ],
           "correlated_record_present": true,
+          "record_observation_location": "journal",
           "only_declared_locations": true,
-          "within_attempt_lifecycle": false,
-          "expected_acceptance": false
+          "within_attempt_lifecycle": true,
+          "attention_interface": "notice",
+          "accepted_attention_route_binding": true,
+          "attention_delivery_accepted": true,
+          "expected_acceptance": true,
+          "expected_failed_obligations": []
+        },
+        {
+          "id": "actionable-attention-log",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": "log",
+          "accepted_attention_route_binding": true,
+          "attention_delivery_accepted": true,
+          "expected_acceptance": true,
+          "expected_failed_obligations": []
+        },
+        {
+          "id": "unknown-reason-plain-log-only",
+          "producer_reason_code": "fixture-unknown",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-interface",
+            "attention-route-binding",
+            "attention-delivery"
+          ]
+        },
+        {
+          "id": "unknown-reason-attention-notice",
+          "producer_reason_code": "fixture-unknown",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": "notice",
+          "accepted_attention_route_binding": true,
+          "attention_delivery_accepted": true,
+          "expected_acceptance": true,
+          "expected_failed_obligations": []
+        },
+        {
+          "id": "missing-journal",
+          "producer_reason_code": "fixture-non-actionable",
+          "service_effects": [
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "accepted-log",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "durable-journal"
+          ]
+        },
+        {
+          "id": "record-outside-journal",
+          "producer_reason_code": "fixture-non-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "accepted-log",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "durable-journal"
+          ]
+        },
+        {
+          "id": "missing-lock",
+          "producer_reason_code": "fixture-non-actionable",
+          "service_effects": [
+            "journal",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "lock"
+          ]
+        },
+        {
+          "id": "missing-publication",
+          "producer_reason_code": "fixture-non-actionable",
+          "service_effects": [
+            "journal",
+            "lock"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "publication"
+          ]
         },
         {
           "id": "missing-correlated-record",
+          "producer_reason_code": "fixture-non-actionable",
           "service_effects": [
             "journal",
             "lock",
             "log"
           ],
           "correlated_record_present": false,
+          "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "expected_acceptance": false
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "correlated-record"
+          ]
+        },
+        {
+          "id": "extra-location",
+          "producer_reason_code": "fixture-non-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": false,
+          "within_attempt_lifecycle": true,
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "declared-locations"
+          ]
+        },
+        {
+          "id": "outside-attempt-lifecycle",
+          "producer_reason_code": "fixture-non-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": false,
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attempt-lifecycle"
+          ]
+        },
+        {
+          "id": "missing-attention-interface",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": null,
+          "accepted_attention_route_binding": true,
+          "attention_delivery_accepted": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-interface"
+          ]
+        },
+        {
+          "id": "missing-attention-route-binding",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": "notice",
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-route-binding"
+          ]
+        },
+        {
+          "id": "failed-attention-delivery",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": "notice",
+          "accepted_attention_route_binding": true,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-delivery"
+          ]
+        },
+        {
+          "id": "authenticity-violation-plain-log-only",
+          "producer_reason_code": "authenticity-violation",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-interface",
+            "attention-route-binding",
+            "attention-delivery"
+          ]
+        },
+        {
+          "id": "trust-violation-plain-log-only",
+          "producer_reason_code": "trust-violation",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-interface",
+            "attention-route-binding",
+            "attention-delivery"
+          ]
+        },
+        {
+          "id": "unsafe-path-plain-log-only",
+          "producer_reason_code": "unsafe-path",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "attention_interface": null,
+          "accepted_attention_route_binding": false,
+          "attention_delivery_accepted": false,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-interface",
+            "attention-route-binding",
+            "attention-delivery"
+          ]
         }
-      ]
+      ],
+      "reason_disposition_fixture_map": {
+        "fixture-actionable": "actionable",
+        "fixture-non-actionable": "non-actionable"
+      }
     },
     {
       "id": "identity-and-protected-files",

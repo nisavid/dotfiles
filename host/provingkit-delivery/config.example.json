@@ -55,16 +55,44 @@
       "lock"
     ],
     "publication": {
-      "requirement": "at-least-one",
-      "alternatives": [
-        "log",
-        "notice"
-      ]
+      "requirement": "attention-disposition-dependent",
+      "reason_classification": {
+        "source": "reviewed-producer-controlled-reason-map",
+        "default": "actionable",
+        "always_actionable": [
+          "authenticity-violation",
+          "trust-violation",
+          "unsafe-path"
+        ],
+        "non_actionable": "explicitly-classified-routine-no-action-only",
+        "rejected_input_controls_disposition": false,
+        "repetition_downgrades_actionable_event": false
+      },
+      "by_disposition": {
+        "actionable": {
+          "requirement": "accepted-delivery-to-established-operator-attention-route",
+          "alternatives": [
+            "attention-bound-notice",
+            "attention-bound-log"
+          ],
+          "accepted_route_binding_required": true,
+          "accepted_delivery_evidence_required": true
+        },
+        "non_actionable": {
+          "requirement": "at-least-one",
+          "alternatives": [
+            "log",
+            "notice"
+          ]
+        }
+      },
+      "operator_attention_route_binding": null
     },
     "forbidden_service_effects": {
       "outside_declared_locations": true,
       "outside_attempt_lifecycle": true
-    }
+    },
+    "rejection_record_storage": "durable-required-journal"
   },
   "control": {
     "initial_state": "stopped",

@@ -58,11 +58,23 @@ calls or Claude commits/ref changes/pushes. Delivery destinations, protected
 code/config/trust/credential material, extraction targets and repository state
 must remain unchanged. Snapshot these domains, not the entire service state.
 
-Rejection separately requires both a journaled rejection and a maintained run
-lock. Publication requires at least one nonsecret log or notice through its
-accepted interface; either alone or both satisfies that publication requirement.
-Neither publication alternative replaces the journal or lock. Permit only the
-declared journal/lock/log/notice locations and operations within the same
+Rejection separately requires both a durable journaled rejection and a maintained
+run lock. Derive attention disposition from the reviewed producer-controlled
+reason-code map, never from rejected input. Unknown or unclassified reasons and
+authenticity, trust or unsafe-path violations require operator attention. Only
+explicitly classified routine reasons requiring no action may use the
+non-actionable disposition; repeating an actionable event does not downgrade it.
+
+For an actionable reason, require accepted delivery through a notice interface
+bound to the established operator-attention route, or a log interface explicitly
+bound to that same route. Observe the accepted route binding and delivery result;
+the presence of a log or notice alone proves neither. A plain log cannot satisfy
+attention. An unavailable, unbound or failed route leaves attention unresolved;
+retain that evidence without relabeling the event or admitting delivery work.
+For a declared non-actionable reason, at least one nonsecret log or notice through
+its accepted interface suffices; either alone or both is permitted. These
+publication choices never replace the journal, lock or correlated record.
+Permit only the declared journal/lock/log/notice locations and operations within the same
 attempt's lifecycle; every other service effect is forbidden. These effects
 cannot change a delivery target, protected material, extraction target or
 repository. Missing required evidence is not successful rejection.
@@ -80,10 +92,17 @@ Exercise every rejection fixture through both paths. Prove zero forbidden
 effects alongside the exact secret-free rejection record and the bounded
 allowlisted service effects. A zero provider-write count alone is insufficient,
 and synthetic success does not qualify live provider or repository controls.
-The qualification specification must reject omission of either mandatory effect,
-absence of both publication alternatives, and a missing correlated record.
-Specify log-only, notice-only and combined publication as supported alternatives;
-extra locations or effects outside the attempt lifecycle fail acceptance.
+The qualification specification must distinguish actionable plain-log failure,
+actionable accepted attention-notice and attention-bound-log delivery, and
+non-actionable log-only acceptance. For every mandatory service-effect obligation, include a
+single-fault vector with all other obligations satisfied, and show that an
+oracle ignoring that obligation disagrees with the expected result. In particular,
+omit the journal effect while retaining the correlated record in an accepted log;
+record presence outside the required journal cannot prove durable journaling.
+Check missing lock, publication, record, route binding and accepted attention
+delivery independently. Extra locations and effects outside the attempt lifecycle
+fail acceptance. Declared examples and static oracle checks do not execute a
+journal or an attention route.
 
 Each reviewed provider adapter supplies account/entry observation, a bounded
 mutation and fresh content readback, including removed files and enabled state.
