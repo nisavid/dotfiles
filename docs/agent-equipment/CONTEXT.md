@@ -6,6 +6,9 @@ other equipment exposed through global agent harnesses.
 For the focused chezmoi producer that recreates selected clean Provingkit
 installations, use [the maintained installation procedure](provingkit-installations.md).
 
+For the separate unattended account-delivery design and its enrollment, stop,
+recovery and verification procedure, use [Provingkit delivery](provingkit-delivery.md).
+
 ## Language
 
 **Equipment identity**:

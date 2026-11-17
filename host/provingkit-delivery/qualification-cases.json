@@ -1,0 +1,55 @@
+{
+  "schema": "provingkit-delivery-qualification-design/v1",
+  "execution": "none; synthetic observation specification only",
+  "requires_frozen_reviewed_harness": true,
+  "cases": [
+    {
+      "id": "promotion-binding",
+      "fixture": "Authentic and tampered channel/source/artifact/audience/version records; stub adapters.",
+      "observation": "Compare the selected target intents and mutation count.",
+      "acceptance": "Only authenticated in-scope records produce intents; tampering and unsupported archive paths cause zero provider writes."
+    },
+    {
+      "id": "identity-and-protected-files",
+      "fixture": "Disposable ordinary-user and service-user identities with synthetic credential markers and protected code/config/trust.",
+      "observation": "Attempt reads, replacement and identity assumption through the reviewed harness.",
+      "acceptance": "Ordinary agents cannot obtain markers, assume the service identity or rewrite protected material; service cannot mutate its code/config/trust. Same-user mode checks are insufficient."
+    },
+    {
+      "id": "setup-and-partial-recovery",
+      "fixture": "Absent, pre-existing and conflicting identity/destination states; interruption between selected setup/upgrade actions.",
+      "observation": "Compare planned, completed and independently observed actions through the literal setup interface.",
+      "acceptance": "Conflicts preserve existing state; partial results remain partial; recovery binds inspected preimages and never silently deletes an account, overwrites unknown files or replays completed work."
+    },
+    {
+      "id": "duplicate-and-concurrent-triggers",
+      "fixture": "Duplicate release notifications and concurrent catch-up jobs for one target/version.",
+      "observation": "Inspect exclusive-lock ownership, journal intents and stub write count.",
+      "acceptance": "Only one target mutation proceeds; later jobs reconcile the durable outcome instead of issuing another write."
+    },
+    {
+      "id": "uncertain-write",
+      "fixture": "Write accepted by a stub provider followed by a lost reply, crash or unavailable readback.",
+      "observation": "Restart the reviewed disposable harness and inspect its next action.",
+      "acceptance": "Readback precedes retry; unresolved state stops dependent writes and preserves the original attempt."
+    },
+    {
+      "id": "scope-and-content-preservation",
+      "fixture": "Selected and unmanaged entries, enabled choices, changed/removed files, wrong account/audience and expired credentials.",
+      "observation": "Compare account-bound before/after content and the selected actions.",
+      "acceptance": "Only selected entries change; unmanaged content and enablement are preserved; removed files disappear inside the updated entry; wrong identity or unsupported authentication stops the target."
+    },
+    {
+      "id": "stop-reboot-and-forward-recovery",
+      "fixture": "Pending intents and subscribed-branch content; disposable stop/reboot; retained known-good content with a higher authorized version.",
+      "observation": "Observe both mutation paths, restart reconciliation and resulting stub content.",
+      "acceptance": "Stop freezes ChatGPT writes and Claude promotion without claiming to retract subscribed content; restart reconciles intent; selected forward recovery verifies its result."
+    },
+    {
+      "id": "provider-owned-canary",
+      "fixture": "After required Daybreak coverage, existing provider owners select one approved account each and disposable private content under their own qualification scope.",
+      "observation": "Second unattended release with changed/removed files, fresh account-bound readback and useful fresh consumer.",
+      "acceptance": "No routine sign-in or prompt; correct identity/audience, preserved enablement and verified content. This synthetic specification executes no canary and proves no all-account coverage."
+    }
+  ]
+}

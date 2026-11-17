@@ -1,0 +1,37 @@
+{
+  "schema": "provingkit-delivery-design/v1",
+  "live_use_enabled": false,
+  "service_identity": {
+    "name": "provingkit-delivery",
+    "provisioned": false,
+    "interactive_login": false
+  },
+  "system_root": null,
+  "root_relative_layout": {
+    "code": "usr/lib/provingkit-delivery",
+    "configuration": "etc/provingkit-delivery",
+    "trust": "etc/provingkit-delivery/trust",
+    "state": "var/lib/provingkit-delivery",
+    "runtime": "run/provingkit-delivery"
+  },
+  "channel_contract": null,
+  "promotion_verifier": null,
+  "version_issuer": null,
+  "credential_store_contract": null,
+  "provider_contracts": {
+    "chatgpt": null,
+    "claude": null
+  },
+  "enrollments": [],
+  "unmanaged_entries": "preserve",
+  "journal": {
+    "persist_intent_before_write": true,
+    "unknown_outcome": "reconcile-before-retry",
+    "secret_values": "forbidden"
+  },
+  "stop_scope": [
+    "chatgpt-mutations",
+    "claude-promotion"
+  ],
+  "recovery": "known-good-content-at-higher-authorized-version"
+}
