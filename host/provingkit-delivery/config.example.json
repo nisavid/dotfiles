@@ -1,0 +1,162 @@
+{
+  "schema": "provingkit-delivery-design/v1",
+  "live_use_enabled": false,
+  "service_identity": {
+    "name": "provingkit-delivery",
+    "provisioned": false,
+    "interactive_login": false
+  },
+  "system_root": null,
+  "root_relative_layout": {
+    "code": "usr/lib/provingkit-delivery",
+    "configuration": "etc/provingkit-delivery",
+    "trust": "etc/provingkit-delivery/trust",
+    "state": "var/lib/provingkit-delivery",
+    "runtime": "run/provingkit-delivery"
+  },
+  "channel_contract": null,
+  "promotion_verifier": null,
+  "version_issuer": null,
+  "credential_store_contract": null,
+  "provider_contracts": {
+    "chatgpt": null,
+    "claude": null
+  },
+  "enrollments": [],
+  "unmanaged_entries": "preserve",
+  "journal": {
+    "persist_intent_before_write": true,
+    "unknown_outcome": "reconcile-before-retry",
+    "secret_values": "forbidden"
+  },
+  "stop_scope": [
+    "chatgpt-mutations",
+    "claude-promotion"
+  ],
+  "recovery": "known-good-content-under-accepted-synchronized-recovery-policy",
+  "effect_boundary": {
+    "immutable_on_rejection": [
+      "delivery-destinations",
+      "protected-code-config-trust-credentials",
+      "extraction-targets",
+      "repository-state"
+    ],
+    "rejection_record_fields": [
+      "event_id",
+      "input_digest",
+      "reason_code",
+      "outcome"
+    ],
+    "rejection_outcome": "rejected",
+    "correlation": "one record per logical rejection; identical observations preserve it",
+    "raw_rejected_input_and_secrets": "forbidden",
+    "required_service_effects": [
+      "journal",
+      "lock"
+    ],
+    "publication": {
+      "requirement": "attention-disposition-dependent",
+      "reason_classification": {
+        "source": "reviewed-producer-controlled-reason-map",
+        "default": "actionable",
+        "always_actionable": [
+          "authenticity-violation",
+          "trust-violation",
+          "unsafe-path"
+        ],
+        "non_actionable": "explicitly-classified-routine-no-action-only",
+        "rejected_input_controls_disposition": false,
+        "repetition_downgrades_actionable_event": false
+      },
+      "by_disposition": {
+        "actionable": {
+          "requirement": "accepted-delivery-to-established-operator-attention-route",
+          "alternatives": [
+            "attention-bound-notice",
+            "attention-bound-log"
+          ],
+          "attention_observation": {
+            "required": true,
+            "publication_effect": [
+              "event_id",
+              "interface"
+            ],
+            "route_binding": [
+              "interface",
+              "route_id",
+              "accepted"
+            ],
+            "delivery_acknowledgement": [
+              "event_id",
+              "interface",
+              "route_id",
+              "accepted"
+            ],
+            "correspondence": [
+              "publication-interface-present-in-service-effects",
+              "publication-event-equals-current-rejection-record-event",
+              "accepted-binding-names-publication-interface-and-established-attention-route",
+              "accepted-acknowledgement-names-current-event-publication-interface-and-bound-route"
+            ]
+          }
+        },
+        "non_actionable": {
+          "requirement": "at-least-one",
+          "alternatives": [
+            "log",
+            "notice"
+          ]
+        }
+      },
+      "operator_attention_route_binding": null
+    },
+    "forbidden_service_effects": {
+      "outside_declared_locations": true,
+      "outside_attempt_lifecycle": true
+    },
+    "rejection_record_storage": "durable-required-journal",
+    "allowed_service_effects": [
+      "journal",
+      "lock",
+      "log",
+      "notice"
+    ]
+  },
+  "control": {
+    "initial_state": "stopped",
+    "ordinary_triggers_enabled": false,
+    "upgrade_admission": [
+      "withdraw-release-and-catch-up-admission",
+      "establish-quiescence-and-reconcile-inflight-intents",
+      "acquire-shared-delivery-lock",
+      "recheck-stop-and-bound-preimages",
+      "retain-exclusion-and-stop-through-verification"
+    ],
+    "recovery_authorization": null,
+    "recovery_binding": [
+      "authorization_id",
+      "channel",
+      "target-account-entry",
+      "retained_artifact_digest",
+      "retained_source_revision",
+      "retained_content_digests",
+      "synchronized_recovery_policy_revision",
+      "authorized_coordinated_version"
+    ],
+    "recovery_authorization_consumption": "durable-once-before-write-under-shared-lock",
+    "recovery_terminal_and_reboot_state": "stopped",
+    "ordinary_triggers_during_recovery": false,
+    "resume_authorization": null,
+    "ordinary_resume": "separately-authorized-explicit-transition-under-shared-lock"
+  },
+  "version_policy": {
+    "member_versions": "synchronized",
+    "issuance_contract": null,
+    "recovery_contract": null,
+    "mistaken_installed_labels": "metadata-not-release-authority-or-floors",
+    "accepted_content_identity": {
+      "source_revision": null,
+      "content_digests": {}
+    }
+  }
+}
