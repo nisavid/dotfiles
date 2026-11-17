@@ -23,3 +23,8 @@ layout belong in that encrypted catalog. The retained template adapter expects
 
 Deployment and rollback procedures belong to the reusable lifecycle rather
 than this consumer repository.
+
+[Inspect supplied backup observations](hindsight-backup.md) documents the pure
+backup decoder, transition-proposal validator, and read-only source command.
+It requires explicit publication and expected-binding files and supplies no
+installed backup or storage binding.

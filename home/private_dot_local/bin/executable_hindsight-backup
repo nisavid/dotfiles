@@ -1,0 +1,63 @@
+#!/usr/bin/env -S python3 -I -B -S
+"""Inspect explicitly supplied backup publications without accessing a store."""
+
+import sys
+
+sys.dont_write_bytecode = True
+
+import argparse
+import importlib.util
+import json
+import os
+from pathlib import Path
+import stat
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    inspect = commands.add_parser("inspect", help="describe one supplied publication")
+    inspect.add_argument("--publication", required=True)
+    transition = commands.add_parser("validate-transition", help="check a supplied transition proposal")
+    for name in ("previous", "proposed", "transition"):
+        transition.add_argument("--" + name, required=True)
+    for command in (inspect, transition):
+        command.add_argument("--expected-binding", required=True)
+        command.add_argument("--format", choices=("json", "text"), default="json")
+    args = parser.parse_args()
+
+    source = Path(__file__).resolve().parent.parent / "lib/hindsight-backup/observations.py"
+    spec = importlib.util.spec_from_file_location("hindsight_backup_observations", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def read(path):
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise module.InvalidDocument("input_not_regular_file")
+            data = stream.read(module.MAX_DOCUMENT_BYTES + 1)
+        if len(data) > module.MAX_DOCUMENT_BYTES:
+            raise module.InvalidDocument("input_bytes_or_limit")
+        return data
+
+    try:
+        expected = read(args.expected_binding)
+        if args.command == "inspect":
+            result = module.inspect_backup(read(args.publication), expected)
+        else:
+            result = module.validate_transition(read(args.previous), read(args.proposed), expected,
+                                                read(args.transition))
+    except (OSError, module.InvalidDocument):
+        # Input content, paths and low-level exception text are not diagnostics.
+        result = {"state": "unavailable", "reason_code": "input_unavailable",
+                  "publication": None, "qualified": False, "currentness": "unknown",
+                  "current_readiness": "unknown", "gaps": list(module.GAPS)}
+    if args.format == "text":
+        print("Supplied backup observations; authority, currentness and current readiness are unqualified.")
+    print(json.dumps(result, indent=2, ensure_ascii=True, allow_nan=False))
+    return 0 if result["state"] in {"observed", "proposal"} else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
