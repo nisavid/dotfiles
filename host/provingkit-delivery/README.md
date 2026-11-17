@@ -58,11 +58,14 @@ calls or Claude commits/ref changes/pushes. Delivery destinations, protected
 code/config/trust/credential material, extraction targets and repository state
 must remain unchanged. Snapshot these domains, not the entire service state.
 
-Rejection separately requires bounded service-owned effects: journal the
-rejection, maintain the run lock, and publish nonsecret logs or notices through
-their accepted interfaces. Permit only those journal/lock/log/notice locations
-and operations; they cannot change a delivery target, protected material,
-extraction target or repository. Missing evidence is not successful rejection.
+Rejection separately requires both a journaled rejection and a maintained run
+lock. Publication requires at least one nonsecret log or notice through its
+accepted interface; either alone or both satisfies that publication requirement.
+Neither publication alternative replaces the journal or lock. Permit only the
+declared journal/lock/log/notice locations and operations within the same
+attempt's lifecycle; every other service effect is forbidden. These effects
+cannot change a delivery target, protected material, extraction target or
+repository. Missing required evidence is not successful rejection.
 
 Preserve exactly one correlated rejection record with only `event_id`,
 `input_digest`, a producer-controlled `reason_code`, and `outcome: rejected`.
@@ -77,6 +80,10 @@ Exercise every rejection fixture through both paths. Prove zero forbidden
 effects alongside the exact secret-free rejection record and the bounded
 allowlisted service effects. A zero provider-write count alone is insufficient,
 and synthetic success does not qualify live provider or repository controls.
+The qualification specification must reject omission of either mandatory effect,
+absence of both publication alternatives, and a missing correlated record.
+Specify log-only, notice-only and combined publication as supported alternatives;
+extra locations or effects outside the attempt lifecycle fail acceptance.
 
 Each reviewed provider adapter supplies account/entry observation, a bounded
 mutation and fresh content readback, including removed files and enabled state.

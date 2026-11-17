@@ -11,11 +11,119 @@
   "synthetic_cases": [
     {
       "id": "promotion-binding",
-      "fixture": "Authentic records, every channel/source/component/artifact/audience/version/trust mismatch and unsafe archive path; stub ChatGPT/Claude delivery paths and separate allowlisted journal/lock/log/notice domains.",
-      "observation": "Exercise each rejection fixture through both paths. Snapshot delivery destinations, protected material, extraction targets and repository state. Compare the exact correlated rejection record and the bounded allowlisted service effects, including duplicate rejection observations.",
-      "acceptance": "Rejection produces zero delivery target intents, no ChatGPT delivery calls, no Claude commits/ref changes/pushes, and unchanged forbidden snapshot domains. Require one correlated secret-free record with exactly event_id, input_digest, producer-controlled reason_code and outcome=rejected; duplicate observations preserve it. Journal/lock/log/notice effects stay within the declared attempt lifecycle and allowlist, with no raw rejected input or secrets. Synthetic success does not qualify live provider or repository controls.",
+      "fixture": "Authentic records, every channel/source/component/artifact/audience/version/trust mismatch and unsafe archive path; stub ChatGPT/Claude delivery paths and separate allowlisted journal/lock/log/notice domains. Vary omission of journal, lock, publication or correlated record; log-only, notice-only and combined publication; extra service locations and effects outside the attempt lifecycle.",
+      "observation": "Exercise each rejection fixture through both paths. Snapshot delivery destinations, protected material, extraction targets and repository state. Compare the exact correlated rejection record and the bounded allowlisted service effects, including duplicate rejection observations. For each rejection input on both paths, compare the declared rejection-effect acceptance examples independently of the unchanged forbidden-domain snapshots.",
+      "acceptance": "Rejection produces zero delivery target intents, no ChatGPT delivery calls, no Claude commits/ref changes/pushes, and unchanged forbidden snapshot domains. Require one correlated secret-free record with exactly event_id, input_digest, producer-controlled reason_code and outcome=rejected; duplicate observations preserve it. Journal/lock/log/notice effects stay within the declared attempt lifecycle and allowlist, with no raw rejected input or secrets. Synthetic success does not qualify live provider or repository controls. Journal and lock are both mandatory, as is the correlated rejection record. At least one log or notice is required; log-only, notice-only and combined publication satisfy only that publication requirement. Missing either mandatory effect, both publication alternatives or the record fails acceptance. Extra locations and effects outside the attempt lifecycle fail acceptance.",
       "kind": "synthetic",
-      "owner": "host-qualification-producer"
+      "owner": "host-qualification-producer",
+      "rejection_effect_acceptance_examples": [
+        {
+          "id": "log-only",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": true
+        },
+        {
+          "id": "notice-only",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": true
+        },
+        {
+          "id": "log-and-notice",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": true
+        },
+        {
+          "id": "missing-journal",
+          "service_effects": [
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": false,
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false
+        },
+        {
+          "id": "missing-lock",
+          "service_effects": [
+            "journal",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false
+        },
+        {
+          "id": "missing-publication",
+          "service_effects": [
+            "journal",
+            "lock"
+          ],
+          "correlated_record_present": true,
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false
+        },
+        {
+          "id": "extra-location",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "only_declared_locations": false,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false
+        },
+        {
+          "id": "outside-attempt-lifecycle",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": false,
+          "expected_acceptance": false
+        },
+        {
+          "id": "missing-correlated-record",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": false,
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false
+        }
+      ]
     },
     {
       "id": "identity-and-protected-files",
