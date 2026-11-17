@@ -1,55 +1,91 @@
 {
   "schema": "provingkit-delivery-qualification-design/v1",
-  "execution": "none; synthetic observation specification only",
+  "execution": "none; static qualification specifications only",
   "requires_frozen_reviewed_harness": true,
-  "cases": [
+  "disposable_selection": {
+    "collection": "synthetic_cases",
+    "required_kind": "synthetic",
+    "external_or_mixed_selection": "reject-before-delivery-or-credential-access",
+    "external_override": false
+  },
+  "synthetic_cases": [
     {
       "id": "promotion-binding",
-      "fixture": "Authentic records, each channel/source/component/artifact/audience/version/trust mismatch, and unsafe archive paths; stub ChatGPT and Claude delivery paths.",
-      "observation": "Exercise every rejection fixture against both delivery paths. Compare target intents, ChatGPT calls, Claude commits/refs/pushes, and before/after filesystem snapshots.",
-      "acceptance": "Only authenticated in-scope records may produce intents. Every mismatch or unsafe-path rejection produces zero target intents, zero ChatGPT calls, no Claude commit/ref/push effects, and unchanged filesystem state. Synthetic success does not qualify live provider or repository controls."
+      "fixture": "Authentic records, every channel/source/component/artifact/audience/version/trust mismatch and unsafe archive path; stub ChatGPT/Claude delivery paths and separate allowlisted journal/lock/log/notice domains.",
+      "observation": "Exercise each rejection fixture through both paths. Snapshot delivery destinations, protected material, extraction targets and repository state. Compare the exact correlated rejection record and the bounded allowlisted service effects, including duplicate rejection observations.",
+      "acceptance": "Rejection produces zero delivery target intents, no ChatGPT delivery calls, no Claude commits/ref changes/pushes, and unchanged forbidden snapshot domains. Require one correlated secret-free record with exactly event_id, input_digest, producer-controlled reason_code and outcome=rejected; duplicate observations preserve it. Journal/lock/log/notice effects stay within the declared attempt lifecycle and allowlist, with no raw rejected input or secrets. Synthetic success does not qualify live provider or repository controls.",
+      "kind": "synthetic",
+      "owner": "host-qualification-producer"
     },
     {
       "id": "identity-and-protected-files",
       "fixture": "Disposable ordinary-user and service-user identities with original bound synthetic credential markers/account contexts and protected code/config/trust.",
       "observation": "Attempt reads, direct credential writes, rename replacement, symlink substitution, credential-profile replacement, identity assumption, and available delegated-privilege paths through the reviewed harness. After a clean restart, compare the bound markers and account contexts with their originals.",
-      "acceptance": "All ordinary-user credential replacement paths fail, including store/profile/context substitution. Ordinary agents cannot obtain markers, assume the service identity or rewrite protected code/config/trust; service cannot mutate its code/config/trust. The original bound markers and account contexts remain intact after a clean restart. Same-user mode checks and synthetic markers do not qualify the eventual credential backend."
+      "acceptance": "All ordinary-user credential replacement paths fail, including store/profile/context substitution. Ordinary agents cannot obtain markers, assume the service identity or rewrite protected code/config/trust; service cannot mutate its code/config/trust. The original bound markers and account contexts remain intact after a clean restart. Same-user mode checks and synthetic markers do not qualify the eventual credential backend.",
+      "kind": "synthetic",
+      "owner": "host-qualification-producer"
     },
     {
       "id": "setup-and-partial-recovery",
-      "fixture": "Absent, pre-existing and conflicting identity/destination states; interruption between selected setup/upgrade actions; complete-but-wrong upgrade post-states for identity, protected digests, ownership, permissions, dependency bindings and state compatibility, each varied separately.",
-      "observation": "Compare planned, completed and independently observed actions through the literal setup interface. Inject each wrong post-state, inspect verify-installation and the terminal reply, and check delivery-mutation and service-restart controls.",
-      "acceptance": "Conflicts preserve existing state; partial results remain partial; recovery binds inspected preimages and never silently deletes an account, overwrites unknown files or replays completed work. upgraded is returned only after verify-installation matches every expected postimage. Any wrong or unverified protected property prevents success and keeps delivery mutations and service restart disabled."
+      "fixture": "Absent, pre-existing and conflicting identity/destination states; an active fake write and queued release/catch-up trigger; denied exclusion, preimage drift and interrupted replacement; complete-but-wrong identity/digests/ownership/permissions/dependencies/state compatibility varied separately.",
+      "observation": "Observe trigger withdrawal, actual quiescence and intent reconciliation, shared-lock acquisition, immediate preimage recheck, replacement and verify-installation. Inspect queued-trigger behavior, terminal replies and ordinary admission across success, failed verification, uncertainty and reboot.",
+      "acceptance": "No replacement while delivery is active, intent is unresolved, exclusion is unavailable or preimages drift. Keep queued triggers disabled and hold shared exclusion through replacement and verification. upgraded requires every expected postimage to match; wrong/unknown post-state cannot succeed or admit delivery/service restart. Remain stopped after every outcome and reboot until separate explicit resume. Partial-state recovery preserves unexplained state and completed actions.",
+      "kind": "synthetic",
+      "owner": "host-qualification-producer"
     },
     {
       "id": "duplicate-and-concurrent-triggers",
       "fixture": "Duplicate release notifications and concurrent catch-up jobs for one target/version.",
       "observation": "Inspect exclusive-lock ownership, journal intents and stub write count.",
-      "acceptance": "Only one target mutation proceeds; later jobs reconcile the durable outcome instead of issuing another write."
+      "acceptance": "Only one target mutation proceeds; later jobs reconcile the durable outcome instead of issuing another write.",
+      "kind": "synthetic",
+      "owner": "host-qualification-producer"
     },
     {
       "id": "uncertain-write",
       "fixture": "Write accepted by a stub provider followed by a lost reply, crash or unavailable readback.",
       "observation": "Restart the reviewed disposable harness and inspect its next action.",
-      "acceptance": "Readback precedes retry; unresolved state stops dependent writes and preserves the original attempt."
+      "acceptance": "Readback precedes retry; unresolved state stops dependent writes and preserves the original attempt.",
+      "kind": "synthetic",
+      "owner": "host-qualification-producer"
     },
     {
       "id": "scope-and-content-preservation",
       "fixture": "Selected and unmanaged entries, enabled choices, changed/removed files, wrong account/audience and expired credentials.",
       "observation": "Compare account-bound before/after content and the selected actions.",
-      "acceptance": "Only selected entries change; unmanaged content and enablement are preserved; removed files disappear inside the updated entry; wrong identity or unsupported authentication stops the target."
+      "acceptance": "Only selected entries change; unmanaged content and enablement are preserved; removed files disappear inside the updated entry; wrong identity or unsupported authentication stops the target.",
+      "kind": "synthetic",
+      "owner": "host-qualification-producer"
     },
     {
       "id": "stop-reboot-and-forward-recovery",
-      "fixture": "Pending intents and subscribed-branch content; disposable stop/reboot; retained known-good content with a higher authorized version.",
-      "observation": "Observe both mutation paths, restart reconciliation and resulting stub content.",
-      "acceptance": "Stop freezes ChatGPT writes and Claude promotion without claiming to retract subscribed content; restart reconciles intent; selected forward recovery verifies its result."
-    },
+      "fixture": "Pending intents and subscribed content; stopped state with queued ordinary work; synthetic bound recovery authorizations including wrong channel/target/artifact/version and consumed reuse; retained known-good content at a higher authorized version; success/failure/uncertainty/reboot outcomes.",
+      "observation": "Verify both ordinary mutation paths remain stopped. Under the shared lock observe exact authorization/preimage checks, durable consumption before the sole bound recovery write, readback, and persistent stopped state. Attempt queued ordinary delivery, replay after reboot and resume without separate authority.",
+      "acceptance": "Stop does not retract subscribed content. Only one correctly bound channel/target/artifact/higher-version recovery is admitted; invalid or consumed authority causes no recovery mutation. Ordinary triggers remain disabled through recovery and after success, failure, uncertainty or reboot. Preserve and reconcile the original intent without replay. Only a separate authorized explicit resume may admit reconciled eligible ordinary work; recovery success alone never does.",
+      "kind": "synthetic",
+      "owner": "host-qualification-producer"
+    }
+  ],
+  "external_qualification_cases": [
     {
       "id": "provider-owned-canary",
       "fixture": "After required Daybreak coverage, existing provider owners select one approved account each and disposable private content under their own qualification scope.",
       "observation": "Second unattended release with changed/removed files, fresh account-bound readback and useful fresh consumer.",
-      "acceptance": "No routine sign-in or prompt; correct identity/audience, preserved enablement and verified content. This synthetic specification executes no canary and proves no all-account coverage."
+      "acceptance": "No routine sign-in or prompt; correct identity/audience, preserved enablement and verified content. This disabled live specification has no provider route or admission merely by appearing in the registry; no canary runs or all-account proof are supplied.",
+      "kind": "provider-owned-live",
+      "owner": "existing-provider-owner",
+      "enabled": false,
+      "admission_gates": [
+        "existing provider owner accepts its actual qualification scope",
+        "approved account route and private audience are bound",
+        "clean final-revision Daybreak coverage and other required reviews match selected components/dependencies"
+      ],
+      "required_results": [
+        "fresh account-bound installation/content/enablement readback",
+        "second unattended release with a changed and removed file",
+        "genuinely useful fresh consumer"
+      ],
+      "selection": "external provider-owned route only; never selectable by the disposable harness"
     }
   ]
 }

@@ -105,12 +105,36 @@ outcomes; disabling a timer alone is insufficient. Content already on a
 subscribed branch may still propagate. Record that residual state rather than
 claiming local stop retracts delivered instructions.
 
+Before an upgrade, follow the host contract's
+[upgrade admission](../../host/provingkit-delivery/README.md#upgrade-admission):
+withdraw ordinary trigger/catch-up admission, reconcile active intents, obtain
+the shared delivery exclusion and recheck preimages. Keep ordinary delivery
+stopped through replacement and verification. A read-only upgrade plan does
+not prove quiescence, and verified replacement does not itself resume delivery.
+
 ## Recover forward
 
-First reconcile the journal with actual provider state. Use retained known-good
-content at a higher authorized delivery version when selected for recovery.
-Verify content, identity and enabled state again. Do not mutate a known-good
-artifact, overwrite unexplained state or reuse a consumed attempt.
+Keep ordinary delivery stopped and reconcile the journal with actual provider
+state. Follow the host contract's
+[stopped recovery transition](../../host/provingkit-delivery/README.md#stopped-recovery-and-separate-resume):
+bind one authorization to the exact channel, target/account/entry, retained
+artifact digest and higher issuer-approved delivery version. Under the shared
+lock, recheck authority, holds and target state, and durably consume that
+authorization for its one recovery intent before mutation. An existing
+applicable grant may cover this authorization; do not invent repeat consent.
+
+Use only the bound known-good content and verify content, identity and enabled
+state afterward. Ordinary triggers remain disabled. Success, failure,
+uncertainty and reboot leave the system stopped with original intent and
+consumed authority preserved. Reconcile an uncertain outcome before any next
+decision; do not overwrite unexplained state, replay a consumed attempt or
+alter the retained artifact.
+
+Ordinary delivery needs a separately authorized explicit resume transition
+under the shared lock, after current installation/authority/hold and per-target
+intent checks. Recovery success never releases queued ordinary work. Unresolved
+targets remain blocked. No executable recovery or resume control is supplied
+by this static source.
 
 Provider refusals and authentication challenges go through the existing
 exception route. Notices contain only the actionable condition and nonsecret

@@ -33,5 +33,52 @@
     "chatgpt-mutations",
     "claude-promotion"
   ],
-  "recovery": "known-good-content-at-higher-authorized-version"
+  "recovery": "known-good-content-at-higher-authorized-version",
+  "effect_boundary": {
+    "immutable_on_rejection": [
+      "delivery-destinations",
+      "protected-code-config-trust-credentials",
+      "extraction-targets",
+      "repository-state"
+    ],
+    "permitted_required_service_effects": [
+      "journal",
+      "lock",
+      "log",
+      "notice"
+    ],
+    "rejection_record_fields": [
+      "event_id",
+      "input_digest",
+      "reason_code",
+      "outcome"
+    ],
+    "rejection_outcome": "rejected",
+    "correlation": "one record per logical rejection; identical observations preserve it",
+    "raw_rejected_input_and_secrets": "forbidden"
+  },
+  "control": {
+    "initial_state": "stopped",
+    "ordinary_triggers_enabled": false,
+    "upgrade_admission": [
+      "withdraw-release-and-catch-up-admission",
+      "establish-quiescence-and-reconcile-inflight-intents",
+      "acquire-shared-delivery-lock",
+      "recheck-stop-and-bound-preimages",
+      "retain-exclusion-and-stop-through-verification"
+    ],
+    "recovery_authorization": null,
+    "recovery_binding": [
+      "authorization_id",
+      "channel",
+      "target-account-entry",
+      "retained_artifact_digest",
+      "higher_delivery_version"
+    ],
+    "recovery_authorization_consumption": "durable-once-before-write-under-shared-lock",
+    "recovery_terminal_and_reboot_state": "stopped",
+    "ordinary_triggers_during_recovery": false,
+    "resume_authorization": null,
+    "ordinary_resume": "separately-authorized-explicit-transition-under-shared-lock"
+  }
 }
