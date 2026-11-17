@@ -13,7 +13,7 @@
       "id": "promotion-binding",
       "fixture": "Authentic records, every channel/source/component/artifact/audience/version/trust mismatch and unsafe archive path; stub ChatGPT/Claude delivery paths and separate allowlisted service-effect domains. Use synthetic producer-controlled actionable and declared non-actionable reason codes, unknown reasons, accepted/unbound/failed attention routes, and single-fault mandatory-obligation vectors. Include typed current-event publication/route/acknowledgement observations, crossed log/notice effects and stale-event or mismatched-interface/route evidence.",
       "observation": "Exercise each rejection fixture through both paths. Snapshot delivery destinations, protected material, extraction targets and repository state; compare the correlated secret-free journal record, lock and bounded service effects. Derive disposition from the reviewed producer map with unknown reasons actionable. Observe accepted attention-route binding and delivery separately from effect presence. For each mandatory obligation hold every other obligation valid and compare the expected result with an oracle that ignores only that obligation, including a journal-blind oracle. Static examples do not execute these observations. Require actual publication effect/interface, accepted route binding and delivery acknowledgement to correspond to the same rejection event; cross log effect with notice evidence and notice effect with log evidence, then compare a correspondence-blind oracle against both expected failures.",
-      "acceptance": "Rejection produces zero delivery target intents, no ChatGPT delivery calls or Claude commits/ref changes/pushes, and unchanged forbidden domains. Require durable journal storage, maintained lock and one correlated secret-free record with exactly event_id, input_digest, producer-controlled reason_code and outcome=rejected; identical observations preserve it without downgrading attention. Actionable reasons require accepted delivery via a notice or log interface bound to the established operator-attention route. Plain-log-only, unbound, unavailable or failed attention publication does not satisfy it. Unknown/unclassified reasons and authenticity/trust/unsafe-path violations are actionable. Only explicitly classified routine no-action reasons may use non-actionable log-only, notice-only or combined publication. All service effects stay within declared locations and the same attempt lifecycle. A present record outside the journal cannot satisfy journaling. Each single-fault vector fails exactly its named obligation, and the corresponding obligation-blind oracle must disagree. No raw rejected input or secrets; no live control is qualified by synthetic success. For actionable reasons, require one typed attention_observation: its publication_effect names the current event_id and an interface present in service_effects; accepted route_binding names that same interface and the established attention route; accepted delivery_acknowledgement names the same current event, interface and bound route. Independent flags or evidence for another event/interface/route cannot substitute. Both crossed log/notice vectors fail solely effect/interface correspondence and must be wrongly accepted by an oracle ignoring that predicate.",
+      "acceptance": "Rejection produces zero delivery target intents, no ChatGPT delivery calls or Claude commits/ref changes/pushes, and unchanged forbidden domains. Require durable journal storage, maintained lock and one correlated secret-free record with exactly event_id, input_digest, producer-controlled reason_code and outcome=rejected; identical observations preserve it without downgrading attention. Actionable reasons require accepted delivery via a notice or log interface bound to the established operator-attention route. Plain-log-only, unbound, unavailable or failed attention publication does not satisfy it. Unknown/unclassified reasons and authenticity/trust/unsafe-path violations are actionable. Only explicitly classified routine no-action reasons may use non-actionable log-only, notice-only or combined publication. All service effects stay within declared locations and the same attempt lifecycle. A present record outside the journal cannot satisfy journaling. Each single-fault vector fails exactly its named obligation, and the corresponding obligation-blind oracle must disagree. No raw rejected input or secrets; no live control is qualified by synthetic success. For actionable reasons, require one typed attention_observation: its publication_effect names the current event_id and an interface present in service_effects; accepted route_binding names that same interface and the established attention route; accepted delivery_acknowledgement names the same current event, interface and bound route. Independent flags or evidence for another event/interface/route cannot substitute. Both crossed log/notice vectors fail solely effect/interface correspondence and must be wrongly accepted by an oracle ignoring that predicate. Require only-declared-service-effects independently of location and lifecycle: every service_effects member belongs to the closed allowed_service_effects set in config.example.json. An extra operation inside an allowed location and lifecycle still fails. The extra-operation vector must fail only this predicate; an oracle ignoring it must wrongly accept the vector.",
       "kind": "synthetic",
       "owner": "host-qualification-producer",
       "rejection_effect_acceptance_examples": [
@@ -761,13 +761,44 @@
               "accepted": true
             }
           }
+        },
+        {
+          "id": "extra-service-operation",
+          "producer_reason_code": "fixture-non-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log",
+            "cache-write"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "only-declared-service-effects"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         }
       ],
       "reason_disposition_fixture_map": {
         "fixture-actionable": "actionable",
         "fixture-non-actionable": "non-actionable"
       },
-      "established_attention_route_fixture": "fixture-established-operator-attention"
+      "established_attention_route_fixture": "fixture-established-operator-attention",
+      "service_effect_predicates": {
+        "only-declared-service-effects": {
+          "operator": "every-member-in",
+          "input": "service_effects",
+          "allowed_set": "config.example.json#/effect_boundary/allowed_service_effects",
+          "independent_of": [
+            "only_declared_locations",
+            "within_attempt_lifecycle"
+          ]
+        }
+      }
     },
     {
       "id": "identity-and-protected-files",

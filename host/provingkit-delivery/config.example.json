@@ -114,7 +114,13 @@
       "outside_declared_locations": true,
       "outside_attempt_lifecycle": true
     },
-    "rejection_record_storage": "durable-required-journal"
+    "rejection_record_storage": "durable-required-journal",
+    "allowed_service_effects": [
+      "journal",
+      "lock",
+      "log",
+      "notice"
+    ]
   },
   "control": {
     "initial_state": "stopped",
