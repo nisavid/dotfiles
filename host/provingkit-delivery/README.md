@@ -33,6 +33,13 @@ ordinary agents cannot read or replace credentials or impersonate the service.
 Inspect actual delegated privilege paths during qualification; ownership labels
 and file modes alone do not establish isolation.
 
+Qualification must explicitly reject ordinary-user credential replacement,
+including direct writes, rename replacement, symlink substitution, credential
+profile replacement and available delegated-privilege paths. After a clean
+restart, the original bound synthetic marker and account context must remain
+intact. Synthetic markers establish only the disposable boundary exercise,
+not qualification of the eventual credential backend.
+
 ## Closed supplier interfaces
 
 The service consumes authenticated promotion records binding the approved
@@ -40,6 +47,13 @@ channel, audience, source/components, immutable artifact digests and delivery
 versions. It uses the existing producer, verifier and issuer. Notifications,
 artifacts, journal entries and adapter replies cannot choose an executable,
 change trust roots or broaden the enrolled target set.
+
+Every promotion mismatch or unsafe archive path must produce zero target
+intents and no mutation through either delivery path: no ChatGPT calls, Claude
+commits/ref changes/pushes, or filesystem changes. Exercise each rejection
+fixture through both paths and compare filesystem snapshots. A zero provider
+write count alone is insufficient, and synthetic success does not qualify the
+live provider or repository controls.
 
 Each reviewed provider adapter supplies account/entry observation, a bounded
 mutation and fresh content readback, including removed files and enabled state.
@@ -71,15 +85,20 @@ downloaded promotion or candidate-owned journal.
 | `plan-setup` | Observe identity/destinations without mutation; return a complete proposed setup with `planned` or a concrete `conflict`. |
 | `apply-setup` | Consume the reviewed plan and matching preimages once; install only bound identity, protected files and state ownership; return `installed` only after verification, otherwise `partial` with completed-action evidence. |
 | `plan-upgrade` | Bind the expected installed revision and mutable-state compatibility; preserve trust, credentials and state outside the selected update. |
-| `apply-upgrade` | Apply only that bound upgrade, preserving evidence across interruption; never treat a partial replacement as successful. |
+| `apply-upgrade` | Apply only that bound upgrade, preserving evidence across interruption. Return `upgraded` only after `verify-installation` matches every expected postimage; a partial or complete-but-wrong replacement is non-successful. Verification failure keeps delivery mutations and service restart disabled. |
 | `inspect-partial` | Reconcile actual ownership/content against recorded actions, with no replay or cleanup. |
 | `recover-partial` | Consume a separately reviewed recovery plan for the inspected state; stop on drift and preserve unexplained files/accounts. |
-| `verify-installation` | Read back identity, protected code/config/trust digests, dependency bindings, permissions and state compatibility; report remaining live-use gates. |
+| `verify-installation` | Compare the observed identity, protected code/config/trust digests, ownership, permissions, dependency bindings and state compatibility with every bound expected postimage; report mismatches and remaining live-use gates. Readback alone is not passing verification. |
 
 Setup does not enroll accounts, obtain credentials, enable a service or release
 a hold. Partial setup does not authorize deleting a pre-existing account,
 reverting unknown files or blindly replaying completed actions. A recovery plan
 names each selected action and expected state; a later mismatch stops it.
+
+An upgrade whose verification fails or remains unknown cannot report success
+or admit service restart or delivery mutation. Preserve the actual result for
+inspection and recovery. Passing verification does not itself authorize service
+activation or release any remaining live-use gate.
 
 At an actual privilege gate use `handling-privileged-steps`: freeze the reviewed
 executable, literal argv, workdir, exact selected effects, handback signal and

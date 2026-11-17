@@ -5,21 +5,21 @@
   "cases": [
     {
       "id": "promotion-binding",
-      "fixture": "Authentic and tampered channel/source/artifact/audience/version records; stub adapters.",
-      "observation": "Compare the selected target intents and mutation count.",
-      "acceptance": "Only authenticated in-scope records produce intents; tampering and unsupported archive paths cause zero provider writes."
+      "fixture": "Authentic records, each channel/source/component/artifact/audience/version/trust mismatch, and unsafe archive paths; stub ChatGPT and Claude delivery paths.",
+      "observation": "Exercise every rejection fixture against both delivery paths. Compare target intents, ChatGPT calls, Claude commits/refs/pushes, and before/after filesystem snapshots.",
+      "acceptance": "Only authenticated in-scope records may produce intents. Every mismatch or unsafe-path rejection produces zero target intents, zero ChatGPT calls, no Claude commit/ref/push effects, and unchanged filesystem state. Synthetic success does not qualify live provider or repository controls."
     },
     {
       "id": "identity-and-protected-files",
-      "fixture": "Disposable ordinary-user and service-user identities with synthetic credential markers and protected code/config/trust.",
-      "observation": "Attempt reads, replacement and identity assumption through the reviewed harness.",
-      "acceptance": "Ordinary agents cannot obtain markers, assume the service identity or rewrite protected material; service cannot mutate its code/config/trust. Same-user mode checks are insufficient."
+      "fixture": "Disposable ordinary-user and service-user identities with original bound synthetic credential markers/account contexts and protected code/config/trust.",
+      "observation": "Attempt reads, direct credential writes, rename replacement, symlink substitution, credential-profile replacement, identity assumption, and available delegated-privilege paths through the reviewed harness. After a clean restart, compare the bound markers and account contexts with their originals.",
+      "acceptance": "All ordinary-user credential replacement paths fail, including store/profile/context substitution. Ordinary agents cannot obtain markers, assume the service identity or rewrite protected code/config/trust; service cannot mutate its code/config/trust. The original bound markers and account contexts remain intact after a clean restart. Same-user mode checks and synthetic markers do not qualify the eventual credential backend."
     },
     {
       "id": "setup-and-partial-recovery",
-      "fixture": "Absent, pre-existing and conflicting identity/destination states; interruption between selected setup/upgrade actions.",
-      "observation": "Compare planned, completed and independently observed actions through the literal setup interface.",
-      "acceptance": "Conflicts preserve existing state; partial results remain partial; recovery binds inspected preimages and never silently deletes an account, overwrites unknown files or replays completed work."
+      "fixture": "Absent, pre-existing and conflicting identity/destination states; interruption between selected setup/upgrade actions; complete-but-wrong upgrade post-states for identity, protected digests, ownership, permissions, dependency bindings and state compatibility, each varied separately.",
+      "observation": "Compare planned, completed and independently observed actions through the literal setup interface. Inject each wrong post-state, inspect verify-installation and the terminal reply, and check delivery-mutation and service-restart controls.",
+      "acceptance": "Conflicts preserve existing state; partial results remain partial; recovery binds inspected preimages and never silently deletes an account, overwrites unknown files or replays completed work. upgraded is returned only after verify-installation matches every expected postimage. Any wrong or unverified protected property prevents success and keeps delivery mutations and service restart disabled."
     },
     {
       "id": "duplicate-and-concurrent-triggers",
