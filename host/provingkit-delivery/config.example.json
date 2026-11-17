@@ -33,7 +33,7 @@
     "chatgpt-mutations",
     "claude-promotion"
   ],
-  "recovery": "known-good-content-at-higher-authorized-version",
+  "recovery": "known-good-content-under-accepted-synchronized-recovery-policy",
   "effect_boundary": {
     "immutable_on_rejection": [
       "delivery-destinations",
@@ -75,8 +75,30 @@
             "attention-bound-notice",
             "attention-bound-log"
           ],
-          "accepted_route_binding_required": true,
-          "accepted_delivery_evidence_required": true
+          "attention_observation": {
+            "required": true,
+            "publication_effect": [
+              "event_id",
+              "interface"
+            ],
+            "route_binding": [
+              "interface",
+              "route_id",
+              "accepted"
+            ],
+            "delivery_acknowledgement": [
+              "event_id",
+              "interface",
+              "route_id",
+              "accepted"
+            ],
+            "correspondence": [
+              "publication-interface-present-in-service-effects",
+              "publication-event-equals-current-rejection-record-event",
+              "accepted-binding-names-publication-interface-and-established-attention-route",
+              "accepted-acknowledgement-names-current-event-publication-interface-and-bound-route"
+            ]
+          }
         },
         "non_actionable": {
           "requirement": "at-least-one",
@@ -110,12 +132,25 @@
       "channel",
       "target-account-entry",
       "retained_artifact_digest",
-      "higher_delivery_version"
+      "retained_source_revision",
+      "retained_content_digests",
+      "synchronized_recovery_policy_revision",
+      "authorized_coordinated_version"
     ],
     "recovery_authorization_consumption": "durable-once-before-write-under-shared-lock",
     "recovery_terminal_and_reboot_state": "stopped",
     "ordinary_triggers_during_recovery": false,
     "resume_authorization": null,
     "ordinary_resume": "separately-authorized-explicit-transition-under-shared-lock"
+  },
+  "version_policy": {
+    "member_versions": "synchronized",
+    "issuance_contract": null,
+    "recovery_contract": null,
+    "mistaken_installed_labels": "metadata-not-release-authority-or-floors",
+    "accepted_content_identity": {
+      "source_revision": null,
+      "content_digests": {}
+    }
   }
 }

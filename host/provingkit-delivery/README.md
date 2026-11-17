@@ -65,11 +65,18 @@ authenticity, trust or unsafe-path violations require operator attention. Only
 explicitly classified routine reasons requiring no action may use the
 non-actionable disposition; repeating an actionable event does not downgrade it.
 
-For an actionable reason, require accepted delivery through a notice interface
-bound to the established operator-attention route, or a log interface explicitly
-bound to that same route. Observe the accepted route binding and delivery result;
-the presence of a log or notice alone proves neither. A plain log cannot satisfy
-attention. An unavailable, unbound or failed route leaves attention unresolved;
+For an actionable reason, require one typed attention observation binding the
+actual publication effect to the established operator-attention route and its
+accepted delivery acknowledgement. Its publication effect names the current
+rejection `event_id` and the `log` or `notice` interface actually present in
+`service_effects`. Its accepted route-binding evidence names that same interface
+and the established attention route. Its acknowledgement names the same event,
+interface and route, and records accepted delivery. A log effect cannot borrow
+a notice acknowledgement, nor a notice effect a log acknowledgement. Evidence
+for another event or route cannot satisfy this event's attention obligation.
+The presence of a log or notice alone proves none of these correspondences.
+A plain log cannot satisfy attention. An unavailable, unbound or failed route
+leaves attention unresolved;
 retain that evidence without relabeling the event or admitting delivery work.
 For a declared non-actionable reason, at least one nonsecret log or notice through
 its accepted interface suffices; either alone or both is permitted. These
@@ -99,8 +106,11 @@ single-fault vector with all other obligations satisfied, and show that an
 oracle ignoring that obligation disagrees with the expected result. In particular,
 omit the journal effect while retaining the correlated record in an accepted log;
 record presence outside the required journal cannot prove durable journaling.
-Check missing lock, publication, record, route binding and accepted attention
-delivery independently. Extra locations and effects outside the attempt lifecycle
+Check missing lock, publication, record, attention observation, matching effect,
+event, route binding and accepted acknowledgement independently. Cross both
+log-effect/notice-interface and notice-effect/log-interface cases; each must fail,
+and an oracle ignoring effect/interface correspondence must wrongly accept both.
+Extra locations and effects outside the attempt lifecycle
 fail acceptance. Declared examples and static oracle checks do not execute a
 journal or an attention route.
 
@@ -193,9 +203,16 @@ change that state to running or release queued ordinary work.
 ### Stopped recovery and separate resume
 
 While stopped, admit at most one recovery under an authorization bound to its
-identity, exact channel, target/account/entry, retained artifact digest and a
-delivery version higher than the observed target version under the approved
-issuer's comparison contract. Validate applicable authority, holds and target
+identity, exact channel, target/account/entry, retained artifact/source/content
+identities, accepted synchronized recovery-policy revision and the coordinated
+version authorized by the existing versioning and installation owners. All
+Provingkit member versions remain synchronized. Mistaken installed `1.0.0`
+labels establish neither an accepted release nor a floor or recovery target.
+Preserve accepted Versionkeeping content independently of those labels; select
+no version divergence, bump, reset, deletion or recreation from them. Missing
+owner policy bindings withhold dependent recovery, not independent static work
+or the separately authorized harmless canary. This contract supplies no new
+recovery mechanism. Validate applicable authority, holds, policy and target
 preimages. An applicable existing grant may cover issuance; no new human prompt
 is required solely because the operation is recovery.
 

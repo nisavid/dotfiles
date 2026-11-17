@@ -11,9 +11,9 @@
   "synthetic_cases": [
     {
       "id": "promotion-binding",
-      "fixture": "Authentic records, every channel/source/component/artifact/audience/version/trust mismatch and unsafe archive path; stub ChatGPT/Claude delivery paths and separate allowlisted service-effect domains. Use synthetic producer-controlled actionable and declared non-actionable reason codes, unknown reasons, accepted/unbound/failed attention routes, and single-fault mandatory-obligation vectors.",
-      "observation": "Exercise each rejection fixture through both paths. Snapshot delivery destinations, protected material, extraction targets and repository state; compare the correlated secret-free journal record, lock and bounded service effects. Derive disposition from the reviewed producer map with unknown reasons actionable. Observe accepted attention-route binding and delivery separately from effect presence. For each mandatory obligation hold every other obligation valid and compare the expected result with an oracle that ignores only that obligation, including a journal-blind oracle. Static examples do not execute these observations.",
-      "acceptance": "Rejection produces zero delivery target intents, no ChatGPT delivery calls or Claude commits/ref changes/pushes, and unchanged forbidden domains. Require durable journal storage, maintained lock and one correlated secret-free record with exactly event_id, input_digest, producer-controlled reason_code and outcome=rejected; identical observations preserve it without downgrading attention. Actionable reasons require accepted delivery via a notice or log interface bound to the established operator-attention route. Plain-log-only, unbound, unavailable or failed attention publication does not satisfy it. Unknown/unclassified reasons and authenticity/trust/unsafe-path violations are actionable. Only explicitly classified routine no-action reasons may use non-actionable log-only, notice-only or combined publication. All service effects stay within declared locations and the same attempt lifecycle. A present record outside the journal cannot satisfy journaling. Each single-fault vector fails exactly its named obligation, and the corresponding obligation-blind oracle must disagree. No raw rejected input or secrets; no live control is qualified by synthetic success.",
+      "fixture": "Authentic records, every channel/source/component/artifact/audience/version/trust mismatch and unsafe archive path; stub ChatGPT/Claude delivery paths and separate allowlisted service-effect domains. Use synthetic producer-controlled actionable and declared non-actionable reason codes, unknown reasons, accepted/unbound/failed attention routes, and single-fault mandatory-obligation vectors. Include typed current-event publication/route/acknowledgement observations, crossed log/notice effects and stale-event or mismatched-interface/route evidence.",
+      "observation": "Exercise each rejection fixture through both paths. Snapshot delivery destinations, protected material, extraction targets and repository state; compare the correlated secret-free journal record, lock and bounded service effects. Derive disposition from the reviewed producer map with unknown reasons actionable. Observe accepted attention-route binding and delivery separately from effect presence. For each mandatory obligation hold every other obligation valid and compare the expected result with an oracle that ignores only that obligation, including a journal-blind oracle. Static examples do not execute these observations. Require actual publication effect/interface, accepted route binding and delivery acknowledgement to correspond to the same rejection event; cross log effect with notice evidence and notice effect with log evidence, then compare a correspondence-blind oracle against both expected failures.",
+      "acceptance": "Rejection produces zero delivery target intents, no ChatGPT delivery calls or Claude commits/ref changes/pushes, and unchanged forbidden domains. Require durable journal storage, maintained lock and one correlated secret-free record with exactly event_id, input_digest, producer-controlled reason_code and outcome=rejected; identical observations preserve it without downgrading attention. Actionable reasons require accepted delivery via a notice or log interface bound to the established operator-attention route. Plain-log-only, unbound, unavailable or failed attention publication does not satisfy it. Unknown/unclassified reasons and authenticity/trust/unsafe-path violations are actionable. Only explicitly classified routine no-action reasons may use non-actionable log-only, notice-only or combined publication. All service effects stay within declared locations and the same attempt lifecycle. A present record outside the journal cannot satisfy journaling. Each single-fault vector fails exactly its named obligation, and the corresponding obligation-blind oracle must disagree. No raw rejected input or secrets; no live control is qualified by synthetic success. For actionable reasons, require one typed attention_observation: its publication_effect names the current event_id and an interface present in service_effects; accepted route_binding names that same interface and the established attention route; accepted delivery_acknowledgement names the same current event, interface and bound route. Independent flags or evidence for another event/interface/route cannot substitute. Both crossed log/notice vectors fail solely effect/interface correspondence and must be wrongly accepted by an oracle ignoring that predicate.",
       "kind": "synthetic",
       "owner": "host-qualification-producer",
       "rejection_effect_acceptance_examples": [
@@ -29,11 +29,10 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": true,
-          "expected_failed_obligations": []
+          "expected_failed_obligations": [],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "non-actionable-notice-only",
@@ -47,11 +46,10 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": true,
-          "expected_failed_obligations": []
+          "expected_failed_obligations": [],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "non-actionable-log-and-notice",
@@ -66,11 +64,10 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": true,
-          "expected_failed_obligations": []
+          "expected_failed_obligations": [],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "actionable-plain-log-only",
@@ -84,15 +81,12 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
-            "attention-interface",
-            "attention-route-binding",
-            "attention-delivery"
-          ]
+            "attention-observation"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "actionable-attention-notice",
@@ -106,11 +100,26 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": "notice",
-          "accepted_attention_route_binding": true,
-          "attention_delivery_accepted": true,
           "expected_acceptance": true,
-          "expected_failed_obligations": []
+          "expected_failed_obligations": [],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            }
+          }
         },
         {
           "id": "actionable-attention-log",
@@ -124,11 +133,26 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": "log",
-          "accepted_attention_route_binding": true,
-          "attention_delivery_accepted": true,
           "expected_acceptance": true,
-          "expected_failed_obligations": []
+          "expected_failed_obligations": [],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "log"
+            },
+            "route_binding": {
+              "interface": "log",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "log",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            }
+          }
         },
         {
           "id": "unknown-reason-plain-log-only",
@@ -142,15 +166,12 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
-            "attention-interface",
-            "attention-route-binding",
-            "attention-delivery"
-          ]
+            "attention-observation"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "unknown-reason-attention-notice",
@@ -164,11 +185,26 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": "notice",
-          "accepted_attention_route_binding": true,
-          "attention_delivery_accepted": true,
           "expected_acceptance": true,
-          "expected_failed_obligations": []
+          "expected_failed_obligations": [],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            }
+          }
         },
         {
           "id": "missing-journal",
@@ -181,13 +217,12 @@
           "record_observation_location": "accepted-log",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
             "durable-journal"
-          ]
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "record-outside-journal",
@@ -201,13 +236,12 @@
           "record_observation_location": "accepted-log",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
             "durable-journal"
-          ]
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "missing-lock",
@@ -220,13 +254,12 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
             "lock"
-          ]
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "missing-publication",
@@ -239,13 +272,12 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
             "publication"
-          ]
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "missing-correlated-record",
@@ -259,13 +291,12 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
             "correlated-record"
-          ]
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "extra-location",
@@ -279,13 +310,12 @@
           "record_observation_location": "journal",
           "only_declared_locations": false,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
             "declared-locations"
-          ]
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "outside-attempt-lifecycle",
@@ -299,16 +329,15 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": false,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
             "attempt-lifecycle"
-          ]
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
-          "id": "missing-attention-interface",
+          "id": "missing-attention-observation",
           "producer_reason_code": "fixture-actionable",
           "service_effects": [
             "journal",
@@ -319,13 +348,12 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": true,
-          "attention_delivery_accepted": true,
           "expected_acceptance": false,
           "expected_failed_obligations": [
-            "attention-interface"
-          ]
+            "attention-observation"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "missing-attention-route-binding",
@@ -339,13 +367,28 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": "notice",
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": true,
           "expected_acceptance": false,
           "expected_failed_obligations": [
             "attention-route-binding"
-          ]
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": false
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            }
+          }
         },
         {
           "id": "failed-attention-delivery",
@@ -359,13 +402,28 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": "notice",
-          "accepted_attention_route_binding": true,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
-            "attention-delivery"
-          ]
+            "attention-acknowledgement"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": false
+            }
+          }
         },
         {
           "id": "authenticity-violation-plain-log-only",
@@ -379,15 +437,12 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
-            "attention-interface",
-            "attention-route-binding",
-            "attention-delivery"
-          ]
+            "attention-observation"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "trust-violation-plain-log-only",
@@ -401,15 +456,12 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
-            "attention-interface",
-            "attention-route-binding",
-            "attention-delivery"
-          ]
+            "attention-observation"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
         },
         {
           "id": "unsafe-path-plain-log-only",
@@ -423,21 +475,299 @@
           "record_observation_location": "journal",
           "only_declared_locations": true,
           "within_attempt_lifecycle": true,
-          "attention_interface": null,
-          "accepted_attention_route_binding": false,
-          "attention_delivery_accepted": false,
           "expected_acceptance": false,
           "expected_failed_obligations": [
-            "attention-interface",
-            "attention-route-binding",
-            "attention-delivery"
-          ]
+            "attention-observation"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": null
+        },
+        {
+          "id": "log-effect-notice-attention",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "log"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-effect-correspondence"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            }
+          }
+        },
+        {
+          "id": "notice-effect-log-attention",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-effect-correspondence"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "log"
+            },
+            "route_binding": {
+              "interface": "log",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "log",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            }
+          }
+        },
+        {
+          "id": "publication-event-mismatch",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-event-correspondence"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-other-event",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            }
+          }
+        },
+        {
+          "id": "binding-interface-mismatch",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-route-binding"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "log",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            }
+          }
+        },
+        {
+          "id": "ack-event-mismatch",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-acknowledgement"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-other-event",
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            }
+          }
+        },
+        {
+          "id": "ack-interface-mismatch",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-acknowledgement"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "log",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            }
+          }
+        },
+        {
+          "id": "ack-route-mismatch",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-acknowledgement"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "notice",
+              "route_id": "fixture-established-operator-attention",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice",
+              "route_id": "fixture-other-route",
+              "accepted": true
+            }
+          }
+        },
+        {
+          "id": "wrong-attention-route",
+          "producer_reason_code": "fixture-actionable",
+          "service_effects": [
+            "journal",
+            "lock",
+            "notice"
+          ],
+          "correlated_record_present": true,
+          "record_observation_location": "journal",
+          "only_declared_locations": true,
+          "within_attempt_lifecycle": true,
+          "expected_acceptance": false,
+          "expected_failed_obligations": [
+            "attention-route-binding"
+          ],
+          "event_id": "fixture-rejection-001",
+          "attention_observation": {
+            "publication_effect": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice"
+            },
+            "route_binding": {
+              "interface": "notice",
+              "route_id": "fixture-other-route",
+              "accepted": true
+            },
+            "delivery_acknowledgement": {
+              "event_id": "fixture-rejection-001",
+              "interface": "notice",
+              "route_id": "fixture-other-route",
+              "accepted": true
+            }
+          }
         }
       ],
       "reason_disposition_fixture_map": {
         "fixture-actionable": "actionable",
         "fixture-non-actionable": "non-actionable"
-      }
+      },
+      "established_attention_route_fixture": "fixture-established-operator-attention"
     },
     {
       "id": "identity-and-protected-files",
@@ -481,9 +811,9 @@
     },
     {
       "id": "stop-reboot-and-forward-recovery",
-      "fixture": "Pending intents and subscribed content; stopped state with queued ordinary work; synthetic bound recovery authorizations including wrong channel/target/artifact/version and consumed reuse; retained known-good content at a higher authorized version; success/failure/uncertainty/reboot outcomes.",
-      "observation": "Verify both ordinary mutation paths remain stopped. Under the shared lock observe exact authorization/preimage checks, durable consumption before the sole bound recovery write, readback, and persistent stopped state. Attempt queued ordinary delivery, replay after reboot and resume without separate authority.",
-      "acceptance": "Stop does not retract subscribed content. Only one correctly bound channel/target/artifact/higher-version recovery is admitted; invalid or consumed authority causes no recovery mutation. Ordinary triggers remain disabled through recovery and after success, failure, uncertainty or reboot. Preserve and reconcile the original intent without replay. Only a separate authorized explicit resume may admit reconciled eligible ordinary work; recovery success alone never does.",
+      "fixture": "Pending intents and subscribed content; stopped state with queued ordinary work; synthetic owner-bound synchronized recovery contracts and authorizations, including wrong channel/target/artifact/source/content/policy/coordinated-version and consumed reuse; mistaken installed 1.0.0 metadata, preserved accepted Versionkeeping source/content identities; success/failure/uncertainty/reboot outcomes.",
+      "observation": "Verify both ordinary mutation paths remain stopped. Under the shared lock observe exact authorization, accepted owner-policy and preimage checks, durable consumption before the sole bound recovery write, readback and persistent stopped state. Compare source/content identity independently of installed labels and ensure the coordinated version comes from the accepted issuer/recovery contract, not an observed-label floor. Attempt missing policy, divergence, label-derived bump/reset/deletion/recreation, queued ordinary delivery, replay after reboot and resume without separate authority.",
+      "acceptance": "Stop does not retract subscribed content. Only one correctly bound channel/target/artifact/source/content/policy/coordinated-version recovery is admitted under its existing owners accepted synchronized policy. Missing/invalid policy or consumed authority causes no recovery mutation. All Provingkit member versions stay synchronized; mistaken metadata establishes no floor or target and justifies no divergence, bump, reset, deletion or recreation. Accepted Versionkeeping content is preserved by source/content digests independently of labels. This specification chooses no actual version or recovery mechanism. Ordinary triggers remain disabled through recovery and after success, failure, uncertainty or reboot. Preserve and reconcile the original intent without replay. Only a separate authorized explicit resume may admit reconciled eligible ordinary work; recovery success alone never does.",
       "kind": "synthetic",
       "owner": "host-qualification-producer"
     }

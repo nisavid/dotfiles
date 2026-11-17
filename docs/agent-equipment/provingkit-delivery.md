@@ -83,11 +83,15 @@ write occurred, preserve the attempt and stop its dependent work. Do not
 repeat it, delete an entry or infer rollback authority. Independent eligible
 targets may continue where the shared safety boundary is unaffected.
 
-Use the existing version issuer's approved delivery-version projection. Keep
-versions immutable and increasing, including an approved higher prerelease
-floor where necessary. Do not invent versions or delete and recreate an entry
-to escape an installed floor. The real one-account canary may proceed before
-all-account versioning is complete, within its own accepted contract.
+Use the existing issuer's coordinated version for all Provingkit members.
+Preserve accepted Versionkeeping content by its reviewed source and content
+digests. Mistaken installed `1.0.0` labels are metadata, not accepted releases
+or version floors. They authorize neither member-version divergence nor a
+version bump, reset, deletion or recreation. The existing versioning and
+installation owners supply the accepted synchronized issuance and recovery
+contracts before dependent execution; this source selects no replacement
+version or recovery mechanism. The independent harmless canary retains its
+own accepted scope and does not depend on the withdrawn version exception.
 
 The first useful milestone is a second unattended release on one account per
 provider, with changed and removed content, preserved identity and enablement,
@@ -118,8 +122,10 @@ Keep ordinary delivery stopped and reconcile the journal with actual provider
 state. Follow the host contract's
 [stopped recovery transition](../../host/provingkit-delivery/README.md#stopped-recovery-and-separate-resume):
 bind one authorization to the exact channel, target/account/entry, retained
-artifact digest and higher issuer-approved delivery version. Under the shared
-lock, recheck authority, holds and target state, and durably consume that
+artifact/source/content identities, accepted synchronized recovery-policy
+revision and the coordinated version authorized by its owners. Observed metadata
+does not determine that version or a recovery floor. Under the shared
+lock, recheck authority, holds, policy binding and target state, and durably consume that
 authorization for its one recovery intent before mutation. An existing
 applicable grant may cover this authorization; do not invent repeat consent.
 
