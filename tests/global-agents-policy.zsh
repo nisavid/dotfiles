@@ -600,18 +600,17 @@ chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/distinc
 )
 [[ $(jq -r '.[".claude/rules/distinctive-typography.md"].contents' "$claude_state") == "$(<"$claude_typography_rule")" ]] ||
   fail "Claude typography rule target state differs from its rendering"
+typography=$(render_partial "$typography_partial_name")
+[[ -n $typography ]] || fail "typography partial renders empty"
+assert_partial_carried_once "$typography" "typography rule" "$template" "$claude_typography_rule_template"
 typography_lead='Use distinctive typography sparingly and correctly.'
-[[ $(grep -Fc -- "$typography_lead" "$rendered") == 1 ]] ||
-  fail "Codex policy must carry the typography paragraph exactly once"
 codex_typography=$(grep -F -- "$typography_lead" "$rendered")
 [[ $codex_typography == "$typography_lead"* ]] ||
   fail "Codex typography paragraph does not begin with its lead sentence"
-[[ $codex_typography == "$(render_partial "$typography_partial_name")" ]] ||
+[[ $codex_typography == "$typography" ]] ||
   fail "Codex typography paragraph differs from the shared partial"
 [[ $(<"$claude_typography_rule") == "# Distinctive Typography"$'\n\n'"$codex_typography" ]] ||
   fail "Claude typography rule is not its heading plus the paragraph the Codex policy carries"
-! grep -Fq -- "$typography_lead" "$template" "$claude_typography_rule_template" ||
-  fail "a typography source template duplicates the paragraph instead of including the partial"
 
 repo_agents_forbidden=(
   'ivan@nisavid.io'
