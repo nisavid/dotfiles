@@ -38,15 +38,6 @@ assert_retired_skills_absent() {
   done
 }
 
-assert_plugin_skills_absent() {
-  local name
-
-  for name in $plugin_skills; do
-    [[ ! -e $claude_skills/$name && ! -L $claude_skills/$name ]] ||
-      fail "plugin-provided $name skill was linked into Claude"
-  done
-}
-
 home=$test_root/home
 agent_skills=$home/.agents/skills
 claude_skills=$home/.claude/skills
