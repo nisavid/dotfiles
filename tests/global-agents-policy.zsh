@@ -24,6 +24,9 @@ cold_archive_include='{{ include ".private-cold-archive.md.age" | decrypt | trim
 question_partial_name=decisions-via-question-tool.tmpl
 question_partial="$source_root/.chezmoitemplates/$question_partial_name"
 claude_question_rule_template="$source_root/dot_claude/rules/decisions-via-question-tool.md.tmpl"
+typography_partial_name=distinctive-typography.tmpl
+typography_partial="$source_root/.chezmoitemplates/$typography_partial_name"
+claude_typography_rule_template="$source_root/dot_claude/rules/distinctive-typography.md.tmpl"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
 git_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-git-policy.XXXXXX")
@@ -38,6 +41,7 @@ claude_cold_archive_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-cold-arc
 cold_archive_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-cold-archive-policy.XXXXXX")
 claude_question_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-question-rule.XXXXXX")
 question_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-question-policy.XXXXXX")
+claude_typography_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-typography-rule.XXXXXX")
 render_source_root=$source_root
 render_template=$template
 render_claude_rule_template=$claude_rule_template
@@ -45,6 +49,7 @@ render_claude_git_rule_template=$claude_git_rule_template
 render_claude_review_rule_template=$claude_review_rule_template
 render_claude_cold_archive_rule_template=$claude_cold_archive_rule_template
 render_claude_question_rule_template=$claude_question_rule_template
+render_claude_typography_rule_template=$claude_typography_rule_template
 render_fixture=
 chmod 600 "$rendered"
 chmod 600 "$target_state"
@@ -52,7 +57,7 @@ chmod 600 "$git_policy"
 chmod 600 "$pr_policy"
 chmod 600 "$claude_cold_archive_rule"
 chmod 600 "$cold_archive_policy"
-trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_question_rule" "$question_policy"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
+trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_question_rule" "$question_policy" "$claude_typography_rule"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -99,7 +104,7 @@ source_git_mode=$(git -C "$repo_root" ls-files --stage -- home/dot_codex/private
 [[ $(mode_of "$claude_rule_template") == 644 ]] || fail "Claude rule template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$claude_rule_template") == "$HOME/.claude/rules/ticket-tracker-preflight.md" ]] ||
   fail "Claude rule template targets the wrong file"
-for partial in "$identity_partial" "$checkpoint_partial" "$review_partial" "$question_partial"; do
+for partial in "$identity_partial" "$checkpoint_partial" "$review_partial" "$question_partial" "$typography_partial"; do
   [[ -f "$partial" ]] || fail "${partial:t} partial is missing"
   [[ $(mode_of "$partial") == 644 ]] || fail "${partial:t} partial mode must be 0644"
 done
@@ -140,6 +145,12 @@ grep -Fq 'mode-`0600` `~/.claude/rules/cold-archive.md` target' "$encryption_doc
 [[ $(chezmoi -S "$source_root" target-path "$claude_question_rule_template") == "$HOME/.claude/rules/decisions-via-question-tool.md" ]] ||
   fail "Claude question-tool rule template targets the wrong file"
 
+[[ -f "$claude_typography_rule_template" ]] || fail "Claude typography rule template is missing"
+[[ ! -e "${claude_typography_rule_template%.tmpl}" ]] || fail "plain Claude typography rule still exists beside its template"
+[[ $(mode_of "$claude_typography_rule_template") == 644 ]] || fail "Claude typography rule source template mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_typography_rule_template") == "$HOME/.claude/rules/distinctive-typography.md" ]] ||
+  fail "Claude typography rule template targets the wrong file"
+
 if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   render_fixture=$(mktemp -d "${TMPDIR:-/tmp}/global-agents-source.XXXXXX")
   chmod 700 "$render_fixture"
@@ -155,6 +166,7 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$checkpoint_partial" "$render_fixture/.chezmoitemplates/$checkpoint_partial_name"
   cp -p -- "$review_partial" "$render_fixture/.chezmoitemplates/$review_partial_name"
   cp -p -- "$question_partial" "$render_fixture/.chezmoitemplates/$question_partial_name"
+  cp -p -- "$typography_partial" "$render_fixture/.chezmoitemplates/$typography_partial_name"
   cp -p -- "$source_root/.chezmoitemplates/outcome-reassessment.tmpl" "$render_fixture/.chezmoitemplates/outcome-reassessment.tmpl"
   cp -p -- "$source_root/.chezmoiignore" "$render_fixture/.chezmoiignore"
   mkdir -m 700 "$render_fixture/.chezmoidata"
@@ -173,6 +185,8 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   chmod 644 "$render_claude_cold_archive_rule_template"
   render_claude_question_rule_template="$render_fixture/dot_claude/rules/${claude_question_rule_template:t}"
   cp -p -- "$claude_question_rule_template" "$render_claude_question_rule_template"
+  render_claude_typography_rule_template="$render_fixture/dot_claude/rules/${claude_typography_rule_template:t}"
+  cp -p -- "$claude_typography_rule_template" "$render_claude_typography_rule_template"
   render_source_root=$render_fixture
 fi
 
@@ -573,6 +587,31 @@ for ((i = 1; i <= ${#question_required}; i++)); do
 done
 [[ $question == "${(pj:\n\n:)question_required}" ]] ||
   fail "question-tool policy is not exactly its settled paragraphs in order"
+
+# The typography rule is one paragraph that both harnesses render from the
+# one partial. Compare the two renderings directly, so neither can drift
+# from the other while still passing a presence check of its own.
+chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/distinctive-typography.md" > "$claude_state"
+[[ $(jq -r '.[".claude/rules/distinctive-typography.md"].perm' "$claude_state") == 420 ]] ||
+  fail "Claude typography rule target mode is not 0644"
+(
+  cd "$render_source_root"
+  chezmoi -S "$render_source_root" execute-template < "$render_claude_typography_rule_template" > "$claude_typography_rule"
+)
+[[ $(jq -r '.[".claude/rules/distinctive-typography.md"].contents' "$claude_state") == "$(<"$claude_typography_rule")" ]] ||
+  fail "Claude typography rule target state differs from its rendering"
+typography_lead='Use distinctive typography sparingly and correctly.'
+[[ $(grep -Fc -- "$typography_lead" "$rendered") == 1 ]] ||
+  fail "Codex policy must carry the typography paragraph exactly once"
+codex_typography=$(grep -F -- "$typography_lead" "$rendered")
+[[ $codex_typography == "$typography_lead"* ]] ||
+  fail "Codex typography paragraph does not begin with its lead sentence"
+[[ $codex_typography == "$(render_partial "$typography_partial_name")" ]] ||
+  fail "Codex typography paragraph differs from the shared partial"
+[[ $(<"$claude_typography_rule") == "# Distinctive Typography"$'\n\n'"$codex_typography" ]] ||
+  fail "Claude typography rule is not its heading plus the paragraph the Codex policy carries"
+! grep -Fq -- "$typography_lead" "$template" "$claude_typography_rule_template" ||
+  fail "a typography source template duplicates the paragraph instead of including the partial"
 
 repo_agents_forbidden=(
   'ivan@nisavid.io'
