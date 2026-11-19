@@ -1,9 +1,63 @@
 #!/usr/bin/env bash
 set -euo pipefail
+{{- $plugins := .claudePlugins }}
+{{- range $plugins.explicitlyOff }}
+{{-   if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]*$" .) }}
+{{-     fail (printf "claudePlugins: invalid explicitly-off plugin name %q" .) }}
+{{-   end }}
+{{- end }}
 
-jq '
+# Claude Code enables any plugin that has no enabledPlugins entry. This modifier
+# sets only the entries below, keeps every other entry as it is, and writes no
+# key for any other plugin, so a plugin on neither list in
+# .chezmoidata/claude-plugins.toml loads normally unless it already has an
+# entry, which is kept (dotfiles#479):
+# - each explicitlyOff name is false as <name>@inline and <name>@synced, and as
+#   each <name>@<marketplace> key the installed-plugin registry lists;
+# - each oneCopyPerSkill.off entry is false, and an existing oneCopyPerSkill.on
+#   entry is true;
+# - context7, github and greptile at claude-plugins-official are false;
+# - the stale serena@claude-plugins-official entry is removed.
+# @inline and @synced keys use the name the plugin's own
+# .claude-plugin/plugin.json declares, not its directory name; the
+# explicitlyOff names are those declared names.
+registry={{ joinPath .chezmoi.homeDir ".claude/plugins/installed_plugins.json" | quote }}
+explicitly_off={{ $plugins.explicitlyOff | toJson | squote }}
+one_copy_off={{ $plugins.oneCopyPerSkill.off | toJson | squote }}
+one_copy_on={{ $plugins.oneCopyPerSkill.on | toJson | squote }}
+
+# The registry is used only to find the <name>@<marketplace> keys of the
+# explicitlyOff names. It is read with -n as a list of documents, so an empty
+# file, trailing garbage, a second JSON document or a plugins value that is not
+# an object fails the apply.
+if [[ -f $registry ]]; then
+  installed=$(jq -n -c '[inputs] |
+    if length == 1 then .[0] else error("expected one JSON document") end |
+    .plugins |
+    if type == "object" then keys else error("plugins is not an object") end
+  ' "$registry") || {
+    printf 'unreadable installed-plugin registry: %s\n' "$registry" >&2
+    exit 1
+  }
+else
+  installed='[]'
+fi
+
+jq \
+  --argjson explicitly_off "$explicitly_off" \
+  --argjson one_copy_off "$one_copy_off" \
+  --argjson one_copy_on "$one_copy_on" \
+  --argjson installed "$installed" '
+  def plugin_name: sub("@[^@]*$"; "");
+  ($explicitly_off | map({key: ., value: true}) | from_entries) as $is_off |
+  ([$explicitly_off[] | (. + "@inline"), (. + "@synced")] +
+    [$installed[] | select($is_off[plugin_name])] +
+    $one_copy_off) as $off |
   .enabledPlugins = (.enabledPlugins // {}) |
   del(.enabledPlugins["serena@claude-plugins-official"]) |
+  reduce $off[] as $entry (.; .enabledPlugins[$entry] = false) |
+  reduce $one_copy_on[] as $entry (.;
+    if .enabledPlugins | has($entry) then .enabledPlugins[$entry] = true else . end) |
   .enabledPlugins["context7@claude-plugins-official"] = false |
   .enabledPlugins["github@claude-plugins-official"] = false |
   .enabledPlugins["greptile@claude-plugins-official"] = false

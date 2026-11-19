@@ -1,0 +1,115 @@
+# Claude Code plugin enablement (dotfiles#479), settled 2026-11-19;
+# real-skills-leashed moved to explicitlyOff the same day.
+# explicitlyOff and oneCopyPerSkill are read by
+# home/dot_claude/modify_private_settings.json.tmpl, which states what it writes
+# to ~/.claude/settings.json; accepted is a record that it does not read. The
+# modifier writes no key for a plugin on neither list: one with no entry loads
+# normally, and an existing entry, such as one turned off by hand, is kept.
+# The modifier also forces github, greptile and context7 off at the official
+# marketplace and removes the stale serena@claude-plugins-official entry, as
+# before.
+[claudePlugins]
+# The accepted plugins, kept as a record; tests/secret-injection-bindings.zsh
+# checks that it shares no name with explicitlyOff.
+accepted = [
+  "tricritical",
+  "versionkeeping",
+  "mergecraft",
+  "rolecasting",
+  "proseweaving",
+  "artifact-customs",
+  "surreal-intercom",
+  "real-skills-unleashed",
+  "typesafe",
+  "jev",
+  "agent-sdk-dev",
+  "chrome-devtools-mcp",
+  "claude-code-setup",
+  "cloudflare",
+  "coderabbit",
+  "codex",
+  "explanatory-output-style",
+  "firecrawl",
+  "impeccable",
+  "linear",
+  "mcp-apps",
+  "mcp-server-dev",
+  "modern-web-guidance",
+  "plugin-dev",
+  "security-guidance",
+  "skill-creator",
+  "vercel",
+  "warp",
+  "clangd-lsp",
+  "pyright-lsp",
+  "rust-analyzer-lsp",
+  "typescript-lsp",
+  "gopls-lsp",
+  "lua-lsp",
+  "claude-tag-data-viz",
+  "pdf-viewer",
+  "github",
+  "greptile",
+  "searchfit-seo",
+  "figma",
+  "design",
+  "canva",
+  "supericons",
+  "railway",
+  "render",
+  "firebase",
+  "exa",
+  "desktop-commander",
+  "playground",
+  "pmm-positioning",
+  "marketing",
+  "sales",
+  "data",
+  "stripe",
+  "claude-docs",
+  "claude-security",
+  "gitlab",
+  "posthog",
+  "redis-development",
+  "resend",
+  "sentry",
+  "reverse-engineering",
+  "setup-audit",
+]
+
+# Off as <name>@inline and <name>@synced, and as each <name>@<marketplace> key
+# the installed-plugin registry lists. @inline and @synced keys use the name the
+# plugin's own .claude-plugin/plugin.json declares, so these are those names.
+explicitlyOff = [
+  "mattpocock-skills",
+  "huggingface-skills",
+  "supabase",
+  "twilio-developer-kit",
+  "google-drive",
+  "codex-dispatch",
+  "amd-skills",
+  "chrome-extension-builder",
+  "equity-research",
+  "intuit-quickbooks",
+  "nvidia-skills",
+  "remotion",
+  "real-skills-leashed",
+]
+
+# One copy per skill: exact enabledPlugins entries.
+[claudePlugins.oneCopyPerSkill]
+# The account copies of cloudflare, linear, claude-code-setup and skill-creator
+# win over the local copies; the local Firecrawl copy wins over the account one.
+off = [
+  "cloudflare@claude-plugins-official",
+  "linear@claude-plugins-official",
+  "claude-code-setup@claude-plugins-official",
+  "skill-creator@claude-plugins-official",
+  "firecrawl@inline",
+  "firecrawl@synced",
+]
+# The ~/.claude/skills/html folder itself, not a second copy: an existing entry
+# is kept true, and a missing one (also on) is left missing.
+on = [
+  "html@skills-dir",
+]

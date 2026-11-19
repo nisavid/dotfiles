@@ -162,6 +162,166 @@ jq -e '
   (.enabledPlugins | has("serena@claude-plugins-official") | not)
 ' "$test_dir/settings-output.json" > /dev/null || fail 'credential-dependent plugin MCPs must be replaced without disabling Firecrawl skills'
 
+# Plugin enablement from the explicit lists (dotfiles#479).
+python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF' || fail 'accepted and explicitly-off plugin lists must hold 63 and 13 distinct, disjoint names'
+import sys, tomllib
+with open(sys.argv[1], "rb") as data_file:
+    plugins = tomllib.load(data_file)["claudePlugins"]
+accepted, off = plugins["accepted"], plugins["explicitlyOff"]
+assert len(accepted) == len(set(accepted)) == 63
+assert len(off) == len(set(off)) == 13
+assert not set(accepted) & set(off)
+assert "real-skills-leashed" in off
+assert "real-skills-unleashed" in accepted
+PYEOF
+explicitly_off=$(python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF'
+import json, sys, tomllib
+with open(sys.argv[1], "rb") as data_file:
+    print(json.dumps(tomllib.load(data_file)["claudePlugins"]["explicitlyOff"]))
+PYEOF
+)
+
+plugins_root=$fixture_home/.claude/plugins
+registry=$plugins_root/installed_plugins.json
+mkdir -p -- "$plugins_root"
+# Explicitly-off names with local keys, a name that only starts with one, names
+# on neither list, accepted names and one-copy entries.
+cat > "$registry" <<'EOF'
+{"version": 2, "plugins": {
+  "supabase@claude-plugins-official": [],
+  "real-skills-leashed@fixture-market": [],
+  "remotion@other-market": [],
+  "supabase-extra@claude-plugins-official": [],
+  "unlisted-local@claude-plugins-official": [],
+  "unlisted-fresh@claude-plugins-official": [],
+  "codex@openai-codex": [],
+  "cloudflare@claude-plugins-official": [],
+  "firecrawl@claude-plugins-official": []
+}}
+EOF
+cat > "$test_dir/plugins-input.json" <<'EOF'
+{
+  "unrelated": {
+    "number": 1.50,
+    "text": "é é",
+    "list": [3, 1, 2]
+  },
+  "enabledPlugins": {
+    "codex@openai-codex": true,
+    "amd-skills@inline": true,
+    "mergecraft@inline": true,
+    "tricritical@synced": false,
+    "unlisted-local@claude-plugins-official": true,
+    "hand-curated@inline": false,
+    "firecrawl@claude-plugins-official": true,
+    "serena@claude-plugins-official": true
+  },
+  "trailing": null
+}
+EOF
+"$settings_modifier" < "$test_dir/plugins-input.json" > "$test_dir/plugins-output.json"
+jq -e '.enabledPlugins | to_entries[:7] == [
+  {key: "codex@openai-codex", value: true},
+  {key: "amd-skills@inline", value: false},
+  {key: "mergecraft@inline", value: true},
+  {key: "tricritical@synced", value: false},
+  {key: "unlisted-local@claude-plugins-official", value: true},
+  {key: "hand-curated@inline", value: false},
+  {key: "firecrawl@claude-plugins-official", value: true}
+]' "$test_dir/plugins-output.json" > /dev/null ||
+  fail 'existing enabledPlugins entries must keep their place and value, except explicitly-off ones turned off and the stale Serena entry removed'
+jq -e '.enabledPlugins | has("serena@claude-plugins-official") | not' "$test_dir/plugins-output.json" > /dev/null ||
+  fail 'the stale Serena entry must be removed'
+jq -e --argjson off "$explicitly_off" '
+  (.enabledPlugins | to_entries[7:]) as $added |
+  ($added | all(.value == false)) and
+  ($added | map(.key) | sort) == (
+    [$off[] | (. + "@inline"), (. + "@synced")] - ["amd-skills@inline"] + [
+      "supabase@claude-plugins-official",
+      "real-skills-leashed@fixture-market",
+      "remotion@other-market",
+      "cloudflare@claude-plugins-official",
+      "linear@claude-plugins-official",
+      "claude-code-setup@claude-plugins-official",
+      "skill-creator@claude-plugins-official",
+      "firecrawl@inline",
+      "firecrawl@synced",
+      "context7@claude-plugins-official",
+      "github@claude-plugins-official",
+      "greptile@claude-plugins-official"
+    ] | sort)
+' "$test_dir/plugins-output.json" > /dev/null ||
+  fail 'the modifier must add false entries for exactly the explicitly-off names in both account forms and their installed keys, the one-copy rules and the managed entries'
+python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF' || fail 'the fixture names on neither list must appear in neither list'
+import sys, tomllib
+with open(sys.argv[1], "rb") as data_file:
+    plugins = tomllib.load(data_file)["claudePlugins"]
+assert not {"unlisted-local", "unlisted-fresh", "supabase-extra", "hand-curated"} & (
+    set(plugins["accepted"]) | set(plugins["explicitlyOff"]))
+PYEOF
+diff <(jq 'del(.enabledPlugins)' "$test_dir/plugins-input.json") \
+  <(jq 'del(.enabledPlugins)' "$test_dir/plugins-output.json") > /dev/null ||
+  fail 'settings other than enabledPlugins must be preserved'
+jq 'del(.enabledPlugins)' "$test_dir/plugins-output.json" | grep -q '"number": 1.50' ||
+  fail 'number literals in unrelated settings must be preserved byte for byte'
+"$settings_modifier" < "$test_dir/plugins-output.json" > "$test_dir/plugins-output-2.json"
+"$settings_modifier" < "$test_dir/plugins-output-2.json" > "$test_dir/plugins-output-3.json"
+cmp -s "$test_dir/plugins-output.json" "$test_dir/plugins-output-2.json" &&
+  cmp -s "$test_dir/plugins-output-2.json" "$test_dir/plugins-output-3.json" ||
+  fail 'the settings modifier must be idempotent'
+print -r -- '{"enabledPlugins": {"html@skills-dir": false}}' |
+  "$settings_modifier" | jq -e '.enabledPlugins["html@skills-dir"] == true' > /dev/null ||
+  fail 'the html user-skills entry must stay on'
+
+# The stale Serena entry is removed even when the registry lists Serena.
+cp -- "$registry" "$test_dir/installed-plugins.json"
+jq '.plugins["serena@claude-plugins-official"] = []' "$test_dir/installed-plugins.json" > "$registry"
+"$settings_modifier" < "$test_dir/plugins-input.json" |
+  jq -e '.enabledPlugins | has("serena@claude-plugins-official") | not' > /dev/null ||
+  fail 'the settings modifier must write no Serena key, even when the registry lists Serena'
+
+# Without a registry, only the account forms of the explicitly-off names are set.
+rm -f -- "$registry"
+"$settings_modifier" < "$test_dir/plugins-input.json" | jq -e '
+  .enabledPlugins as $p |
+  $p["supabase@inline"] == false and $p["supabase@synced"] == false and
+  ($p | has("supabase@claude-plugins-official") | not) and
+  ($p | has("serena@claude-plugins-official") | not)
+' > /dev/null || fail 'a missing installed-plugin registry must leave only the account forms of the explicitly-off names'
+
+# An unreadable registry fails the apply with no output.
+expect_modifier_failure() {
+  local output
+  if output=$("$settings_modifier" < "$test_dir/plugins-input.json" 2> /dev/null); then
+    fail "$1"
+  fi
+  [[ -z $output ]] || fail "$1"
+}
+print -rn -- '{"version": 2, "plugins": {' > "$registry"
+expect_modifier_failure 'a truncated installed-plugin registry must fail the apply'
+: > "$registry"
+expect_modifier_failure 'an empty installed-plugin registry must fail the apply'
+{ cat -- "$test_dir/installed-plugins.json"; print -r -- '{"plugins": {}}'; } > "$registry"
+expect_modifier_failure 'an installed-plugin registry holding two JSON documents must fail the apply'
+{ cat -- "$test_dir/installed-plugins.json"; print -r -- '}'; } > "$registry"
+expect_modifier_failure 'an installed-plugin registry with trailing garbage must fail the apply'
+print -r -- '{"version": 2, "plugins": ["supabase@claude-plugins-official"]}' > "$registry"
+expect_modifier_failure 'an installed-plugin registry whose plugins is not an object must fail the apply'
+print -r -- '{"version": 2, "plugins": []}' > "$registry"
+expect_modifier_failure 'an installed-plugin registry whose plugins is an empty list must fail the apply'
+print -r -- '{"plugins": false}' > "$registry"
+expect_modifier_failure 'an installed-plugin registry whose plugins is false must fail the apply'
+print -r -- '{"plugins": null}' > "$registry"
+expect_modifier_failure 'an installed-plugin registry whose plugins is null must fail the apply'
+print -r -- '{}' > "$registry"
+expect_modifier_failure 'an installed-plugin registry with no plugins key must fail the apply'
+print -r -- '{"plugins": {}}' > "$registry"
+"$settings_modifier" < "$test_dir/plugins-input.json" > /dev/null ||
+  fail 'an installed-plugin registry with an empty plugins object must be valid'
+cp -- "$test_dir/installed-plugins.json" "$registry"
+"$settings_modifier" < "$test_dir/plugins-input.json" | cmp -s - "$test_dir/plugins-output.json" ||
+  fail 'a restored installed-plugin registry must give the original output'
+
 mcp_config_modifier=$test_dir/modify-mcp-config
 render_modifier home/dot_config/modify_private_mcp-config.json.tmpl "$mcp_config_modifier"
 authorization_header='Bearer '
