@@ -146,4 +146,31 @@ HOME=$home2 zsh -f "$hook"
 [[ $(snapshot "$home2/.claude/skills") == $before ]] ||
   fail 'a second run changed the clean home'
 
+# Absolute links into the shared root are sync-owned too: removed for plugin
+# and retired names, left alone for ordinary skills, and links elsewhere or
+# real directories of the same name are never touched.
+home3=$test_root/home3
+agent3=$home3/.agents/skills
+claude3=$home3/.claude/skills
+mkdir -p "$agent3/developing-shell-scripts" "$agent3/code-review" \
+  "$agent3/yeet" "$agent3/wayfinder" "$agent3/tdd" "$claude3/wayfinder"
+print -r -- own >"$claude3/wayfinder/SKILL.md"
+ln -s "$agent3/code-review" "$claude3/code-review"
+ln -s "$agent3/yeet" "$claude3/yeet"
+ln -s "$agent3/developing-shell-scripts" "$claude3/developing-shell-scripts"
+ln -s /elsewhere/tdd "$claude3/tdd"
+HOME=$home3 zsh -f "$hook"
+[[ ! -e $claude3/code-review && ! -L $claude3/code-review ]] ||
+  fail 'an absolute shared-root link for a plugin-provided name was kept or recreated'
+[[ ! -e $claude3/yeet && ! -L $claude3/yeet ]] ||
+  fail 'an absolute shared-root link for a retired name was kept'
+[[ -d $claude3/wayfinder && ! -L $claude3/wayfinder &&
+  $(<$claude3/wayfinder/SKILL.md) == own ]] ||
+  fail 'a same-name real directory was touched'
+[[ -L $claude3/tdd && $(readlink "$claude3/tdd") == /elsewhere/tdd ]] ||
+  fail 'a link outside the shared root was touched'
+[[ -L $claude3/developing-shell-scripts &&
+  $(readlink "$claude3/developing-shell-scripts") == "$agent3/developing-shell-scripts" ]] ||
+  fail 'an existing absolute shared-root link to a regular skill was rewritten'
+
 print -r -- 'Claude skill sync: PASS'

@@ -7,7 +7,7 @@ main() {
 
   local agent_skills=${HOME:?HOME must be set}/.agents/skills
   local claude_skills=$HOME/.claude/skills
-  local link skill skill_name
+  local link skill skill_name target
   local -a broken_links skills
 
   is_retired_skill() {
@@ -46,7 +46,9 @@ main() {
   broken_links=("$claude_skills"/*(ND@))
   for link in $broken_links; do
     skill_name=${link:t}
-    [[ $(readlink "$link") == "../../.agents/skills/$skill_name" ]] || continue
+    target=$(readlink "$link")
+    [[ $target == "../../.agents/skills/$skill_name" ||
+      $target == "$agent_skills/$skill_name" ]] || continue
     if is_retired_skill "$skill_name" || is_plugin_provided_skill "$skill_name"; then
       rm -- "$link"
       continue
