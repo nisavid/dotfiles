@@ -5,8 +5,9 @@
 # to ~/.claude/settings.json; accepted is a record that it does not read. The
 # modifier writes no key for a plugin on neither list: one with no entry loads
 # normally, and an existing entry, such as one turned off by hand, is kept.
-# github, greptile and context7 stay forced off at the official marketplace by
-# the modifier, as before.
+# The modifier also forces github, greptile and context7 off at the official
+# marketplace and removes the stale serena@claude-plugins-official entry, as
+# before.
 [claudePlugins]
 # The accepted plugins, kept as a record; tests/secret-injection-bindings.zsh
 # checks that it shares no name with explicitlyOff.
