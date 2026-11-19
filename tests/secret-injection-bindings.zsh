@@ -312,11 +312,42 @@ cp -- "$test_dir/account-manifest.json" "$account/manifest.json"
 cp -- "$plugins_root/installed_plugins.json" "$test_dir/installed-plugins.json"
 print -rn -- '{"version": 2, "plugins": {' > "$plugins_root/installed_plugins.json"
 expect_modifier_failure 'a truncated installed-plugin registry must fail the apply'
+{ cat -- "$test_dir/installed-plugins.json"; print -r -- '{"plugins": {}}'; } > "$plugins_root/installed_plugins.json"
+expect_modifier_failure 'an installed-plugin registry holding two JSON documents must fail the apply'
 jq '.plugins["serena@claude-plugins-official"] = []' "$test_dir/installed-plugins.json" > "$plugins_root/installed_plugins.json"
 "$settings_modifier" < "$test_dir/plugins-input.json" |
   jq -e '.enabledPlugins["serena@claude-plugins-official"] == false' > /dev/null ||
   fail 'an installed Serena plugin must be off, not removed and left enabled'
+# Serena mid-input, with new keys (such as supabase@inline) that sort after it.
+cat > "$test_dir/serena-input.json" <<'EOF'
+{"enabledPlugins": {
+  "codex@openai-codex": true,
+  "serena@claude-plugins-official": true,
+  "mergecraft@inline": true
+}}
+EOF
+"$settings_modifier" < "$test_dir/serena-input.json" > "$test_dir/serena-output.json"
+jq -e '.enabledPlugins["serena@claude-plugins-official"] == false and
+  .enabledPlugins["supabase@inline"] == false' "$test_dir/serena-output.json" > /dev/null ||
+  fail 'an installed Serena plugin must be off beside the other swept entries'
+"$settings_modifier" < "$test_dir/serena-output.json" > "$test_dir/serena-output-2.json"
+cmp -s "$test_dir/serena-output.json" "$test_dir/serena-output-2.json" ||
+  fail 'the settings modifier must be idempotent when an installed Serena plugin is swept off'
 cp -- "$test_dir/installed-plugins.json" "$plugins_root/installed_plugins.json"
+# Every manifest and plugin.json must hold exactly one JSON document.
+{ cat -- "$test_dir/account-manifest.json"; print -r -- '}'; } > "$account/manifest.json"
+expect_modifier_failure 'an account manifest with trailing garbage must fail the apply'
+{ cat -- "$test_dir/account-manifest.json"; print -r -- '{"plugins":[]}'; } > "$account/manifest.json"
+expect_modifier_failure 'an account manifest holding two JSON documents must fail the apply'
+cp -- "$test_dir/account-manifest.json" "$account/manifest.json"
+print -r -- '{"name":"listed"} {"name":"second"}' > "$account/listed-name~g2/.claude-plugin/plugin.json"
+expect_modifier_failure 'an account-layer plugin.json holding two JSON documents must fail the apply'
+print -r -- '{"name":"listed"} ]' > "$account/listed-name~g2/.claude-plugin/plugin.json"
+expect_modifier_failure 'an account-layer plugin.json with trailing garbage must fail the apply'
+cp -- "$test_dir/listed-plugin.json" "$account/listed-name~g2/.claude-plugin/plugin.json"
+print -r -- '{"name":"unlisted-synced"} {"name":"second"}' > "$account/unlisted-synced/.claude-plugin/plugin.json"
+expect_modifier_failure 'a synced plugin.json holding two JSON documents must fail the apply'
+plugin_copy unlisted-synced unlisted-synced
 "$settings_modifier" < "$test_dir/plugins-input.json" | cmp -s - "$test_dir/plugins-output.json" ||
   fail 'restored plugin sources must give the original output'
 

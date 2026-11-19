@@ -71,7 +71,9 @@ accepted = [
 ]
 
 # Off in every form even when no manifest, synced copy or registry entry
-# names them at apply time.
+# names them at apply time. Serena is on neither list: the modifier removes its
+# stale serena@claude-plugins-official entry unless the sweep turns that entry
+# off, as it does when the installed-plugin registry lists it.
 explicitlyOff = [
   "mattpocock-skills",
   "huggingface-skills",

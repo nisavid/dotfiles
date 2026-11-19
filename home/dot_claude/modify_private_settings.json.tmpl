@@ -11,10 +11,11 @@ shopt -s nullglob
 {{-   end }}
 {{- end }}
 
-# Claude Code enables any plugin without an enabledPlugins entry. In the client
-# code observed for one version, it keys each plugin copy by the name its own
-# .claude-plugin/plugin.json declares, not by its directory name or by the name
-# an account manifest lists; dotfiles#479 tracks confirming that. Every plugin
+# Claude Code enables any plugin without an enabledPlugins entry. Its @inline
+# keys use the name the plugin's own .claude-plugin/plugin.json declares; its
+# documentation leaves the @synced name unstated, and live keys show the
+# declared name there too. Neither key uses a directory name or the name an
+# account manifest lists (dotfiles#479). Every plugin
 # name found at apply time in an account plugin layer, in the synced plugin
 # directory or in the installed-plugin registry that is not accepted gets its
 # @inline, @synced and installed marketplace entries set to false. Accepted
@@ -27,6 +28,10 @@ explicitly_off={{ $plugins.explicitlyOff | toJson | squote }}
 one_copy_off={{ $plugins.oneCopyPerSkill.off | toJson | squote }}
 one_copy_on={{ $plugins.oneCopyPerSkill.on | toJson | squote }}
 
+# Every manifest and plugin.json is read with -n through this filter, so an
+# empty file, trailing garbage or a second JSON document fails the read.
+one_document='[inputs] | if length == 1 then .[0] else error("expected one JSON document") end'
+
 # errexit is off inside the command substitution that calls these functions,
 # so every failure returns explicitly (bash 3.2 has no inherit_errexit).
 declared_name() {
@@ -35,7 +40,7 @@ declared_name() {
     printf 'plugin copy has no plugin.json: %s\n' "$1" >&2
     return 1
   fi
-  name=$(jq -er '.name | select(type == "string" and length > 0)' "$plugin_json") || {
+  name=$(jq -n -er "$one_document"' | .name | select(type == "string" and length > 0)' "$plugin_json") || {
     printf 'plugin.json declares no readable name: %s\n' "$plugin_json" >&2
     return 1
   }
@@ -48,9 +53,7 @@ account_layer_names() {
   local manifest layer entries entry
   for manifest in "$plugins_dir"/synced/*/manifest.json; do
     layer=${manifest%/manifest.json}
-    # -n with input fails on an empty manifest instead of reading no values.
-    entries=$(jq -n -r '
-      input | .plugins |
+    entries=$(jq -n -r "$one_document"' | .plugins |
       if type == "array" then .[] else error("plugins is not an array") end |
       if (.name | type) == "string" and
         (.name | test("^[A-Za-z0-9][A-Za-z0-9._-]*$")) and
@@ -83,7 +86,10 @@ plugin_names() {
 found=$(plugin_names | jq -R -s -c 'split("\n") | map(select(length > 0))')
 registry=$plugins_dir/installed_plugins.json
 if [[ -f $registry ]]; then
-  installed=$(jq -c '.plugins // {} | keys' "$registry")
+  installed=$(jq -n -c "$one_document"' | .plugins // {} | keys' "$registry") || {
+    printf 'unreadable installed-plugin registry: %s\n' "$registry" >&2
+    exit 1
+  }
 else
   installed='[]'
 fi
@@ -104,8 +110,11 @@ jq \
     [$installed[] | select($is_unaccepted[plugin_name])] +
     $one_copy_off) as $off |
   .enabledPlugins = (.enabledPlugins // {}) |
-  del(.enabledPlugins["serena@claude-plugins-official"]) |
   reduce $off[] as $entry (.; .enabledPlugins[$entry] = false) |
+  # Remove the stale Serena entry unless the sweep turns Serena off; deleting
+  # first would move a kept entry to the end and break idempotence.
+  if any($off[]; . == "serena@claude-plugins-official") then .
+  else del(.enabledPlugins["serena@claude-plugins-official"]) end |
   reduce $one_copy_on[] as $entry (.;
     if .enabledPlugins | has($entry) then .enabledPlugins[$entry] = true else . end) |
   .enabledPlugins["context7@claude-plugins-official"] = false |
