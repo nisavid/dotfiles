@@ -309,6 +309,15 @@ print -r -- '{"version": 2, "plugins": ["supabase@claude-plugins-official"]}' > 
 expect_modifier_failure 'an installed-plugin registry whose plugins is not an object must fail the apply'
 print -r -- '{"version": 2, "plugins": []}' > "$registry"
 expect_modifier_failure 'an installed-plugin registry whose plugins is an empty list must fail the apply'
+print -r -- '{"plugins": false}' > "$registry"
+expect_modifier_failure 'an installed-plugin registry whose plugins is false must fail the apply'
+print -r -- '{"plugins": null}' > "$registry"
+expect_modifier_failure 'an installed-plugin registry whose plugins is null must fail the apply'
+print -r -- '{}' > "$registry"
+expect_modifier_failure 'an installed-plugin registry with no plugins key must fail the apply'
+print -r -- '{"plugins": {}}' > "$registry"
+"$settings_modifier" < "$test_dir/plugins-input.json" > /dev/null ||
+  fail 'an installed-plugin registry with an empty plugins object must be valid'
 cp -- "$test_dir/installed-plugins.json" "$registry"
 "$settings_modifier" < "$test_dir/plugins-input.json" | cmp -s - "$test_dir/plugins-output.json" ||
   fail 'a restored installed-plugin registry must give the original output'

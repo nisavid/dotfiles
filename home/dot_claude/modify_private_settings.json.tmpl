@@ -28,11 +28,12 @@ one_copy_on={{ $plugins.oneCopyPerSkill.on | toJson | squote }}
 
 # The registry is used only to find the <name>@<marketplace> keys of the
 # explicitlyOff names. It is read with -n as a list of documents, so an empty
-# file, trailing garbage or a second JSON document fails the apply.
+# file, trailing garbage, a second JSON document or a plugins value that is not
+# an object fails the apply.
 if [[ -f $registry ]]; then
   installed=$(jq -n -c '[inputs] |
     if length == 1 then .[0] else error("expected one JSON document") end |
-    .plugins // {} |
+    .plugins |
     if type == "object" then keys else error("plugins is not an object") end
   ' "$registry") || {
     printf 'unreadable installed-plugin registry: %s\n' "$registry" >&2
