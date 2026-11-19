@@ -1,10 +1,9 @@
 # Claude Code plugin enablement (dotfiles#479), settled 2026-11-19;
 # real-skills-leashed moved to explicitlyOff the same day.
-# Claude Code enables a plugin that has no enabledPlugins entry.
-# home/dot_claude/modify_private_settings.json.tmpl writes false for the
-# explicitlyOff names and the oneCopyPerSkill.off entries, keeps an existing
-# oneCopyPerSkill.on entry true, and writes no key for any other plugin: a
-# plugin on neither list loads normally.
+# accepted plugins load; explicitlyOff plugins are turned off; a plugin on
+# neither list loads normally; oneCopyPerSkill picks which copy of a duplicated
+# plugin loads. home/dot_claude/modify_private_settings.json.tmpl applies these
+# lists to ~/.claude/settings.json.
 [claudePlugins]
 # The accepted plugins, kept as a record: the modifier does not read this list,
 # and tests/secret-injection-bindings.zsh checks that it shares no name with

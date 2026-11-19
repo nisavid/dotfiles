@@ -230,6 +230,8 @@ jq -e '.enabledPlugins | to_entries[:7] == [
   {key: "firecrawl@claude-plugins-official", value: true}
 ]' "$test_dir/plugins-output.json" > /dev/null ||
   fail 'existing enabledPlugins entries must keep their place and value, except explicitly-off ones turned off and the stale Serena entry removed'
+jq -e '.enabledPlugins | has("serena@claude-plugins-official") | not' "$test_dir/plugins-output.json" > /dev/null ||
+  fail 'the stale Serena entry must be removed'
 jq -e --argjson off "$explicitly_off" '
   (.enabledPlugins | to_entries[7:]) as $added |
   ($added | all(.value == false)) and
@@ -250,10 +252,13 @@ jq -e --argjson off "$explicitly_off" '
     ] | sort)
 ' "$test_dir/plugins-output.json" > /dev/null ||
   fail 'the modifier must add false entries for exactly the explicitly-off names in both account forms and their installed keys, the one-copy rules and the managed entries'
-jq -e '.enabledPlugins | keys | map(select(test(
-  "^(unlisted-local|unlisted-fresh|supabase-extra|hand-curated)@(inline|synced)$|^unlisted-fresh@|^supabase-extra@|^(codex|mergecraft|tricritical|real-skills-unleashed)@(inline|synced)$|^html@|^serena@"
-))) == ["hand-curated@inline", "mergecraft@inline", "tricritical@synced"]' "$test_dir/plugins-output.json" > /dev/null ||
-  fail 'plugins on neither list and accepted plugins must get no new key'
+python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF' || fail 'the fixture names on neither list must appear in neither list'
+import sys, tomllib
+with open(sys.argv[1], "rb") as data_file:
+    plugins = tomllib.load(data_file)["claudePlugins"]
+assert not {"unlisted-local", "unlisted-fresh", "supabase-extra", "hand-curated"} & (
+    set(plugins["accepted"]) | set(plugins["explicitlyOff"]))
+PYEOF
 diff <(jq 'del(.enabledPlugins)' "$test_dir/plugins-input.json") \
   <(jq 'del(.enabledPlugins)' "$test_dir/plugins-output.json") > /dev/null ||
   fail 'settings other than enabledPlugins must be preserved'
@@ -268,32 +273,12 @@ print -r -- '{"enabledPlugins": {"html@skills-dir": false}}' |
   "$settings_modifier" | jq -e '.enabledPlugins["html@skills-dir"] == true' > /dev/null ||
   fail 'the html user-skills entry must stay on'
 
-# Serena at claude-plugins-official is off while installed, in place, and its
-# stale entry is removed otherwise.
+# The stale Serena entry is removed even when the registry lists Serena.
 cp -- "$registry" "$test_dir/installed-plugins.json"
 jq '.plugins["serena@claude-plugins-official"] = []' "$test_dir/installed-plugins.json" > "$registry"
 "$settings_modifier" < "$test_dir/plugins-input.json" |
-  jq -e '.enabledPlugins | to_entries[7] == {key: "serena@claude-plugins-official", value: false}' > /dev/null ||
-  fail 'an installed Serena plugin must be off in place, not removed and left enabled'
-print -r -- '{}' | "$settings_modifier" |
-  jq -e '.enabledPlugins["serena@claude-plugins-official"] == false' > /dev/null ||
-  fail 'an installed Serena plugin without an entry must be turned off'
-# Serena mid-input, with new keys (such as supabase@inline) that sort after it.
-cat > "$test_dir/serena-input.json" <<'EOF'
-{"enabledPlugins": {
-  "codex@openai-codex": true,
-  "serena@claude-plugins-official": true,
-  "mergecraft@inline": true
-}}
-EOF
-"$settings_modifier" < "$test_dir/serena-input.json" > "$test_dir/serena-output.json"
-jq -e '.enabledPlugins | to_entries[:3] | map(.key) ==
-  ["codex@openai-codex", "serena@claude-plugins-official", "mergecraft@inline"]' \
-  "$test_dir/serena-output.json" > /dev/null ||
-  fail 'an installed Serena plugin must be turned off where its entry stands'
-"$settings_modifier" < "$test_dir/serena-output.json" > "$test_dir/serena-output-2.json"
-cmp -s "$test_dir/serena-output.json" "$test_dir/serena-output-2.json" ||
-  fail 'the settings modifier must be idempotent when an installed Serena plugin is turned off'
+  jq -e '.enabledPlugins | has("serena@claude-plugins-official") | not' > /dev/null ||
+  fail 'the settings modifier must write no Serena key, even when the registry lists Serena'
 
 # Without a registry, only the account forms of the explicitly-off names are set.
 rm -f -- "$registry"
