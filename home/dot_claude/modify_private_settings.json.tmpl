@@ -11,42 +11,74 @@ shopt -s nullglob
 {{-   end }}
 {{- end }}
 
-# Claude Code enables any plugin without an enabledPlugins entry.
-# Directory-catalog entries appear in account manifests under their UUID; their
-# real names come from the plugin.json in the synced copy. Every plugin
-# name found at apply time in an account plugin manifest, in the synced plugin
+# Claude Code enables any plugin without an enabledPlugins entry, and keys each
+# plugin copy by the name its own .claude-plugin/plugin.json declares, never by
+# its directory name or by the name an account manifest lists. Every plugin
+# name found at apply time in an account plugin layer, in the synced plugin
 # directory or in the installed-plugin registry that is not accepted gets its
 # @inline, @synced and installed marketplace entries set to false. Accepted
 # names get no entry, so their current state is preserved (dotfiles#479).
+# A plugin copy without a readable plugin.json declaring a name fails the apply
+# rather than being skipped.
 plugins_dir={{ joinPath .chezmoi.homeDir ".claude/plugins" | quote }}
 accepted={{ $plugins.accepted | toJson | squote }}
 explicitly_off={{ $plugins.explicitlyOff | toJson | squote }}
 one_copy_off={{ $plugins.oneCopyPerSkill.off | toJson | squote }}
 one_copy_on={{ $plugins.oneCopyPerSkill.on | toJson | squote }}
 
-uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+# errexit is off inside the command substitution that calls these functions,
+# so every failure returns explicitly (bash 3.2 has no inherit_errexit).
+declared_name() {
+  local plugin_json=${1}.claude-plugin/plugin.json name
+  if [[ ! -f $plugin_json ]]; then
+    printf 'plugin copy has no plugin.json: %s\n' "$1" >&2
+    return 1
+  fi
+  name=$(jq -er '.name | select(type == "string" and length > 0)' "$plugin_json") || {
+    printf 'plugin.json declares no readable name: %s\n' "$plugin_json" >&2
+    return 1
+  }
+  printf '%s\n' "$name"
+}
 
-synced_names() {
-  local manifest plugin_dir name
+# An account plugin layer is synced/<account>: its manifest.json lists each
+# plugin, whose copy is the directory <name> or <name>~g<generation> beside it.
+account_layer_names() {
+  local manifest layer entries entry
   for manifest in "$plugins_dir"/synced/*/manifest.json; do
-    jq -r --arg uuid "$uuid_pattern" \
-      '.plugins[]?.name // empty | select(test($uuid) | not)' "$manifest"
-  done
-  for plugin_dir in "$plugins_dir"/synced/*/*/; do
-    name=${plugin_dir%/}
-    name=${name##*/}
-    name=${name%\~g[0-9]*}
-    if [[ $name =~ $uuid_pattern ]]; then
-      if [[ -f ${plugin_dir}.claude-plugin/plugin.json ]]; then
-        jq -r '.name // empty' "${plugin_dir}.claude-plugin/plugin.json"
-      fi
-    else
-      printf '%s\n' "$name"
-    fi
+    layer=${manifest%/manifest.json}
+    entries=$(jq -r '
+      .plugins |
+      if type == "array" then .[] else error("plugins is not an array") end |
+      if (.name | type) == "string" and
+        (.name | test("^[A-Za-z0-9][A-Za-z0-9._-]*$")) and
+        (.generation == null or (.generation | type) == "number")
+      then .name + (if .generation == null then "" else "~g\(.generation)" end)
+      else error("invalid plugin entry") end
+    ' "$manifest") || {
+      printf 'unreadable account plugin manifest: %s\n' "$manifest" >&2
+      return 1
+    }
+    while IFS= read -r entry; do
+      [[ -n $entry ]] || continue
+      declared_name "$layer/$entry/" || return 1
+    done <<< "$entries"
   done
 }
 
-found=$(synced_names | jq -R -s -c 'split("\n") | map(select(length > 0))')
+synced_names() {
+  local plugin_dir
+  for plugin_dir in "$plugins_dir"/synced/*/*/; do
+    declared_name "$plugin_dir" || return 1
+  done
+}
+
+plugin_names() {
+  account_layer_names || return 1
+  synced_names || return 1
+}
+
+found=$(plugin_names | jq -R -s -c 'split("\n") | map(select(length > 0))')
 registry=$plugins_dir/installed_plugins.json
 if [[ -f $registry ]]; then
   installed=$(jq -c '.plugins // {} | keys' "$registry")

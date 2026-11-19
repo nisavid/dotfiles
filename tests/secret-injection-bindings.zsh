@@ -176,11 +176,23 @@ PYEOF
 
 plugins_root=$fixture_home/.claude/plugins
 account=$plugins_root/synced/fixture-account
-mkdir -p -- "$account/unlisted-synced" "$account/tricritical~g2" "$account/stale-copy~g3" \
-  "$account/0a1b2c3d-0000-4000-8000-000000000001/.claude-plugin"
-print -r -- '{"plugins":[{"name":"unlisted-manifest"},{"name":"mergecraft"},{"name":"firecrawl"},{"name":"0a1b2c3d-0000-4000-8000-000000000002"}]}' > "$account/manifest.json"
-print -r -- '{"name":"unlisted-uuid"}' > "$account/0a1b2c3d-0000-4000-8000-000000000001/.claude-plugin/plugin.json"
+# plugin_copy DIRECTORY DECLARED-NAME: a plugin copy in the fixture account layer.
+plugin_copy() {
+  mkdir -p -- "$account/$1/.claude-plugin"
+  print -r -- "{\"name\":\"$2\"}" > "$account/$1/.claude-plugin/plugin.json"
+}
+# Listed in the account manifest: the account plugin layer.
+plugin_copy 0a1b2c3d-0000-4000-8000-000000000001 unlisted-uuid
+plugin_copy 'listed-name~g2' declared-name
+plugin_copy renamed-layer mergecraft
+plugin_copy firecrawl firecrawl
+# Unlisted synced copies.
+plugin_copy unlisted-synced unlisted-synced
+plugin_copy 'tricritical~g2' tricritical
+plugin_copy renamed-dir tricritical
+print -r -- '{"plugins":[{"name":"0a1b2c3d-0000-4000-8000-000000000001"},{"name":"listed-name","generation":2},{"name":"renamed-layer"},{"name":"firecrawl"}]}' > "$account/manifest.json"
 print -r -- '{"server_plugin_id":"fixture"}' > "$account/unlisted-synced.meta.json"
+mkdir -p -- "$account/.hidden-state"
 cat > "$plugins_root/installed_plugins.json" <<'EOF'
 {"version": 2, "plugins": {
   "unlisted-local@claude-plugins-official": [],
@@ -212,8 +224,10 @@ EOF
 "$settings_modifier" < "$test_dir/plugins-input.json" > "$test_dir/plugins-output.json"
 jq -e '
   .enabledPlugins as $p |
-  (["unlisted-manifest", "unlisted-synced", "stale-copy", "unlisted-uuid", "unlisted-local"] |
+  (["unlisted-synced", "unlisted-uuid", "unlisted-local", "declared-name"] |
     all(. as $n | $p[$n + "@inline"] == false and $p[$n + "@synced"] == false)) and
+  ($p | keys | map(select(test("^(listed-name|renamed-layer|renamed-dir|\\.hidden-state)[@~]"))) |
+    length == 0) and
   $p["unlisted-local@claude-plugins-official"] == false and
   $p["supabase@claude-plugins-official"] == false and
   $p["supabase@inline"] == false and $p["supabase@synced"] == false and
@@ -239,10 +253,9 @@ jq -e '
   $p["context7@claude-plugins-official"] == false and
   $p["github@claude-plugins-official"] == false and
   $p["greptile@claude-plugins-official"] == false and
-  ($p | has("stale-copy~g3@inline") | not) and
   ($p | keys | map(select(startswith("0a1b2c3d"))) | length == 0)
 ' "$test_dir/plugins-output.json" > /dev/null ||
-  fail 'plugins not on the accepted list must be off in every found form, and accepted plugins untouched'
+  fail 'plugins not on the accepted list must be off in every found form under their declared names, and accepted plugins untouched'
 diff <(jq 'del(.enabledPlugins)' "$test_dir/plugins-input.json") \
   <(jq 'del(.enabledPlugins)' "$test_dir/plugins-output.json") > /dev/null ||
   fail 'settings other than enabledPlugins must be preserved'
@@ -254,6 +267,45 @@ cmp -s "$test_dir/plugins-output.json" "$test_dir/plugins-output-2.json" ||
 print -r -- '{"enabledPlugins": {"html@skills-dir": false}}' |
   "$settings_modifier" | jq -e '.enabledPlugins["html@skills-dir"] == true' > /dev/null ||
   fail 'the html user-skills entry must stay on'
+
+# An unreadable plugin source fails the apply with no output, whatever the glob order.
+expect_modifier_failure() {
+  local output
+  if output=$("$settings_modifier" < "$test_dir/plugins-input.json" 2> /dev/null); then
+    fail "$1"
+  fi
+  [[ -z $output ]] || fail "$1"
+}
+mkdir -p -- "$account/aaa-truncated/.claude-plugin"
+print -rn -- '{"name":"trunc' > "$account/aaa-truncated/.claude-plugin/plugin.json"
+expect_modifier_failure 'a truncated synced plugin.json must fail the apply'
+rm -rf -- "$account/aaa-truncated"
+plugin_copy nameless-copy ''
+expect_modifier_failure 'a synced plugin.json without a name must fail the apply'
+print -r -- '{"version":"1.0.0"}' > "$account/nameless-copy/.claude-plugin/plugin.json"
+expect_modifier_failure 'a synced plugin.json without a name field must fail the apply'
+rm -rf -- "$account/nameless-copy"
+mkdir -p -- "$account/stale-copy~g3"
+expect_modifier_failure 'a synced copy without plugin.json must fail the apply'
+rm -rf -- "$account/stale-copy~g3"
+cp -- "$account/listed-name~g2/.claude-plugin/plugin.json" "$test_dir/listed-plugin.json"
+print -rn -- '{"name":' > "$account/listed-name~g2/.claude-plugin/plugin.json"
+expect_modifier_failure 'a truncated account-layer plugin.json must fail the apply'
+print -r -- '{"name":null}' > "$account/listed-name~g2/.claude-plugin/plugin.json"
+expect_modifier_failure 'an account-layer plugin.json without a name must fail the apply'
+cp -- "$test_dir/listed-plugin.json" "$account/listed-name~g2/.claude-plugin/plugin.json"
+cp -- "$account/manifest.json" "$test_dir/account-manifest.json"
+print -r -- '{"plugins":[{"name":"missing-copy"}]}' > "$account/manifest.json"
+expect_modifier_failure 'an account manifest entry without a plugin copy must fail the apply'
+print -rn -- '{"plugins":[{"name":' > "$account/manifest.json"
+expect_modifier_failure 'a truncated account manifest must fail the apply'
+cp -- "$test_dir/account-manifest.json" "$account/manifest.json"
+cp -- "$plugins_root/installed_plugins.json" "$test_dir/installed-plugins.json"
+print -rn -- '{"version": 2, "plugins": {' > "$plugins_root/installed_plugins.json"
+expect_modifier_failure 'a truncated installed-plugin registry must fail the apply'
+cp -- "$test_dir/installed-plugins.json" "$plugins_root/installed_plugins.json"
+"$settings_modifier" < "$test_dir/plugins-input.json" | cmp -s - "$test_dir/plugins-output.json" ||
+  fail 'restored plugin sources must give the original output'
 
 mcp_config_modifier=$test_dir/modify-mcp-config
 render_modifier home/dot_config/modify_private_mcp-config.json.tmpl "$mcp_config_modifier"
