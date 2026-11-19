@@ -162,6 +162,99 @@ jq -e '
   (.enabledPlugins | has("serena@claude-plugins-official") | not)
 ' "$test_dir/settings-output.json" > /dev/null || fail 'credential-dependent plugin MCPs must be replaced without disabling Firecrawl skills'
 
+# Plugin enablement from the accepted list (dotfiles#479).
+python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF' || fail 'accepted and explicitly-off plugin lists must hold 63 and 13 distinct, disjoint names'
+import sys, tomllib
+with open(sys.argv[1], "rb") as data_file:
+    plugins = tomllib.load(data_file)["claudePlugins"]
+accepted, off = plugins["accepted"], plugins["explicitlyOff"]
+assert len(accepted) == len(set(accepted)) == 63
+assert len(off) == len(set(off)) == 13
+assert not set(accepted) & set(off)
+assert "real-skills-leashed" in off
+PYEOF
+
+plugins_root=$fixture_home/.claude/plugins
+account=$plugins_root/synced/fixture-account
+mkdir -p -- "$account/unlisted-synced" "$account/tricritical~g2" "$account/stale-copy~g3" \
+  "$account/0a1b2c3d-0000-4000-8000-000000000001/.claude-plugin"
+print -r -- '{"plugins":[{"name":"unlisted-manifest"},{"name":"mergecraft"},{"name":"firecrawl"},{"name":"0a1b2c3d-0000-4000-8000-000000000002"}]}' > "$account/manifest.json"
+print -r -- '{"name":"unlisted-uuid"}' > "$account/0a1b2c3d-0000-4000-8000-000000000001/.claude-plugin/plugin.json"
+print -r -- '{"server_plugin_id":"fixture"}' > "$account/unlisted-synced.meta.json"
+cat > "$plugins_root/installed_plugins.json" <<'EOF'
+{"version": 2, "plugins": {
+  "unlisted-local@claude-plugins-official": [],
+  "supabase@claude-plugins-official": [],
+  "real-skills-leashed@fixture-market": [],
+  "codex@openai-codex": [],
+  "cloudflare@claude-plugins-official": [],
+  "firecrawl@claude-plugins-official": []
+}}
+EOF
+cat > "$test_dir/plugins-input.json" <<'EOF'
+{
+  "unrelated": {
+    "number": 1.50,
+    "text": "é é",
+    "list": [3, 1, 2]
+  },
+  "enabledPlugins": {
+    "codex@openai-codex": true,
+    "mergecraft@inline": true,
+    "tricritical@synced": false,
+    "unlisted-local@claude-plugins-official": true,
+    "firecrawl@claude-plugins-official": true,
+    "serena@claude-plugins-official": true
+  },
+  "trailing": null
+}
+EOF
+"$settings_modifier" < "$test_dir/plugins-input.json" > "$test_dir/plugins-output.json"
+jq -e '
+  .enabledPlugins as $p |
+  (["unlisted-manifest", "unlisted-synced", "stale-copy", "unlisted-uuid", "unlisted-local"] |
+    all(. as $n | $p[$n + "@inline"] == false and $p[$n + "@synced"] == false)) and
+  $p["unlisted-local@claude-plugins-official"] == false and
+  $p["supabase@claude-plugins-official"] == false and
+  $p["supabase@inline"] == false and $p["supabase@synced"] == false and
+  $p["real-skills-leashed@fixture-market"] == false and
+  $p["real-skills-leashed@inline"] == false and $p["real-skills-leashed@synced"] == false and
+  $p["mattpocock-skills@inline"] == false and $p["mattpocock-skills@synced"] == false and
+  $p["codex@openai-codex"] == true and
+  $p["mergecraft@inline"] == true and
+  $p["tricritical@synced"] == false and
+  ($p | has("mergecraft@synced") | not) and
+  ($p | has("tricritical@inline") | not) and
+  ($p | has("codex@inline") | not) and
+  ($p | keys | map(select(startswith("real-skills-unleashed@"))) | length == 0) and
+  $p["cloudflare@claude-plugins-official"] == false and
+  ($p | has("cloudflare@inline") | not) and
+  $p["linear@claude-plugins-official"] == false and
+  $p["claude-code-setup@claude-plugins-official"] == false and
+  $p["skill-creator@claude-plugins-official"] == false and
+  $p["firecrawl@inline"] == false and $p["firecrawl@synced"] == false and
+  $p["firecrawl@claude-plugins-official"] == true and
+  ($p | has("html@skills-dir") | not) and
+  ($p | has("serena@claude-plugins-official") | not) and
+  $p["context7@claude-plugins-official"] == false and
+  $p["github@claude-plugins-official"] == false and
+  $p["greptile@claude-plugins-official"] == false and
+  ($p | has("stale-copy~g3@inline") | not) and
+  ($p | keys | map(select(startswith("0a1b2c3d"))) | length == 0)
+' "$test_dir/plugins-output.json" > /dev/null ||
+  fail 'plugins not on the accepted list must be off in every found form, and accepted plugins untouched'
+diff <(jq 'del(.enabledPlugins)' "$test_dir/plugins-input.json") \
+  <(jq 'del(.enabledPlugins)' "$test_dir/plugins-output.json") > /dev/null ||
+  fail 'settings other than enabledPlugins must be preserved'
+jq 'del(.enabledPlugins)' "$test_dir/plugins-output.json" | grep -q '"number": 1.50' ||
+  fail 'number literals in unrelated settings must be preserved byte for byte'
+"$settings_modifier" < "$test_dir/plugins-output.json" > "$test_dir/plugins-output-2.json"
+cmp -s "$test_dir/plugins-output.json" "$test_dir/plugins-output-2.json" ||
+  fail 'the settings modifier must be idempotent'
+print -r -- '{"enabledPlugins": {"html@skills-dir": false}}' |
+  "$settings_modifier" | jq -e '.enabledPlugins["html@skills-dir"] == true' > /dev/null ||
+  fail 'the html user-skills entry must stay on'
+
 mcp_config_modifier=$test_dir/modify-mcp-config
 render_modifier home/dot_config/modify_private_mcp-config.json.tmpl "$mcp_config_modifier"
 authorization_header='Bearer '
