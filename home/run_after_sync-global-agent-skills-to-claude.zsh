@@ -23,14 +23,18 @@ main() {
 
   # Names that a selected Claude plugin provides. A user skill shadows the
   # plugin's skill of the same name, so these are never projected into Claude.
+  # The Firecrawl skills are deliberately absent: Claude loads them from the
+  # shared root, so they stay projected.
   # Keep this separate from the retired-skill list above.
   is_plugin_provided_skill() {
     case $1 in
-    ask-matt | code-review | codebase-design | diagnosing-bugs | domain-modeling | \
+    add-app-to-server | ask-matt | code-review | codebase-design | \
+      convert-web-app | create-mcp-app | diagnosing-bugs | domain-modeling | \
       grill-me | grill-with-docs | grilling | handoff | implement | \
-      improve-codebase-architecture | prototype | research | \
-      setup-matt-pocock-skills | tdd | teach | to-questionnaire | to-spec | \
-      to-tickets | triage | wait-what | wayfinder | wizard | writing-for-agents)
+      improve-codebase-architecture | \
+      migrate-oai-app | prototype | research | setup-matt-pocock-skills | \
+      tdd | teach | to-questionnaire | to-spec | to-tickets | triage | \
+      wait-what | wayfinder | wizard | writing-for-agents)
       return 0
       ;;
     esac

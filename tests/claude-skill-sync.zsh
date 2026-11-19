@@ -58,6 +58,12 @@ plugin_skills=(
   tdd teach to-questionnaire to-spec to-tickets triage wait-what wayfinder
   wizard writing-for-agents
 )
+# Names provided by the MCP apps plugin (#480). The Firecrawl skills are not
+# plugin-provided for this sync: Claude loads them from the shared root.
+extra_plugin_skills=(
+  add-app-to-server convert-web-app create-mcp-app migrate-oai-app
+)
+plugin_skills+=($extra_plugin_skills)
 mkdir -p \
   "$agent_skills/developing-shell-scripts" \
   "$agent_skills/new-skill" \
@@ -76,11 +82,18 @@ for name in $plugin_skills; do
   ln -s "../../.agents/skills/$name" "$claude_skills/$name"
 done
 # Same-name entries that are not links to the shared root stay in place.
-rm -- "$claude_skills/wayfinder" "$claude_skills/tdd"
+rm -- "$claude_skills/wayfinder" "$claude_skills/tdd" \
+  "$claude_skills/add-app-to-server" "$claude_skills/create-mcp-app"
+mkdir -p "$claude_skills/add-app-to-server"
+print -r -- own >"$claude_skills/add-app-to-server/SKILL.md"
+ln -s /elsewhere/create-mcp-app "$claude_skills/create-mcp-app"
 mkdir -p "$claude_skills/wayfinder"
 print -r -- own >"$claude_skills/wayfinder/SKILL.md"
 ln -s /elsewhere/tdd "$claude_skills/tdd"
 print -r -- preserved >"$claude_skills/new-skill"
+# A Firecrawl skill linked from the shared root is not plugin-provided.
+mkdir -p "$agent_skills/firecrawl-scrape"
+ln -s ../../.agents/skills/firecrawl-scrape "$claude_skills/firecrawl-scrape"
 ln -s ../../.agents/skills/retired-skill "$claude_skills/retired-skill"
 ln -s /missing/claude-specific-skill "$claude_skills/claude-specific-skill"
 ln -s ../../../../.agents/skills/retired-nested "$claude_skills/nested/retired-nested"
@@ -100,7 +113,7 @@ assert_skill_link developing-shell-scripts
 assert_skill_link 'skill with spaces'
 assert_retired_skills_absent
 for name in $plugin_skills; do
-  [[ $name == (wayfinder|tdd) ]] && continue
+  [[ $name == (wayfinder|tdd|add-app-to-server|create-mcp-app) ]] && continue
   [[ ! -e $claude_skills/$name && ! -L $claude_skills/$name ]] ||
     fail "plugin-provided $name link was not removed"
 done
@@ -109,6 +122,15 @@ done
   fail 'a non-link plugin-named entry was touched'
 [[ -L $claude_skills/tdd && $(readlink "$claude_skills/tdd") == /elsewhere/tdd ]] ||
   fail 'a plugin-named link outside the shared root was touched'
+[[ -d $claude_skills/add-app-to-server && ! -L $claude_skills/add-app-to-server &&
+  $(<$claude_skills/add-app-to-server/SKILL.md) == own ]] ||
+  fail 'a non-link entry named like an MCP apps skill was touched'
+[[ -L $claude_skills/firecrawl-scrape &&
+  $(readlink "$claude_skills/firecrawl-scrape") == ../../.agents/skills/firecrawl-scrape ]] ||
+  fail 'a Firecrawl skill link into the shared root was removed or changed'
+[[ -L $claude_skills/create-mcp-app &&
+  $(readlink "$claude_skills/create-mcp-app") == /elsewhere/create-mcp-app ]] ||
+  fail 'an MCP apps-named link outside the shared root was touched'
 
 HOME=$home zsh -f "$hook"
 assert_skill_link developing-shell-scripts
@@ -130,7 +152,8 @@ snapshot() {
   done
 }
 home2=$test_root/home2
-mkdir -p "$home2/.agents/skills/developing-shell-scripts" "$home2/.claude/skills"
+mkdir -p "$home2/.agents/skills/developing-shell-scripts" \
+  "$home2/.agents/skills/firecrawl-scrape" "$home2/.claude/skills"
 for name in $plugin_skills; do
   mkdir -p "$home2/.agents/skills/$name"
 done
@@ -141,6 +164,9 @@ for name in $plugin_skills; do
 done
 [[ -L $home2/.claude/skills/developing-shell-scripts ]] ||
   fail 'a regular shared skill was not linked in the clean home'
+[[ -L $home2/.claude/skills/firecrawl-scrape &&
+  $(readlink "$home2/.claude/skills/firecrawl-scrape") == ../../.agents/skills/firecrawl-scrape ]] ||
+  fail 'a Firecrawl skill was not projected like a regular shared skill'
 before=$(snapshot "$home2/.claude/skills")
 HOME=$home2 zsh -f "$hook"
 [[ $(snapshot "$home2/.claude/skills") == $before ]] ||
@@ -159,7 +185,16 @@ ln -s "$agent3/code-review" "$claude3/code-review"
 ln -s "$agent3/yeet" "$claude3/yeet"
 ln -s "$agent3/developing-shell-scripts" "$claude3/developing-shell-scripts"
 ln -s /elsewhere/tdd "$claude3/tdd"
+for name in $extra_plugin_skills; do
+  mkdir -p "$agent3/$name"
+  ln -s "$agent3/$name" "$claude3/$name"
+done
 HOME=$home3 zsh -f "$hook"
+for name in $extra_plugin_skills; do
+  [[ ! -e $claude3/$name && ! -L $claude3/$name ]] ||
+    fail "an absolute shared-root link for plugin-provided $name was kept"
+  [[ -d $agent3/$name ]] || fail "shared copy of $name was removed"
+done
 [[ ! -e $claude3/code-review && ! -L $claude3/code-review ]] ||
   fail 'an absolute shared-root link for a plugin-provided name was kept or recreated'
 [[ ! -e $claude3/yeet && ! -L $claude3/yeet ]] ||
