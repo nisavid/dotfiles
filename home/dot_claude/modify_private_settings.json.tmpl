@@ -1,92 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
-shopt -s nullglob
 {{- $plugins := .claudePlugins }}
-{{- range concat $plugins.accepted $plugins.explicitlyOff }}
+{{- range $plugins.explicitlyOff }}
 {{-   if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]*$" .) }}
-{{-     fail (printf "claudePlugins: invalid plugin name %q" .) }}
-{{-   end }}
-{{-   if and (has . $plugins.explicitlyOff) (has . $plugins.accepted) }}
-{{-     fail (printf "claudePlugins: %q is both accepted and explicitly off" .) }}
+{{-     fail (printf "claudePlugins: invalid explicitly-off plugin name %q" .) }}
 {{-   end }}
 {{- end }}
 
-# Claude Code enables any plugin without an enabledPlugins entry. Its @inline
-# keys use the name the plugin's own .claude-plugin/plugin.json declares; its
-# documentation leaves the @synced name unstated, and live keys show the
-# declared name there too. Neither key uses a directory name or the name an
-# account manifest lists (dotfiles#479). Every plugin
-# name found at apply time in an account plugin layer, in the synced plugin
-# directory or in the installed-plugin registry that is not accepted gets its
-# @inline, @synced and installed marketplace entries set to false. Accepted
-# names get no entry, so their current state is preserved (dotfiles#479).
-# A plugin copy without a readable plugin.json declaring a name fails the apply
-# rather than being skipped.
-plugins_dir={{ joinPath .chezmoi.homeDir ".claude/plugins" | quote }}
-accepted={{ $plugins.accepted | toJson | squote }}
+# Claude Code enables any plugin that has no enabledPlugins entry. This modifier
+# sets only the entries below, keeps every other entry as it is, and writes no
+# key for any other plugin, so a plugin on neither list in
+# .chezmoidata/claude-plugins.toml loads normally (dotfiles#479):
+# - each explicitlyOff name is false as <name>@inline and <name>@synced, and as
+#   each <name>@<marketplace> key the installed-plugin registry lists;
+# - each oneCopyPerSkill.off entry is false, and an existing oneCopyPerSkill.on
+#   entry is true;
+# - context7, github and greptile at claude-plugins-official are false;
+# - serena@claude-plugins-official is false while the registry lists it, and
+#   its stale entry is removed otherwise.
+# @inline and @synced keys use the name the plugin's own
+# .claude-plugin/plugin.json declares, not its directory name; the
+# explicitlyOff names are those declared names.
+registry={{ joinPath .chezmoi.homeDir ".claude/plugins/installed_plugins.json" | quote }}
 explicitly_off={{ $plugins.explicitlyOff | toJson | squote }}
 one_copy_off={{ $plugins.oneCopyPerSkill.off | toJson | squote }}
 one_copy_on={{ $plugins.oneCopyPerSkill.on | toJson | squote }}
 
-# Every manifest and plugin.json is read with -n through this filter, so an
-# empty file, trailing garbage or a second JSON document fails the read.
-one_document='[inputs] | if length == 1 then .[0] else error("expected one JSON document") end'
-
-# errexit is off inside the command substitution that calls these functions,
-# so every failure returns explicitly (bash 3.2 has no inherit_errexit).
-declared_name() {
-  local plugin_json=${1}.claude-plugin/plugin.json name
-  if [[ ! -f $plugin_json ]]; then
-    printf 'plugin copy has no plugin.json: %s\n' "$1" >&2
-    return 1
-  fi
-  name=$(jq -n -er "$one_document"' | .name | select(type == "string" and length > 0)' "$plugin_json") || {
-    printf 'plugin.json declares no readable name: %s\n' "$plugin_json" >&2
-    return 1
-  }
-  printf '%s\n' "$name"
-}
-
-# An account plugin layer is synced/<account>: its manifest.json lists each
-# plugin, whose copy is the directory <name> or <name>~g<generation> beside it.
-account_layer_names() {
-  local manifest layer entries entry
-  for manifest in "$plugins_dir"/synced/*/manifest.json; do
-    layer=${manifest%/manifest.json}
-    entries=$(jq -n -r "$one_document"' | .plugins |
-      if type == "array" then .[] else error("plugins is not an array") end |
-      if (.name | type) == "string" and
-        (.name | test("^[A-Za-z0-9][A-Za-z0-9._-]*$")) and
-        (.generation == null or (.generation | type) == "number")
-      then .name + (if .generation == null then "" else "~g\(.generation)" end)
-      else error("invalid plugin entry") end
-    ' "$manifest") || {
-      printf 'unreadable account plugin manifest: %s\n' "$manifest" >&2
-      return 1
-    }
-    while IFS= read -r entry; do
-      [[ -n $entry ]] || continue
-      declared_name "$layer/$entry/" || return 1
-    done <<< "$entries"
-  done
-}
-
-synced_names() {
-  local plugin_dir
-  for plugin_dir in "$plugins_dir"/synced/*/*/; do
-    declared_name "$plugin_dir" || return 1
-  done
-}
-
-plugin_names() {
-  account_layer_names || return 1
-  synced_names || return 1
-}
-
-found=$(plugin_names | jq -R -s -c 'split("\n") | map(select(length > 0))')
-registry=$plugins_dir/installed_plugins.json
+# The registry is read with -n as a list of documents, so an empty file,
+# trailing garbage or a second JSON document fails the apply.
 if [[ -f $registry ]]; then
-  installed=$(jq -n -c "$one_document"' | .plugins // {} | keys' "$registry") || {
+  installed=$(jq -n -c '[inputs] |
+    if length == 1 then .[0] else error("expected one JSON document") end |
+    .plugins // {} |
+    if type == "object" then keys else error("plugins is not an object") end
+  ' "$registry") || {
     printf 'unreadable installed-plugin registry: %s\n' "$registry" >&2
     exit 1
   }
@@ -95,23 +42,19 @@ else
 fi
 
 jq \
-  --argjson accepted "$accepted" \
   --argjson explicitly_off "$explicitly_off" \
   --argjson one_copy_off "$one_copy_off" \
   --argjson one_copy_on "$one_copy_on" \
-  --argjson found "$found" \
   --argjson installed "$installed" '
   def plugin_name: sub("@[^@]*$"; "");
-  ($accepted | map({key: ., value: true}) | from_entries) as $is_accepted |
-  ($found + ($installed | map(plugin_name)) + $explicitly_off |
-    unique | map(select($is_accepted[.] | not))) as $unaccepted |
-  ($unaccepted | map({key: ., value: true}) | from_entries) as $is_unaccepted |
-  ([$unaccepted[] | (. + "@inline"), (. + "@synced")] +
-    [$installed[] | select($is_unaccepted[plugin_name])] +
-    $one_copy_off) as $off |
+  ($explicitly_off | map({key: ., value: true}) | from_entries) as $is_off |
+  ([$explicitly_off[] | (. + "@inline"), (. + "@synced")] +
+    [$installed[] | select($is_off[plugin_name])] +
+    $one_copy_off +
+    [$installed[] | select(. == "serena@claude-plugins-official")]) as $off |
   .enabledPlugins = (.enabledPlugins // {}) |
   reduce $off[] as $entry (.; .enabledPlugins[$entry] = false) |
-  # Remove the stale Serena entry unless the sweep turns Serena off; deleting
+  # Remove the stale Serena entry only when it is not set false above; deleting
   # first would move a kept entry to the end and break idempotence.
   if any($off[]; . == "serena@claude-plugins-official") then .
   else del(.enabledPlugins["serena@claude-plugins-official"]) end |

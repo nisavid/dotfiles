@@ -1,9 +1,14 @@
 # Claude Code plugin enablement (dotfiles#479), settled 2026-11-19;
 # real-skills-leashed moved to explicitlyOff the same day.
-# Claude Code treats a plugin with no enabledPlugins entry as enabled, so
-# home/dot_claude/modify_private_settings.json.tmpl writes false for every
-# plugin it finds that is not accepted here, and no entry for accepted names.
+# Claude Code enables a plugin that has no enabledPlugins entry.
+# home/dot_claude/modify_private_settings.json.tmpl writes false for the
+# explicitlyOff names and the oneCopyPerSkill.off entries, keeps an existing
+# oneCopyPerSkill.on entry true, and writes no key for any other plugin: a
+# plugin on neither list loads normally.
 [claudePlugins]
+# The accepted plugins, kept as a record: the modifier does not read this list,
+# and tests/secret-injection-bindings.zsh checks that it shares no name with
+# explicitlyOff.
 accepted = [
   "tricritical",
   "versionkeeping",
@@ -70,10 +75,9 @@ accepted = [
   "setup-audit",
 ]
 
-# Off in every form even when no manifest, synced copy or registry entry
-# names them at apply time. Serena is on neither list: the modifier removes its
-# stale serena@claude-plugins-official entry unless the sweep turns that entry
-# off, as it does when the installed-plugin registry lists it.
+# Off as <name>@inline and <name>@synced, and as each <name>@<marketplace> key
+# the installed-plugin registry lists. @inline and @synced keys use the name the
+# plugin's own .claude-plugin/plugin.json declares, so these are those names.
 explicitlyOff = [
   "mattpocock-skills",
   "huggingface-skills",
@@ -90,7 +94,7 @@ explicitlyOff = [
   "real-skills-leashed",
 ]
 
-# One copy per skill: exact enabledPlugins entries, applied after the sweep.
+# One copy per skill: exact enabledPlugins entries.
 [claudePlugins.oneCopyPerSkill]
 # The account copies of cloudflare, linear, claude-code-setup and skill-creator
 # win over the local copies; the local Firecrawl copy wins over the account one.
