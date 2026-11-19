@@ -51,12 +51,19 @@ retired_skills=(
   writing-plans
   yeet
 )
+plugin_skills=(
+  ask-matt code-review codebase-design diagnosing-bugs domain-modeling
+  grill-me grill-with-docs grilling handoff implement
+  improve-codebase-architecture prototype research setup-matt-pocock-skills
+  tdd teach to-questionnaire to-spec to-tickets triage wait-what wayfinder
+  wizard writing-for-agents
+)
 mkdir -p \
   "$agent_skills/developing-shell-scripts" \
   "$agent_skills/new-skill" \
   "$agent_skills/skill with spaces" \
   "$claude_skills/nested"
-for name in $retired_skills; do
+for name in $retired_skills $plugin_skills; do
   mkdir -p "$agent_skills/$name"
 done
 
@@ -65,6 +72,14 @@ ln -s ../../.agents/skills/developing-shell-scripts \
 for name in $retired_skills; do
   ln -s "../../.agents/skills/$name" "$claude_skills/$name"
 done
+for name in $plugin_skills; do
+  ln -s "../../.agents/skills/$name" "$claude_skills/$name"
+done
+# Same-name entries that are not links to the shared root stay in place.
+rm -- "$claude_skills/wayfinder" "$claude_skills/tdd"
+mkdir -p "$claude_skills/wayfinder"
+print -r -- own >"$claude_skills/wayfinder/SKILL.md"
+ln -s /elsewhere/tdd "$claude_skills/tdd"
 print -r -- preserved >"$claude_skills/new-skill"
 ln -s ../../.agents/skills/retired-skill "$claude_skills/retired-skill"
 ln -s /missing/claude-specific-skill "$claude_skills/claude-specific-skill"
@@ -74,8 +89,9 @@ HOME=$home zsh -f "$hook"
 
 [[ ! -L $claude_skills/retired-skill ]] ||
   fail 'top-level broken link was not removed'
-[[ -L $claude_skills/claude-specific-skill ]] ||
-  fail 'an unrelated top-level Claude link was removed'
+[[ -L $claude_skills/claude-specific-skill &&
+  $(readlink "$claude_skills/claude-specific-skill") == /missing/claude-specific-skill ]] ||
+  fail 'an unrelated top-level Claude link was removed or changed'
 [[ -L $claude_skills/nested/retired-nested ]] ||
   fail 'a nested Claude-specific link was removed'
 [[ $(<$claude_skills/new-skill) == preserved ]] ||
@@ -83,10 +99,78 @@ HOME=$home zsh -f "$hook"
 assert_skill_link developing-shell-scripts
 assert_skill_link 'skill with spaces'
 assert_retired_skills_absent
+for name in $plugin_skills; do
+  [[ $name == (wayfinder|tdd) ]] && continue
+  [[ ! -e $claude_skills/$name && ! -L $claude_skills/$name ]] ||
+    fail "plugin-provided $name link was not removed"
+done
+[[ -d $claude_skills/wayfinder && ! -L $claude_skills/wayfinder &&
+  $(<$claude_skills/wayfinder/SKILL.md) == own ]] ||
+  fail 'a non-link plugin-named entry was touched'
+[[ -L $claude_skills/tdd && $(readlink "$claude_skills/tdd") == /elsewhere/tdd ]] ||
+  fail 'a plugin-named link outside the shared root was touched'
 
 HOME=$home zsh -f "$hook"
 assert_skill_link developing-shell-scripts
 assert_skill_link 'skill with spaces'
 assert_retired_skills_absent
+
+# Scratch home with no plugin-provided links: none are created, and a second
+# run changes nothing.
+snapshot() {
+  local entry
+  for entry in $1/*(ND); do
+    if [[ -L $entry ]]; then
+      print -r -- "${entry:t} link $(readlink "$entry")"
+    elif [[ -d $entry ]]; then
+      print -r -- "${entry:t} dir"
+    else
+      print -r -- "${entry:t} file"
+    fi
+  done
+}
+home2=$test_root/home2
+mkdir -p "$home2/.agents/skills/developing-shell-scripts" "$home2/.claude/skills"
+for name in $plugin_skills; do
+  mkdir -p "$home2/.agents/skills/$name"
+done
+HOME=$home2 zsh -f "$hook"
+for name in $plugin_skills; do
+  [[ ! -e $home2/.claude/skills/$name && ! -L $home2/.claude/skills/$name ]] ||
+    fail "plugin-provided $name was created in a clean home"
+done
+[[ -L $home2/.claude/skills/developing-shell-scripts ]] ||
+  fail 'a regular shared skill was not linked in the clean home'
+before=$(snapshot "$home2/.claude/skills")
+HOME=$home2 zsh -f "$hook"
+[[ $(snapshot "$home2/.claude/skills") == $before ]] ||
+  fail 'a second run changed the clean home'
+
+# Absolute links into the shared root are sync-owned too: removed for plugin
+# and retired names, left alone for ordinary skills, and links elsewhere or
+# real directories of the same name are never touched.
+home3=$test_root/home3
+agent3=$home3/.agents/skills
+claude3=$home3/.claude/skills
+mkdir -p "$agent3/developing-shell-scripts" "$agent3/code-review" \
+  "$agent3/yeet" "$agent3/wayfinder" "$agent3/tdd" "$claude3/wayfinder"
+print -r -- own >"$claude3/wayfinder/SKILL.md"
+ln -s "$agent3/code-review" "$claude3/code-review"
+ln -s "$agent3/yeet" "$claude3/yeet"
+ln -s "$agent3/developing-shell-scripts" "$claude3/developing-shell-scripts"
+ln -s /elsewhere/tdd "$claude3/tdd"
+HOME=$home3 zsh -f "$hook"
+[[ ! -e $claude3/code-review && ! -L $claude3/code-review ]] ||
+  fail 'an absolute shared-root link for a plugin-provided name was kept or recreated'
+[[ ! -e $claude3/yeet && ! -L $claude3/yeet ]] ||
+  fail 'an absolute shared-root link for a retired name was kept'
+[[ -d $claude3/wayfinder && ! -L $claude3/wayfinder &&
+  $(<$claude3/wayfinder/SKILL.md) == own ]] ||
+  fail 'a same-name real directory was touched'
+[[ -L $claude3/tdd && $(readlink "$claude3/tdd") == /elsewhere/tdd ]] ||
+  fail 'a link outside the shared root was touched'
+[[ -L $claude3/developing-shell-scripts &&
+  $(readlink "$claude3/developing-shell-scripts") == "$agent3/developing-shell-scripts" ]] ||
+  fail 'an existing absolute shared-root link to a regular skill was rewritten'
 
 print -r -- 'Claude skill sync: PASS'
