@@ -1,13 +1,14 @@
 # Claude Code plugin enablement (dotfiles#479), settled 2026-11-19;
 # real-skills-leashed moved to explicitlyOff the same day.
-# accepted plugins load; explicitlyOff plugins are turned off; a plugin on
-# neither list loads normally; oneCopyPerSkill picks which copy of a duplicated
-# plugin loads. home/dot_claude/modify_private_settings.json.tmpl applies these
-# lists to ~/.claude/settings.json.
+# explicitlyOff and oneCopyPerSkill are read by
+# home/dot_claude/modify_private_settings.json.tmpl, which states what it writes
+# to ~/.claude/settings.json; accepted is a record that it does not read. Plugins
+# on neither list get no key, so they load normally. github, greptile and
+# context7 stay forced off at the official marketplace by the modifier, as
+# before.
 [claudePlugins]
-# The accepted plugins, kept as a record: the modifier does not read this list,
-# and tests/secret-injection-bindings.zsh checks that it shares no name with
-# explicitlyOff.
+# The accepted plugins, kept as a record; tests/secret-injection-bindings.zsh
+# checks that it shares no name with explicitlyOff.
 accepted = [
   "tricritical",
   "versionkeeping",
