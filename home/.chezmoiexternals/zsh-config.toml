@@ -1,7 +1,7 @@
 [".config/zsh"]
 type = "archive"
-url = "https://github.com/nisavid/zsh-config/archive/0a6578eedc20fda283408046b52722c95d830267.tar.gz"
-checksum.sha256 = "952b5487aa12cb367f93cfec00a61209cd60fb28a80ab29dcf36e396910c1696"
+url = "https://github.com/nisavid/zsh-config/archive/e377d4f03e580a83d9e49503a6d68ce87bb2b5b6.tar.gz"
+checksum.sha256 = "ce7c3f2f0fbf139c9f2184743e3bdf3b2ae016f7dba5fc14f96532fe98f12954"
 stripComponents = 1
 # Keep host-local profiles and runtime state, including existing Git metadata.
 # Chezmoi must never pull that old checkout; updates change this pin and digest.
