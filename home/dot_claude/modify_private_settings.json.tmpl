@@ -10,7 +10,8 @@ set -euo pipefail
 # Claude Code enables any plugin that has no enabledPlugins entry. This modifier
 # sets only the entries below, keeps every other entry as it is, and writes no
 # key for any other plugin, so a plugin on neither list in
-# .chezmoidata/claude-plugins.toml loads normally (dotfiles#479):
+# .chezmoidata/claude-plugins.toml loads normally unless it already has an
+# entry, which is kept (dotfiles#479):
 # - each explicitlyOff name is false as <name>@inline and <name>@synced, and as
 #   each <name>@<marketplace> key the installed-plugin registry lists;
 # - each oneCopyPerSkill.off entry is false, and an existing oneCopyPerSkill.on
