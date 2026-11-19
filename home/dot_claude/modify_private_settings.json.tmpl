@@ -11,9 +11,10 @@ shopt -s nullglob
 {{-   end }}
 {{- end }}
 
-# Claude Code enables any plugin without an enabledPlugins entry, and keys each
-# plugin copy by the name its own .claude-plugin/plugin.json declares, never by
-# its directory name or by the name an account manifest lists. Every plugin
+# Claude Code enables any plugin without an enabledPlugins entry. In the client
+# code observed for one version, it keys each plugin copy by the name its own
+# .claude-plugin/plugin.json declares, not by its directory name or by the name
+# an account manifest lists; dotfiles#479 tracks confirming that. Every plugin
 # name found at apply time in an account plugin layer, in the synced plugin
 # directory or in the installed-plugin registry that is not accepted gets its
 # @inline, @synced and installed marketplace entries set to false. Accepted
@@ -47,8 +48,9 @@ account_layer_names() {
   local manifest layer entries entry
   for manifest in "$plugins_dir"/synced/*/manifest.json; do
     layer=${manifest%/manifest.json}
-    entries=$(jq -r '
-      .plugins |
+    # -n with input fails on an empty manifest instead of reading no values.
+    entries=$(jq -n -r '
+      input | .plugins |
       if type == "array" then .[] else error("plugins is not an array") end |
       if (.name | type) == "string" and
         (.name | test("^[A-Za-z0-9][A-Za-z0-9._-]*$")) and
@@ -102,10 +104,10 @@ jq \
     [$installed[] | select($is_unaccepted[plugin_name])] +
     $one_copy_off) as $off |
   .enabledPlugins = (.enabledPlugins // {}) |
+  del(.enabledPlugins["serena@claude-plugins-official"]) |
   reduce $off[] as $entry (.; .enabledPlugins[$entry] = false) |
   reduce $one_copy_on[] as $entry (.;
     if .enabledPlugins | has($entry) then .enabledPlugins[$entry] = true else . end) |
-  del(.enabledPlugins["serena@claude-plugins-official"]) |
   .enabledPlugins["context7@claude-plugins-official"] = false |
   .enabledPlugins["github@claude-plugins-official"] = false |
   .enabledPlugins["greptile@claude-plugins-official"] = false

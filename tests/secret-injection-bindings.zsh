@@ -297,12 +297,25 @@ cp -- "$test_dir/listed-plugin.json" "$account/listed-name~g2/.claude-plugin/plu
 cp -- "$account/manifest.json" "$test_dir/account-manifest.json"
 print -r -- '{"plugins":[{"name":"missing-copy"}]}' > "$account/manifest.json"
 expect_modifier_failure 'an account manifest entry without a plugin copy must fail the apply'
+print -r -- '{"plugins":[{"name":"missing-copy"},{"name":"firecrawl"}]}' > "$account/manifest.json"
+expect_modifier_failure 'an account manifest entry without a plugin copy must fail the apply even when not last'
 print -rn -- '{"plugins":[{"name":' > "$account/manifest.json"
 expect_modifier_failure 'a truncated account manifest must fail the apply'
+: > "$account/manifest.json"
+expect_modifier_failure 'an empty account manifest must fail the apply'
+print -r -- '{"plugins":{}}' > "$account/manifest.json"
+expect_modifier_failure 'an account manifest whose plugins is not an array must fail the apply'
+print -r -- '{"plugins":[]}' > "$account/manifest.json"
+"$settings_modifier" < "$test_dir/plugins-input.json" | cmp -s - "$test_dir/plugins-output.json" ||
+  fail 'an account manifest listing no plugins must leave the synced copies to decide the output'
 cp -- "$test_dir/account-manifest.json" "$account/manifest.json"
 cp -- "$plugins_root/installed_plugins.json" "$test_dir/installed-plugins.json"
 print -rn -- '{"version": 2, "plugins": {' > "$plugins_root/installed_plugins.json"
 expect_modifier_failure 'a truncated installed-plugin registry must fail the apply'
+jq '.plugins["serena@claude-plugins-official"] = []' "$test_dir/installed-plugins.json" > "$plugins_root/installed_plugins.json"
+"$settings_modifier" < "$test_dir/plugins-input.json" |
+  jq -e '.enabledPlugins["serena@claude-plugins-official"] == false' > /dev/null ||
+  fail 'an installed Serena plugin must be off, not removed and left enabled'
 cp -- "$test_dir/installed-plugins.json" "$plugins_root/installed_plugins.json"
 "$settings_modifier" < "$test_dir/plugins-input.json" | cmp -s - "$test_dir/plugins-output.json" ||
   fail 'restored plugin sources must give the original output'
