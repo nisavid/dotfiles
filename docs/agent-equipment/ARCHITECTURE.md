@@ -1184,6 +1184,22 @@ separate runtime surface. JSON and TOML adapters preserve unrelated keys and
 plugin-provided effective servers. Stdio and HTTP transports use the same
 record contracts; only their provider selector and normalized evidence differ.
 
+A Codex or Cursor stdio server entry owns `command`, `args`, and `cwd`, plus
+`type` for Cursor. Its `cwd` is always `/`. The catalog provider keeps its
+exact argv; the working directory is adapter semantics, not a provider field.
+Codex otherwise starts a server in its own working directory and Cursor in the
+home directory, so a stray npm or Node version file there or in any parent
+would apply to every `npx` launch that `secret-exec` does not wrap;
+[npx launches](../SECRET_INJECTION.md#npx-launches) describes what npm and
+version-manager shims read from the working directory and what they read
+regardless of it. `secret-exec` independently starts an `npx` target from `/`
+on every harness, so this rule is what protects direct routes it does not
+wrap. Claude Code's stdio entry has no working-directory field, so any `npx`
+route of its that `secret-exec` does not wrap is not covered. A server that
+resolves relative tool paths against its working directory, such as
+chrome-devtools-mcp's `filePath`, resolves them against `/`, so callers pass
+absolute paths.
+
 For native plugins, component control is independent of whole-plugin
 enablement. The capability record lists each selected equipment identity and
 state it can realize. If one selected control is only inspectable or operator
