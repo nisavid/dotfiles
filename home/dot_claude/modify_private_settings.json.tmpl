@@ -6,6 +6,11 @@ set -euo pipefail
 {{-     fail (printf "claudePlugins: invalid explicitly-off plugin name %q" .) }}
 {{-   end }}
 {{- end }}
+{{- range $plugins.oneCopyPerSkill.localWins }}
+{{-   if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]*$" .) }}
+{{-     fail (printf "claudePlugins: invalid local-wins plugin name %q" .) }}
+{{-   end }}
+{{- end }}
 
 # Claude Code enables any plugin that has no enabledPlugins entry. This modifier
 # sets only the entries below, keeps every other entry as it is, and writes no
@@ -14,6 +19,11 @@ set -euo pipefail
 # entry, which is kept (dotfiles#479):
 # - each explicitlyOff name is false as <name>@inline and <name>@synced, and as
 #   each <name>@<marketplace> key the installed-plugin registry lists;
+# - each oneCopyPerSkill.localWins name is true as
+#   <name>@claude-plugins-official, even where that entry exists as false, and
+#   false as <name>@inline and <name>@synced: the local copy is the one that
+#   loads, because an account that does not carry the plugin has no copy of it
+#   and this modifier cannot follow the signed-in account;
 # - each oneCopyPerSkill.off entry is false, and an existing oneCopyPerSkill.on
 #   entry is true;
 # - context7, github and greptile at claude-plugins-official are false;
@@ -23,6 +33,7 @@ set -euo pipefail
 # explicitlyOff names are those declared names.
 registry={{ joinPath .chezmoi.homeDir ".claude/plugins/installed_plugins.json" | quote }}
 explicitly_off={{ $plugins.explicitlyOff | toJson | squote }}
+local_wins={{ $plugins.oneCopyPerSkill.localWins | toJson | squote }}
 one_copy_off={{ $plugins.oneCopyPerSkill.off | toJson | squote }}
 one_copy_on={{ $plugins.oneCopyPerSkill.on | toJson | squote }}
 
@@ -45,6 +56,7 @@ fi
 
 jq \
   --argjson explicitly_off "$explicitly_off" \
+  --argjson local_wins "$local_wins" \
   --argjson one_copy_off "$one_copy_off" \
   --argjson one_copy_on "$one_copy_on" \
   --argjson installed "$installed" '
@@ -56,6 +68,10 @@ jq \
   .enabledPlugins = (.enabledPlugins // {}) |
   del(.enabledPlugins["serena@claude-plugins-official"]) |
   reduce $off[] as $entry (.; .enabledPlugins[$entry] = false) |
+  reduce $local_wins[] as $name (.;
+    .enabledPlugins[$name + "@claude-plugins-official"] = true |
+    .enabledPlugins[$name + "@inline"] = false |
+    .enabledPlugins[$name + "@synced"] = false) |
   reduce $one_copy_on[] as $entry (.;
     if .enabledPlugins | has($entry) then .enabledPlugins[$entry] = true else . end) |
   .enabledPlugins["context7@claude-plugins-official"] = false |
