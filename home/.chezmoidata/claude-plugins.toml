@@ -94,17 +94,33 @@ explicitlyOff = [
   "nvidia-skills",
   "remotion",
   "real-skills-leashed",
+  "investment-banking",
+  "pitch-agent",
 ]
 
-# One copy per skill: exact enabledPlugins entries.
+# One copy per skill. Account copies belong to the signed-in Claude account, and
+# an account that does not carry a plugin gets no copy of it, so a rule that
+# turns the local copy off can leave a skill unloaded. localWins therefore keeps
+# the local copy of a plugin, and off mostly turns off the second copy of a
+# skill; linear is the exception, kept off as it was and not a second copy.
 [claudePlugins.oneCopyPerSkill]
-# The account copies of cloudflare, linear, claude-code-setup and skill-creator
-# win over the local copies; the local Firecrawl copy wins over the account one.
+# The local copy wins for these plugins: <name>@claude-plugins-official is true,
+# even where the entry exists as false, and <name>@inline and <name>@synced are
+# false. The account copies of cloudflare and skill-creator match the local ones;
+# the account copy of claude-code-setup is a newer revision of the same version.
+localWins = [
+  "cloudflare",
+  "claude-code-setup",
+  "skill-creator",
+]
+# Exact enabledPlugins entries that are false. firecrawl: the local copy wins
+# over the account one, and the official entry is left as it is, so firecrawl is
+# not in localWins (its official entry is out of scope for #496). linear is not a
+# second copy of the account plugin: the local plugin is an MCP server with no
+# skills, and the account plugin is one skill (linear-api) with no MCP server.
+# Whether the local Linear MCP server should be on is not decided here.
 off = [
-  "cloudflare@claude-plugins-official",
   "linear@claude-plugins-official",
-  "claude-code-setup@claude-plugins-official",
-  "skill-creator@claude-plugins-official",
   "firecrawl@inline",
   "firecrawl@synced",
 ]
