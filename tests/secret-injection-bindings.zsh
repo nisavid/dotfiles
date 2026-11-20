@@ -359,6 +359,109 @@ jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
 ! rg -n 'firecrawl-canary|environment-canary|header-canary|FIRECRAWL_API_KEY' \
   "$test_dir/mcp-config-output.json" >/dev/null || fail 'generic MCP output must not retain legacy authentication data'
 
+cursor_modifier=$test_dir/modify-cursor-mcp
+render_modifier home/dot_cursor/modify_private_mcp.json.tmpl "$cursor_modifier"
+cursor_client_id_field=CLIENT
+cursor_client_id_field+=_ID
+cursor_client_secret_field=CLIENT
+cursor_client_secret_field+=_SECRET
+# Cursor writes two-space JSON without a final newline; the fixtures match, so
+# a byte comparison proves the other entries pass through unchanged.
+cursor_other_entries=$(cat <<'EOF'
+    "firecrawl": {
+      "url": "https://mcp.firecrawl.example.invalid/v2/mcp",
+      "headers": {
+        "X-Example-Key": "firecrawl-canary"
+      }
+    },
+    "notebooks": {
+      "command": "uvx",
+      "args": [
+        "notebooks-mcp",
+        "--flag"
+      ]
+    },
+    "datacloud_example": {
+      "command": "example",
+      "args": [
+        "serve"
+      ],
+      "env": {
+        "EXAMPLE_ENV": "preserved"
+      }
+    }
+EOF
+)
+cursor_wrapped_entry=$(cat <<EOF
+    "context7": {
+      "command": "$fixture_home/.local/bin/secret-exec",
+      "args": [
+        "context7",
+        "--",
+        "npx",
+        "-y",
+        "@upstash/context7-mcp@3.2.4"
+      ]
+    }
+EOF
+)
+print -rn -- "{
+  \"mcpServers\": {
+    \"context7\": {
+      \"url\": \"https://mcp.context7.example.invalid/mcp\",
+      \"headers\": {
+        \"$context7_field\": \"context7-canary\"
+      }
+    },
+$cursor_other_entries
+  }
+}" > "$test_dir/cursor-input.json"
+print -rn -- "{
+  \"mcpServers\": {
+$cursor_wrapped_entry,
+$cursor_other_entries
+  }
+}" > "$test_dir/cursor-expected.json"
+"$cursor_modifier" < "$test_dir/cursor-input.json" > "$test_dir/cursor-output.json"
+cmp -s "$test_dir/cursor-output.json" "$test_dir/cursor-expected.json" ||
+  fail 'Cursor MCP config must replace only the Context7 entry and keep every other byte'
+! rg -n 'context7-canary|context7.example' "$test_dir/cursor-output.json" >/dev/null ||
+  fail 'Cursor output must retire the Context7 URL and credential'
+"$cursor_modifier" < "$test_dir/cursor-output.json" | cmp -s - "$test_dir/cursor-output.json" ||
+  fail 'the Cursor MCP modifier must be idempotent'
+
+# A Context7 entry with other credential-carrying keys loses them and keeps
+# unrelated metadata; an entry already wrapped is unchanged.
+print -rn -- "{\"mcpServers\":{\"context7\":{\"type\":\"http\",\"command\":\"npx\",\"args\":[\"mcp-remote\"],\"env\":{\"A\":\"b\"},\"env_vars\":[\"A\"],\"auth\":{\"$cursor_client_id_field\":\"a\",\"$cursor_client_secret_field\":\"b\"},\"envFile\":\".env\",\"http_headers\":{\"$authorization_key\":\"c\"},\"bearer_token_env_var\":\"A\",\"timeout\":60000}}}" |
+  "$cursor_modifier" | jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
+  .mcpServers == {context7: {command: $command, args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"], timeout: 60000}}
+' > /dev/null || fail 'Cursor Context7 entry must lose every transport and credential key and keep other metadata'
+
+# Without an entry, a servers object, or a file, the wrapped entry appears.
+print -rn -- '{"mcpServers":{"notebooks":{"command":"uvx"}},"unrelated":"preserved"}' |
+  "$cursor_modifier" | jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
+  .unrelated == "preserved" and
+  .mcpServers.notebooks == {command: "uvx"} and
+  .mcpServers.context7 == {command: $command, args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"]}
+' > /dev/null || fail 'Cursor config without a Context7 entry must gain the wrapped entry'
+print -rn -- '{"unrelated":"preserved"}' | "$cursor_modifier" | jq -e '
+  .unrelated == "preserved" and (.mcpServers | keys) == ["context7"]
+' > /dev/null || fail 'Cursor config without an mcpServers object must gain the wrapped entry'
+"$cursor_modifier" < /dev/null | jq -e '(.mcpServers | keys) == ["context7"]' > /dev/null ||
+  fail 'an empty Cursor config must gain only the wrapped entry'
+
+# A file that is not exactly one JSON document fails with no output.
+expect_cursor_failure() {
+  local output
+  if output=$(print -rn -- "$2" | "$cursor_modifier" 2> /dev/null); then
+    fail "$1"
+  fi
+  [[ -z $output ]] || fail "$1"
+}
+expect_cursor_failure 'a truncated Cursor config must fail the apply' '{"mcpServers": {'
+expect_cursor_failure 'a Cursor config holding two JSON documents must fail the apply' '{} {}'
+expect_cursor_failure 'a Cursor config with a non-object mcpServers must fail the apply' '{"mcpServers": []}'
+
 opencode_hook=$test_dir/update-opencode-context7
 render_modifier home/run_after_update-opencode-context7.sh.tmpl "$opencode_hook"
 mkdir -p -- "$fixture_home/.config/opencode"

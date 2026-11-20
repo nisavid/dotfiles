@@ -723,6 +723,18 @@ the managed user-scope consumer binding. In that version,
 the command cannot see a parent directory's file and may remove the managed
 user-scope entry instead.
 
+## Cursor MCP route
+
+Cursor reads `~/.cursor/mcp.json`, which holds servers the dotfiles do not
+own. A modifier sets only its `context7` entry to the same `secret-exec`
+launcher the Claude Code and Codex bindings use, and removes `type` (the stdio
+type, as the Claude Code modifier does), `url`, `auth`, `env`, `envFile`,
+`env_vars`, `headers`, `http_headers`, and `bearer_token_env_var` from that
+entry. Every other entry and setting passes through unchanged, including
+Cursor's Firecrawl entry, which this binding does not manage. A missing or
+empty file gains only the managed entry; a file that is not one JSON document
+fails the apply and leaves the file as it was.
+
 ## Validation
 
 For each host:
