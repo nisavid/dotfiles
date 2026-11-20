@@ -80,6 +80,7 @@ check_shell_syntax() {
   check_each zsh_syntax \
     home/run_after_sync-global-agent-skills-to-claude.zsh \
     tests/claude-skill-sync.zsh \
+    tests/codex-firecrawl-axi-rules.zsh \
     tests/container-runtime-bindings.zsh \
     tests/global-agents-policy.zsh \
     tests/hindsight-agents-bindings.zsh \
@@ -103,6 +104,7 @@ group_shell_bindings() {
   zsh -f tests/ci-test-group.zsh
   check_shell_syntax
   zsh -f tests/claude-skill-sync.zsh
+  zsh -f tests/codex-firecrawl-axi-rules.zsh
   zsh -f tests/platform-portability.zsh
   zsh -f tests/container-runtime-bindings.zsh
   zsh -f tests/privacy-scan.zsh
