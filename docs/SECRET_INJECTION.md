@@ -767,6 +767,86 @@ Cursor's Firecrawl entry, which this binding does not manage. A missing or
 empty file gains only the managed entry; a file that is not one JSON document
 fails the apply and leaves the file as it was.
 
+## Codex exec-policy rule for firecrawl-axi
+
+`firecrawl-axi` takes its Firecrawl key from `secret-exec`. Inside Codex's
+sandbox a `secret-exec` launch fails: the readiness helper sets the mode of its
+state folder and writes there on every call, and the sandbox mounts that folder
+read-only. A strict `secret-exec firecrawl -- firecrawl-axi` therefore fails
+there. The bare name `firecrawl-axi`, with no command shim deployed, runs
+without a key, so `search`, `scrape`, and `parse` work under the daily limit
+and every other command fails.
+
+Codex's exec policy runs a command outside the sandbox, without a prompt, when
+its rules allow it. A shell line with several commands runs outside the sandbox
+only when a rule allows every one of them. Codex loads every `*.rules` file in
+the `rules` folder of its home, and the strictest matching decision wins. The
+dotfiles manage one such file, `home/dot_codex/rules/firecrawl-axi.rules`,
+which deploys to `~/.codex/rules/firecrawl-axi.rules` beside `default.rules`.
+Codex writes `default.rules` itself, and the dotfiles do not manage it.
+
+The file holds four rules, each with a `justification`, `match` examples, and
+`not_match` examples, which Codex checks when it loads the file:
+
+1. `firecrawl-axi` followed by `search`, `scrape`, `map`, `crawl`,
+   `dev-search`, `github-search`, `papers`, `agent`, or `monitors` is allowed.
+2. The same nine after the prefix `secret-exec firecrawl -- firecrawl-axi` are
+   allowed. This explicit form carries the key before a command shim for
+   `firecrawl-axi` exists. The bare form of rule 1 carries it only through such
+   a shim, mapped to the `firecrawl` profile (see
+   [Command shims](#command-shims)).
+3. `firecrawl-axi setup` requires a prompt, because it writes hooks into
+   harness settings.
+4. `secret-exec firecrawl -- firecrawl-axi setup` requires a prompt for the same
+   reason.
+
+`parse` deliberately has no rule. It runs inside the
+sandbox, where it works without a key under the daily limit. In version 0.1.1
+of `firecrawl-axi`, uploading a local file can run `curl` with arguments taken
+from the server's reply, and the code checks only that the program is `curl`.
+Outside the sandbox, a crafted reply could write any file in the home folder.
+
+Two `host_executable` lines, for `firecrawl-axi` and for `secret-exec`, end the
+file. Without them, Codex falls back to the program's base name and would match
+a program of that name at any path, such as a script in the workspace. With
+`paths = []`, the rules match only the bare names, and a path-qualified program
+stays in the sandbox.
+
+`tests/codex-firecrawl-axi-rules.zsh` runs `codex execpolicy check` on the
+file, both as is and with `--resolve-host-executables`, the mode Codex core
+uses. It asserts the decision for each of the nine subcommands in both forms,
+for `parse`, for `setup`, for path-qualified and relative programs, and for
+lines that must match nothing: a bare `secret-exec firecrawl -- sh` and a
+`secret-exec` call for another profile. It skips that part, with a message, when
+no `codex` binary is found, and fails when `CODEX_BIN` is set but is not
+executable.
+
+### What the rule opens
+
+Codex may run those nine subcommands with any arguments, unprompted and outside
+the sandbox. Outside the sandbox, the launcher resolves the key and hands it to
+that one process, so Codex's own environment does not hold the key. The nine
+subcommands make HTTPS calls, and in version 0.1.1 their code starts no other
+program and writes no file. One argument reads a local file: `scrape
+--schema-file <path>` reads that file outside the sandbox and uploads it when it
+parses as a JSON object. A `firecrawl-axi` call inside a pipeline whose other
+parts no rule allows stays in the sandbox and runs without the key.
+
+### Limits
+
+- The rule is a standing permission that concerns the key's owner. It is
+  deployed on the owner's approval.
+- It trusts the code of `firecrawl-axi` to run outside the sandbox. A new
+  release needs the same reading of its code before the list of subcommands is
+  kept or widened. The code of its dependency `axi-sdk-js` was not read.
+- It lets Codex spend Firecrawl credits through `firecrawl-axi` without a
+  prompt, including the paid `agent` and `monitors` commands.
+- It confines the key to one process. It does not make the key unreadable to
+  other commands by other routes.
+- Codex's behavior was read from its source and documentation, and the test
+  checks decisions with the installed Codex. A check in a real Codex session
+  establishes the rest, and is not part of the test.
+
 ## Validation
 
 For each host:
