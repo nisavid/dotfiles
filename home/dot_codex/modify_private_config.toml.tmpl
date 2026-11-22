@@ -5,6 +5,7 @@
 # [hooks.state] hashes, marketplace timestamps, app-version paths, etc.). Rather than
 # manage the whole file, this script overlays only a minimal, curated set of settings
 # onto Codex's live file and passes everything else through untouched:
+#   - top-level project_doc_max_bytes             (instruction-size budget)
 #   - [tui] theme, [desktop] git-branch-prefix   (portable prefs)
 #   - [desktop.open-in-target-preferences] global (parametrized editor target)
 #   - process-scoped Context7, Firecrawl, and GitHub MCP launchers
@@ -16,6 +17,7 @@
 set -euo pipefail
 
 export HOMEDIR={{ .chezmoi.homeDir | quote }}
+export PROJECT_DOC_MAX_BYTES={{ .codexInstructions.projectDocMaxBytes | int | quote }}
 {{- $bindingData := .gitIdentity }}
 {{- if not (get $bindingData "publicFixture") }}
 {{- $bindingData = include ".private-git-identities.toml.age" | decrypt | fromToml }}
@@ -72,6 +74,9 @@ def ensure_table(parent, key):
         parent[key] = tomlkit.table()
     return parent[key]
 
+# A top-level key: tomlkit places it ahead of the tables, so it never lands inside
+# the last one.
+doc["project_doc_max_bytes"] = int(os.environ["PROJECT_DOC_MAX_BYTES"])
 ensure_table(doc, "tui")["theme"] = "catppuccin-mocha"
 desk = ensure_table(doc, "desktop")
 desk["git-branch-prefix"] = os.environ["GIT_BRANCH_PREFIX"]

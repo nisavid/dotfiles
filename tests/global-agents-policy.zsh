@@ -17,6 +17,7 @@ review_partial_name=review-before-shipping.tmpl
 review_partial="$source_root/.chezmoitemplates/$review_partial_name"
 claude_review_rule_template="$source_root/dot_claude/rules/review-before-shipping.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
+codex_config_modifier="$source_root/dot_codex/modify_private_config.toml.tmpl"
 cold_archive_envelope_name=.private-cold-archive.md.age
 cold_archive_envelope="$source_root/$cold_archive_envelope_name"
 claude_cold_archive_rule_template="$source_root/dot_claude/rules/private_cold-archive.md.tmpl"
@@ -28,6 +29,7 @@ typography_partial_name=distinctive-typography.tmpl
 typography_partial="$source_root/.chezmoitemplates/$typography_partial_name"
 claude_typography_rule_template="$source_root/dot_claude/rules/distinctive-typography.md.tmpl"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
+size_check_stderr=$(mktemp "${TMPDIR:-/tmp}/global-agents-size-check.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
 git_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-git-policy.XXXXXX")
 pr_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-pr-policy.XXXXXX")
@@ -57,7 +59,7 @@ chmod 600 "$git_policy"
 chmod 600 "$pr_policy"
 chmod 600 "$claude_cold_archive_rule"
 chmod 600 "$cold_archive_policy"
-trap 'rm -f "$rendered" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_question_rule" "$question_policy" "$claude_typography_rule"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
+trap 'rm -f "$rendered" "$size_check_stderr" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_question_rule" "$question_policy" "$claude_typography_rule"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -201,6 +203,29 @@ chezmoi -S "$render_source_root" dump --format json "$HOME/.codex/AGENTS.md" > "
 # The pins below read this rendering, so it must be what chezmoi deploys.
 [[ $(jq -r '.[".codex/AGENTS.md"].contents' "$target_state") == "$(<"$rendered")" ]] ||
   fail "Codex policy target state differs from its rendering"
+
+# Codex warns on every turn when the instructions outgrow project_doc_max_bytes.
+# The managed Codex configuration sets that key from one data file, and the
+# policy must fit the value it sets.
+assert_policy_fits_budget() {
+  local policy_bytes=$1 budget=$2
+  ((policy_bytes <= budget)) ||
+    fail "Codex policy is $policy_bytes bytes, above the $budget-byte project_doc_max_bytes the managed Codex configuration sets"
+}
+
+[[ $(grep -Fc -- '.codexInstructions.projectDocMaxBytes' "$codex_config_modifier") == 1 ]] ||
+  fail "Codex config modifier must set project_doc_max_bytes from the instruction budget data exactly once"
+policy_budget=$(chezmoi -S "$source_root" execute-template '{{ .codexInstructions.projectDocMaxBytes }}')
+[[ $policy_budget == <1-> ]] || fail "Codex instruction budget is not a positive integer: $policy_budget"
+policy_bytes=$(wc -c < "$rendered" | tr -d ' ')
+# The check passes at the budget and fails one byte over it.
+(assert_policy_fits_budget "$policy_budget" "$policy_budget") ||
+  fail "size check rejects a policy exactly at the budget"
+! (assert_policy_fits_budget "$((policy_budget + 1))" "$policy_budget") 2> "$size_check_stderr" ||
+  fail "size check accepts a policy one byte over the budget"
+grep -Fq -- "$((policy_budget + 1)) bytes, above the $policy_budget-byte" "$size_check_stderr" ||
+  fail "size check failure does not name both sizes"
+assert_policy_fits_budget "$policy_bytes" "$policy_budget"
 
 # The pins below read the section under each heading, and awk stops at the
 # next heading, so a repeated heading would hide the second copy.
