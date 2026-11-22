@@ -14,6 +14,33 @@ Chezmoi keeps the profile catalog encrypted. Apply renders individual profile
 files into a mode-`0700` directory with mode-`0600` files. Profile names and
 credential names must be unique and syntactically valid.
 
+### OpenAI experiments
+
+To enroll a destination that has the catalog's age identity, create an empty
+marker in the installed broker directory:
+
+```sh
+install -m 600 /dev/null "$HOME/.config/secret-exec/enroll-openai-experiments"
+```
+
+`chezmoi managed "$HOME/.config/secret-exec/profiles"` lists the account-qualified
+profile as `openai-experiments.<account>.env`. Apply that file, then use its
+name without `.env` in `secret-exec <profile> -- <command>` to give the child
+process `OPENAI_API_KEY`. On unenrolled destinations, chezmoi skips this profile.
+
+The key reaches the launched command and the processes it starts, except those
+that pass through a command shim or a `secret-exec` launch of another profile,
+which drop it. A command name that resolves to a shim, such as `codex` or `chatgpt`,
+relaunches under its own mapped profile (see [Command shims](#command-shims)),
+and that launch removes every managed name its profile does not set. The shim's
+own path, which `command -v codex` prints, relaunches the same way. To give
+such a command the key, name the real executable's absolute path outside the
+shim directory, for example the entry of `whence -a codex` that is not in the
+shim directory.
+
+On an enrolled destination, `OPENAI_API_KEY` is a managed name: a launch of any
+other profile removes an inherited value, as it does for every managed name.
+
 ### Host-bound GitHub profiles
 
 The GitHub consumer is selected from an encrypted host binding. Each supported

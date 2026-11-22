@@ -999,6 +999,85 @@ for profile_template in "${profile_templates[@]}"; do
   done < "$rendered_profile"
 done
 
+profile_fixture=$test_dir/account-profile
+peer_profiles=$profile_fixture/source/dot_config/private_secret-exec/private_profiles
+mkdir -p "$profile_fixture/source/.chezmoiexternals" "$profile_fixture/dest" "$peer_profiles"
+print -rn -- 'OTHER_KEY=secret-service://' > "$peer_profiles/private_other.env"
+cp home/.chezmoiexternals/openai-experiments.toml.tmpl "$profile_fixture/source/.chezmoiexternals/"
+sed 's/^\[secretExec/[data.secretExec/' tests/fixtures/secret-exec-public.toml > "$profile_fixture/config.toml"
+profile_chezmoi=(chezmoi --config "$profile_fixture/config.toml" -S "$profile_fixture/source"
+  -D "$profile_fixture/dest" --cache "$profile_fixture/cache" --persistent-state "$profile_fixture/state.boltdb")
+"${profile_chezmoi[@]}" apply
+python3 -I -S - "$profile_fixture/dest" <<'PYEOF'
+import stat
+import sys
+from pathlib import Path
+
+profiles = Path(sys.argv[1]) / ".config/secret-exec/profiles"
+target = profiles / "openai-experiments.fixture-at-example.org.env"
+assert {p.name for p in profiles.iterdir()} == {target.name, "other.env"}
+assert stat.S_IMODE(profiles.stat().st_mode) == 0o700
+assert stat.S_IMODE(target.stat().st_mode) == 0o600
+assert target.read_text() == "OPENAI_API_KEY=pass://fixture-vault/item-j/password"
+assert (profiles / "other.env").read_text() == "OTHER_KEY=secret-service://"
+PYEOF
+sed -i.bak 's/openai-experiments.fixture-at-example.org/openai-experiments.bad\/path/' "$profile_fixture/config.toml"
+if "${profile_chezmoi[@]}" apply > /dev/null 2> "$profile_fixture/invalid-name.err"; then
+  fail 'an invalid account-qualified profile name must fail before file creation'
+fi
+grep -Fq 'invalid account-qualified OpenAI profile name' "$profile_fixture/invalid-name.err" ||
+  fail 'the invalid fixture must fail on the profile name'
+openai_fixture_config=$profile_fixture/config.toml.bak
+assert_invalid_openai_fixture() {
+  local description=$1 expected=$2 replacement=$3
+  sed "$replacement" "$openai_fixture_config" > "$profile_fixture/config.toml"
+  if "${profile_chezmoi[@]}" apply > /dev/null 2> "$profile_fixture/invalid.err"; then
+    fail "$description must fail before file creation"
+  fi
+  grep -Fq "$expected" "$profile_fixture/invalid.err" ||
+    fail "$description must fail with: $expected"
+}
+assert_invalid_openai_fixture 'a profile name without an account' \
+  'invalid account-qualified OpenAI profile name' \
+  's/"openai-experiments.fixture-at-example.org"/"openai-experiments"/'
+assert_invalid_openai_fixture 'a raw value in place of a vault locator' \
+  'invalid OpenAI vault locator' \
+  's|"OPENAI_API_KEY=pass://fixture-vault/item-j/password"|"OPENAI_API_KEY=not-a-real-key-placeholder"|'
+
+# Without the public fixture, only an empty regular marker enrolls a
+# destination. This source holds no catalog, so an enrolled apply fails on
+# the missing include: that failure shows the marker was honored. A FIFO has
+# size zero, so only the type check rejects it; it is created, never opened.
+sed '/^publicFixture = true$/d' "$openai_fixture_config" > "$profile_fixture/config.toml"
+for marker_case in absent directory non-empty symlink fifo empty; do
+  marker_dest=$profile_fixture/marker-$marker_case
+  marker=$marker_dest/.config/secret-exec/enroll-openai-experiments
+  mkdir -p "${marker:h}"
+  case $marker_case in
+    directory) mkdir "$marker" ;;
+    non-empty) print -r -- enrolled > "$marker" ;;
+    symlink) : > "$marker_dest/empty"; ln -s ../../empty "$marker" ;;
+    fifo) mkfifo "$marker" ;;
+    empty) : > "$marker" ;;
+  esac
+  marker_chezmoi=(chezmoi --config "$profile_fixture/config.toml" -S "$profile_fixture/source"
+    -D "$marker_dest" --cache "$marker_dest.cache" --persistent-state "$marker_dest.boltdb")
+  if [[ $marker_case == empty ]]; then
+    if "${marker_chezmoi[@]}" apply > /dev/null 2> "$marker_dest.err"; then
+      fail 'an empty regular enrollment marker must read the private catalog'
+    fi
+    grep -Fq 'include ".private-secret-exec.toml.age"' "$marker_dest.err" ||
+      fail 'an empty regular enrollment marker must fail only on the missing catalog'
+  else
+    "${marker_chezmoi[@]}" apply ||
+      fail "a $marker_case enrollment marker must leave the destination unenrolled"
+    [[ -z $(print -l "$marker_dest"/.config/secret-exec/profiles/openai-experiments*(N)) ]] ||
+      fail "a $marker_case enrollment marker must not create the OpenAI profile"
+  fi
+  [[ $marker_case != fifo ]] || rm -- "$marker"
+done
+cp "$openai_fixture_config" "$profile_fixture/config.toml"
+
 render_github_profile() {
   local host=$1
   local target=$2
