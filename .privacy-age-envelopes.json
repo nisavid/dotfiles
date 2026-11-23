@@ -6,6 +6,10 @@
       "sha256": "sha256:5e5d72217c437dab2f5367c3bb377d1e17cf2dfd8b1ac4d5e1b3aaba9d465ebc"
     },
     {
+      "path": "home/.private-artifact-store.md.age",
+      "sha256": "sha256:694260b6e94ed1ae486114dc1350be921827705f52b4c83a05c3b663d3f4fde4"
+    },
+    {
       "path": "home/.private-codex-work.toml.age",
       "sha256": "sha256:bc420d1b6ec371a1d0e12fe2b58d46a461eff93e7045a12e736cc7c638c1d5f0"
     },
@@ -31,7 +35,7 @@
     },
     {
       "path": "home/.private-privacy-denylist.txt.age",
-      "sha256": "sha256:c9c73a4db9c6ec7981b78d7340daf2dad04ed54454985a05adb0a2b5f19d6662"
+      "sha256": "sha256:7d4154f0aba2af06dcf3a612e5142dbd723138627d2e2b6fd095d806d40bdcf7"
     },
     {
       "path": "home/.private-secret-exec.toml.age",

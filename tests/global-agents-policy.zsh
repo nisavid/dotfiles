@@ -25,6 +25,10 @@ cold_archive_envelope_name=.private-cold-archive.md.age
 cold_archive_envelope="$source_root/$cold_archive_envelope_name"
 claude_cold_archive_rule_template="$source_root/dot_claude/rules/private_cold-archive.md.tmpl"
 cold_archive_include='{{ include ".private-cold-archive.md.age" | decrypt | trim }}'
+artifact_store_envelope_name=.private-artifact-store.md.age
+artifact_store_envelope="$source_root/$artifact_store_envelope_name"
+claude_artifact_store_rule_template="$source_root/dot_claude/rules/private_artifact-store.md.tmpl"
+artifact_store_include='{{ include ".private-artifact-store.md.age" | decrypt | trim }}'
 question_partial_name=decisions-via-question-tool.tmpl
 question_partial="$source_root/.chezmoitemplates/$question_partial_name"
 claude_question_rule_template="$source_root/dot_claude/rules/decisions-via-question-tool.md.tmpl"
@@ -47,6 +51,8 @@ claude_cross_harness_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-cross-h
 cross_harness_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-cross-harness-policy.XXXXXX")
 claude_cold_archive_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-cold-archive-rule.XXXXXX")
 cold_archive_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-cold-archive-policy.XXXXXX")
+claude_artifact_store_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-artifact-store-rule.XXXXXX")
+artifact_store_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-artifact-store-policy.XXXXXX")
 claude_question_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-question-rule.XXXXXX")
 question_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-question-policy.XXXXXX")
 cards_expected=$(mktemp "${TMPDIR:-/tmp}/global-agents-cards-expected.XXXXXX")
@@ -58,6 +64,7 @@ render_claude_git_rule_template=$claude_git_rule_template
 render_claude_review_rule_template=$claude_review_rule_template
 render_claude_cross_harness_rule_template=$claude_cross_harness_rule_template
 render_claude_cold_archive_rule_template=$claude_cold_archive_rule_template
+render_claude_artifact_store_rule_template=$claude_artifact_store_rule_template
 render_claude_question_rule_template=$claude_question_rule_template
 render_claude_cards_rule=$claude_cards_rule
 render_claude_typography_rule_template=$claude_typography_rule_template
@@ -68,7 +75,9 @@ chmod 600 "$git_policy"
 chmod 600 "$pr_policy"
 chmod 600 "$claude_cold_archive_rule"
 chmod 600 "$cold_archive_policy"
-trap 'rm -f "$rendered" "$size_check_stderr" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cross_harness_rule" "$cross_harness_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_question_rule" "$question_policy" "$cards_expected" "$claude_typography_rule"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
+chmod 600 "$claude_artifact_store_rule"
+chmod 600 "$artifact_store_policy"
+trap 'rm -f "$rendered" "$size_check_stderr" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cross_harness_rule" "$cross_harness_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_artifact_store_rule" "$artifact_store_policy" "$claude_question_rule" "$question_policy" "$cards_expected" "$claude_typography_rule"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -154,6 +163,28 @@ grep -Fq "home/$cold_archive_envelope_name" "$encryption_doc" ||
 grep -Fq 'mode-`0600` `~/.claude/rules/cold-archive.md` target' "$encryption_doc" ||
   fail "encryption policy does not authorize the cold-archive rule target and mode"
 
+[[ -f "$artifact_store_envelope" ]] || fail "artifact-store envelope is missing"
+[[ -f "$claude_artifact_store_rule_template" ]] || fail "Claude artifact-store rule template is missing"
+[[ $(mode_of "$claude_artifact_store_rule_template") == 644 ]] || fail "Claude artifact-store rule source template mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_artifact_store_rule_template") == "$HOME/.claude/rules/artifact-store.md" ]] ||
+  fail "Claude artifact-store rule template targets the wrong file"
+# As with the cold archive, both harnesses take the instruction from the one
+# envelope, and neither source template carries any of it in plaintext.
+[[ $(<"$claude_artifact_store_rule_template") == "# Local Artifact Store"$'\n\n'"$artifact_store_include" ]] ||
+  fail "Claude artifact-store rule is not the heading plus the encrypted include"
+[[ $(awk '
+  $0 == "## Local Artifact Store" { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+' "$template") == $'\n'"$artifact_store_include" ]] ||
+  fail "Codex policy does not carry exactly the encrypted include in Local Artifact Store"
+[[ $(grep -Fc -- "$artifact_store_envelope_name" "$template") == 1 ]] ||
+  fail "Codex policy must include the artifact-store envelope exactly once"
+grep -Fq "home/$artifact_store_envelope_name" "$encryption_doc" ||
+  fail "encryption policy does not register the artifact-store envelope"
+grep -Fq 'mode-`0600` `~/.claude/rules/artifact-store.md` target' "$encryption_doc" ||
+  fail "encryption policy does not authorize the artifact-store rule target and mode"
+
 [[ -f "$claude_question_rule_template" ]] || fail "Claude question-tool rule template is missing"
 [[ ! -e "${claude_question_rule_template%.tmpl}" ]] || fail "plain Claude question-tool rule still exists beside its template"
 [[ $(mode_of "$claude_question_rule_template") == 644 ]] || fail "Claude question-tool rule source template mode must be 0644"
@@ -181,7 +212,7 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   mkdir -m 700 "$render_fixture/dot_codex"
   render_template="$render_fixture/dot_codex/private_AGENTS.md.tmpl"
   awk '
-    !($0 ~ /include[[:space:]]+"\.private-(agents|cold-archive)\.md\.age"[[:space:]]*\|[[:space:]]*decrypt/)
+    !($0 ~ /include[[:space:]]+"\.private-(agents|cold-archive|artifact-store)\.md\.age"[[:space:]]*\|[[:space:]]*decrypt/)
   ' "$template" > "$render_template"
   chmod 644 "$render_template"
   mkdir -m 700 "$render_fixture/.chezmoitemplates" "$render_fixture/dot_claude" "$render_fixture/dot_claude/rules"
@@ -210,6 +241,9 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   render_claude_cold_archive_rule_template="$render_fixture/dot_claude/rules/${claude_cold_archive_rule_template:t}"
   grep -Fv -- "$cold_archive_envelope_name" "$claude_cold_archive_rule_template" > "$render_claude_cold_archive_rule_template"
   chmod 644 "$render_claude_cold_archive_rule_template"
+  render_claude_artifact_store_rule_template="$render_fixture/dot_claude/rules/${claude_artifact_store_rule_template:t}"
+  grep -Fv -- "$artifact_store_envelope_name" "$claude_artifact_store_rule_template" > "$render_claude_artifact_store_rule_template"
+  chmod 644 "$render_claude_artifact_store_rule_template"
   render_claude_question_rule_template="$render_fixture/dot_claude/rules/${claude_question_rule_template:t}"
   cp -p -- "$claude_question_rule_template" "$render_claude_question_rule_template"
   render_claude_cards_rule="$render_fixture/dot_claude/rules/${claude_cards_rule:t}"
@@ -256,7 +290,7 @@ assert_policy_fits_budget "$policy_bytes" "$policy_budget"
 
 # The pins below read the section under each heading, and awk stops at the
 # next heading, so a repeated heading would hide the second copy.
-for heading in 'Git Checkpoints And Publication' 'Review Before Shipping' 'Cross-Harness Work' 'Git Identity' 'Interaction' 'Pull Requests And Issues'; do
+for heading in 'Git Checkpoints And Publication' 'Review Before Shipping' 'Cross-Harness Work' 'Git Identity' 'Interaction' 'Pull Requests And Issues' 'Cold Archive' 'Local Artifact Store'; do
   [[ $(grep -Fxc -- "## $heading" "$rendered") == 1 ]] ||
     fail "Codex policy must have exactly one $heading section"
 done
@@ -630,6 +664,33 @@ else
   [[ $cold_archive == *[^[:space:]]* ]] || fail "cold-archive instruction renders empty"
   [[ $(<"$claude_cold_archive_rule") == "# Cold Archive"$'\n\n'"$cold_archive" ]] ||
     fail "Claude cold-archive rule and Codex Cold Archive section differ"
+fi
+
+chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/artifact-store.md" > "$claude_state"
+[[ $(jq -r '.[".claude/rules/artifact-store.md"].perm' "$claude_state") == 384 ]] ||
+  fail "Claude artifact-store rule target mode is not 0600"
+
+(
+  cd "$render_source_root"
+  chezmoi -S "$render_source_root" execute-template < "$render_claude_artifact_store_rule_template" > "$claude_artifact_store_rule"
+)
+awk '
+  $0 == "## Local Artifact Store" { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+' "$rendered" > "$artifact_store_policy"
+if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
+  # Without the identity, both harnesses keep the heading and nothing else.
+  [[ $(<"$claude_artifact_store_rule") == "# Local Artifact Store" ]] ||
+    fail "public Claude artifact-store rule carries text beyond its heading"
+  [[ $(<"$artifact_store_policy") != *[^[:space:]]* ]] ||
+    fail "public Codex policy carries artifact-store text"
+else
+  artifact_store=$(<"$artifact_store_policy")
+  artifact_store=${artifact_store#$'\n'}
+  [[ $artifact_store == *[^[:space:]]* ]] || fail "artifact-store instruction renders empty"
+  [[ $(<"$claude_artifact_store_rule") == "# Local Artifact Store"$'\n\n'"$artifact_store" ]] ||
+    fail "Claude artifact-store rule and Codex Local Artifact Store section differ"
 fi
 
 chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/decisions-via-question-tool.md" > "$claude_state"
