@@ -331,6 +331,7 @@ run_helper() {
 stand_in_value='context7-canary_1.2~3+4/5=='
 helper_output=$(run_helper "STAND_IN_VALUE=$stand_in_value") ||
   fail 'the Context7 helper must succeed when the key is set'
+[[ ! -s $test_dir/helper.err ]] || fail 'a successful Context7 helper must write nothing to stderr'
 print -r -- "$helper_output" | jq -se --arg value "$stand_in_value" '
   length == 1 and .[0] == {Authorization: ("Bearer " + $value)}
 ' > /dev/null || fail 'the Context7 helper must print exactly one JSON object with the Authorization header'
