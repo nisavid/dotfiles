@@ -70,15 +70,42 @@ fi
 expected_config_directives=$(
   printf '%s\n' 'output * resolution 1600x900' 'xwayland disable' | LC_ALL=C sort
 )
-config_directives=$(
-  awk '
+# Print a config's directives, sorted. awk runs in the C locale because sway
+# strips whitespace byte by byte: in a UTF-8 locale, gawk's [[:space:]] also
+# matches Unicode spaces such as U+2003, which sway keeps as part of the line.
+config_directives_of() {
+  emulate -L zsh
+  setopt err_return pipe_fail
+  LC_ALL=C awk '
     { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); gsub(/[[:space:]]+/, " ") }
     /^#/ || $0 == "" { next }
     { print }
-  ' "$sway_config" | LC_ALL=C sort
-)
+  ' "$1" | LC_ALL=C sort
+}
+config_directives=$(config_directives_of "$sway_config")
 [[ $config_directives == "$expected_config_directives" ]] ||
   fail "the sway config may only hold the directives 'xwayland disable' and 'output * resolution 1600x900', and must not include files or start programs; it holds:"$'\n'"$config_directives"
+# A directive indented with U+2003 is not that directive to sway, so the guard
+# must reject it. The case runs under a UTF-8 locale, whatever the caller's, so
+# it catches a lost C locale in the normaliser wherever awk treats U+2003 as
+# whitespace in UTF-8, as gawk does; where awk is byte-oriented, it passes
+# either way.
+utf8_locale=
+for candidate in C.UTF-8 en_US.UTF-8; do
+  if [[ $(LC_ALL=$candidate locale charmap 2>/dev/null) == UTF-8 ]]; then
+    utf8_locale=$candidate
+    break
+  fi
+done
+if [[ -n $utf8_locale ]]; then
+  unicode_space_config=$test_dir/unicode-space-config
+  print -rl -- 'output * resolution 1600x900' $'\xe2\x80\x83xwayland disable' >"$unicode_space_config"
+  config_directives=$(LC_ALL=$utf8_locale config_directives_of "$unicode_space_config")
+  [[ $config_directives != "$expected_config_directives" ]] ||
+    fail 'the sway config guard must reject a directive indented with a Unicode space'
+else
+  print -ru2 -- 'SKIP: no C.UTF-8 or en_US.UTF-8 locale, so the Unicode-space guard case did not run'
+fi
 
 # The link helper. Each case gets its own shared runtime directory, with the
 # private directory sway would use inside it, as the unit lays them out.
