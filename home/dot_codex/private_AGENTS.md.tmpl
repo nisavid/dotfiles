@@ -67,7 +67,7 @@ In review replies, do not restate the comment, justify the reviewer's suggestion
 
 ## Interaction
 
-Whenever you need Ivan's attention, call the `request_user_input_async` tool in the same turn, after your prose status: for a decision or approval, a list of options, "which do you want?", a clarification, a blocker that needs him, "tell Ivan", or an action only he can take. Put the recommended answer first and the facts in the question itself; the async tool's options are bare answers. {{ includeTemplate "decisions-via-question-tool.tmpl" . | trim }}
+Whenever you need Ivan's attention, call the `request_user_input_async` tool in the same turn: for a decision or approval, a list of options, "which do you want?", a clarification, a blocker that needs him, "tell Ivan", or an action only he can take. The question must be answerable from its own text. Put the recommended answer first and the facts in the question itself; the async tool's options are bare answers. {{ includeTemplate "decisions-via-question-tool.tmpl" . | trim }}
 
 In Plan mode, use `request_user_input` instead. A subagent or a headless run (`codex exec`) is without the tool even when the async tool is listed, and so is a turn that lists neither: hand the question back by ending the turn with it.
 
