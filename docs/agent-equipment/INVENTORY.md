@@ -134,7 +134,7 @@ the captured pre-state if the manager channel advanced.
 | Equipment | Claude | Codex | Cursor | Disposition |
 | --- | --- | --- | --- | --- |
 | Chrome DevTools | Native plugin | Direct MCP | Direct MCP | Reviewed proposal: Claude keeps the atomic MCP-plus-six-skill plugin; each bundled skill has an explicit temporary Codex/Cursor omission |
-| Context7 | Direct MCP | Direct MCP | Direct MCP | Recommended: the installed Claude plugin is disabled and contributes only the overlapping MCP |
+| Context7 | Direct MCP | Direct MCP | Direct MCP | Owner decision of 2026-11-23 (dotfiles#521): Claude uses the official plugin and its remote server with OAuth, and the direct Claude MCP is removed; this proposed catalog still records the direct Claude route |
 | Firecrawl | Direct MCP | Direct MCP | Direct MCP | Recommended: the enabled Claude Firecrawl plugin contributes ten skills and **no MCP server** |
 | GitHub | Direct MCP | Native plugin | Direct MCP | Reviewed proposal: Claude retains process-scoped `secret-exec`; Codex keeps its app, MCP, and three skills while `yeet` is disabled; Cursor gains the direct route |
 | Greptile | Direct MCP | Intentional omission | Intentional omission | Recommended with explicit omissions: only the Claude route is currently observed |
@@ -154,9 +154,9 @@ observed routes outside the selected proposal.
 The current duplicate candidates are preserved until their selected provider
 routes are active. The proposed retirement set owns only the observed direct
 Claude Chrome DevTools route, the observed direct Codex GitHub route, and the
-21 Matt Claude projections. Disabled Claude Context7, GitHub, and Greptile
-plugins remain unmanaged observations. None of those unmanaged observations is
-a deletion instruction.
+21 Matt Claude projections. Disabled Claude GitHub and Greptile plugins remain
+unmanaged observations. None of those unmanaged observations is a deletion
+instruction.
 
 ## Selective-component limits
 
