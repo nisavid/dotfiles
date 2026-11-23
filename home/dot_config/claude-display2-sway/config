@@ -1,0 +1,13 @@
+# sway config for claude-display2-sway.service, the headless display that
+# Claude Desktop computer use draws on.
+#
+# This file replaces sway's default config on purpose. The default config
+# includes /etc/sway/config.d, whose systemd snippet sets XDG_CURRENT_DESKTOP
+# to sway and imports it, with this sway's DISPLAY, SWAYSOCK, and
+# WAYLAND_DISPLAY, into the session's user manager and D-Bus activation
+# environment, and its bar block starts swaybar. tests/claude-display2-sway.zsh
+# allows only the two directives below: nothing here may include files or
+# start programs.
+xwayland disable
+# 1600x900 matches Claude Desktop's display presets.
+output * resolution 1600x900

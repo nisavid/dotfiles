@@ -510,9 +510,11 @@ for pattern in $linux_only_patterns; do
 done
 
 typeset -a darwin_only_patterns=(
+  '.config/claude-display2-sway'
   '.config/environment.d/98-proton-pass.conf'
   '.config/pacman/makepkg.conf'
   '.config/systemd'
+  '.local/bin/claude-display2-link'
   '.local/bin/cmake'
   '.local/bin/makepkg'
   '.local/bin/memory-telemetry'
@@ -520,6 +522,7 @@ typeset -a darwin_only_patterns=(
   '.local/bin/proton-drive-desktop'
   '.local/bin/standing-resource-admission'
   '.local/lib/builds-slice'
+  'enable-claude-display2-sway.sh'
 )
 
 for pattern in $darwin_only_patterns; do
@@ -558,6 +561,7 @@ assert_line '.config/autostart' "$test_root/darwin-ignore"
 linux_source_inventory=$(
   find \
     "$repo_root/home/dot_config/autostart" \
+    "$repo_root/home/dot_config/claude-display2-sway" \
     "$repo_root/home/dot_config/systemd" \
     "$repo_root/home/private_dot_local/private_share/applications" \
     -type f -print |
@@ -568,8 +572,10 @@ expected_linux_source_inventory=$(
   printf '%s\n' \
     'dot_config/autostart/private_claude-desktop.desktop' \
     'dot_config/autostart/private_claude.desktop' \
+    'dot_config/claude-display2-sway/config' \
     'dot_config/systemd/user/app-com.anthropic.Claude-.scope.d/50-oom-continue.conf' \
     'dot_config/systemd/user/builds.slice' \
+    'dot_config/systemd/user/claude-display2-sway.service' \
     'dot_config/systemd/user/codex-usage-safeguard.service.tmpl' \
     'dot_config/systemd/user/default.target.wants/symlink_memory-telemetry.service' \
     'dot_config/systemd/user/graphical-session.target.wants/symlink_ydotool.service' \
@@ -596,6 +602,8 @@ mkdir -p \
   "$fixture_source/private_dot_docker" \
   "$fixture_source/private_dot_local/libexec/fixture" \
   "$fixture_source/private_Library/private_LaunchAgents" \
+  "$fixture_source/dot_config/claude-display2-sway" \
+  "$fixture_source/private_dot_local/bin" \
   "$fixture_source/private_dot_local/private_share/applications" \
   "$fixture_home"
 cp "$test_root/linux-ignore" "$fixture_source/.chezmoiignore"
@@ -616,7 +624,10 @@ touch \
   "$fixture_source/private_dot_local/libexec/fixture/executable_zsh-gui-path" \
   "$fixture_source/private_Library/private_LaunchAgents/io.fixture.zsh-gui-path.plist" \
   "$fixture_source/private_dot_local/private_share/applications/proton-pass-url-handler.desktop" \
-  "$fixture_source/run_onchange_after_register-proton-pass-url-handler.zsh.tmpl"
+  "$fixture_source/run_onchange_after_register-proton-pass-url-handler.zsh.tmpl" \
+  "$fixture_source/dot_config/claude-display2-sway/config" \
+  "$fixture_source/private_dot_local/bin/executable_claude-display2-link" \
+  "$fixture_source/run_onchange_after_enable-claude-display2-sway.sh.tmpl"
 touch "$fixture_config"
 
 managed=$(
@@ -641,6 +652,28 @@ print -r -- "$managed" |
 print -r -- "$managed" |
   grep -Fqx -- 'register-proton-pass-url-handler.zsh' ||
   fail 'Linux does not run the protonpass:// registration'
+# The headless sway display for Claude Desktop computer use: its unit sits
+# under .config/systemd, checked above; its sway config, link helper, and
+# enabling script deploy on Linux only.
+typeset -a display2_targets=(
+  '.config/claude-display2-sway/config'
+  '.local/bin/claude-display2-link'
+  'enable-claude-display2-sway.sh'
+)
+for display2_target in $display2_targets; do
+  print -r -- "$managed" | grep -Fqx -- "$display2_target" ||
+    fail "Linux does not manage $display2_target"
+done
+cp "$test_root/darwin-ignore" "$fixture_source/.chezmoiignore"
+darwin_managed=$(
+  HOME=$fixture_home chezmoi -S "$fixture_source" -D "$fixture_home" \
+    --config "$fixture_config" managed
+)
+for display2_target in $display2_targets; do
+  ! print -r -- "$darwin_managed" | grep -Fqx -- "$display2_target" ||
+    fail "Darwin manages $display2_target"
+done
+cp "$test_root/linux-ignore" "$fixture_source/.chezmoiignore"
 
 handler_registration_template=$repo_root/home/run_onchange_after_register-proton-pass-url-handler.zsh.tmpl
 darwin_handler_registration=$(

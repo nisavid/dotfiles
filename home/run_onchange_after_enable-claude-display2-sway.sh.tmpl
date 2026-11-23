@@ -1,0 +1,45 @@
+{{- if eq .chezmoi.os "linux" -}}
+{{- $manager := "unreachable" -}}
+{{- if and (env "XDG_RUNTIME_DIR") (stat (joinPath (env "XDG_RUNTIME_DIR") "systemd/private")) -}}
+{{-   $manager = "reachable" -}}
+{{- end -}}
+#!/bin/sh
+# Rerun when the unit, its sway config, or its link helper changes, when
+# systemctl or sway appears or moves, or when the user service manager becomes
+# reachable.
+# unit: {{ include "dot_config/systemd/user/claude-display2-sway.service" | sha256sum }}
+# sway config: {{ include "dot_config/claude-display2-sway/config" | sha256sum }}
+# link helper: {{ include "private_dot_local/bin/executable_claude-display2-link" | sha256sum }}
+# systemctl: {{ lookPath "systemctl" }}
+# sway: {{ lookPath "sway" }}
+# user manager: {{ $manager }}
+set -eu
+
+unit=claude-display2-sway.service
+expected_manager={{ $manager }}
+
+skip() {
+  printf 'claude-display2-sway: %s; this run did not enable %s, and the first apply that finds it available will\n' \
+    "$1" "$unit" >&2
+  exit 0
+}
+
+command -v systemctl >/dev/null 2>&1 || skip 'systemctl is unavailable on PATH'
+command -v sway >/dev/null 2>&1 || skip 'sway is unavailable on PATH'
+if ! systemctl --user show-environment >/dev/null 2>&1; then
+  # A skip here would be recorded as a completed run and never retried, so
+  # fail when the manager was reachable as this script was rendered.
+  if [ "$expected_manager" = reachable ]; then
+    printf 'claude-display2-sway: the user service manager was reachable as this apply began but does not answer now; %s is not enabled, and the next apply will retry\n' \
+      "$unit" >&2
+    exit 1
+  fi
+  skip 'the user service manager is unreachable'
+fi
+
+systemctl --user daemon-reload
+systemctl --user enable --now "$unit"
+{{- else -}}
+#!/bin/sh
+exit 0
+{{- end -}}

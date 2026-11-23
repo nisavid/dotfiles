@@ -1,0 +1,31 @@
+[Unit]
+Description=Headless sway for Claude Desktop computer use (display wayland-2)
+After=graphical-session.target
+# Logout stops the session target and, through PartOf, this sway, whose
+# ExecStopPost removes the wayland-2 link; the next login starts a fresh sway
+# with the current config.
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# sway runs in a private runtime directory, created with mode 0700 before
+# the service starts, so its wayland-N socket and IPC socket stay apart from
+# the session compositor's. The link helper then names its socket wayland-2
+# in the shared runtime directory, where Claude Desktop looks for it.
+RuntimeDirectory=claude-display2
+RuntimeDirectoryMode=0700
+Environment=XDG_RUNTIME_DIR=%t/claude-display2
+Environment=WLR_BACKENDS=headless
+Environment=WLR_RENDERER=pixman
+Environment=WLR_LIBINPUT_NO_DEVICES=1
+UnsetEnvironment=WAYLAND_DISPLAY DISPLAY
+# The dedicated config keeps sway from loading its default config, which
+# would change the session's environment and start a bar.
+ExecStart=sway --config %h/.config/claude-display2-sway/config
+ExecStartPost=%h/.local/bin/claude-display2-link link %t/claude-display2 %t/wayland-2
+ExecStopPost=%h/.local/bin/claude-display2-link unlink %t/claude-display2 %t/wayland-2
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=graphical-session.target
