@@ -601,15 +601,14 @@ assert_partial_carried_once "$question" "question-tool policy" "$template" "$cla
 # Each harness names its own tool and option format outside the partial.
 # The Claude rule and the Codex Interaction section are pinned exactly around
 # it, and each opening is pinned on its own: the Claude opening adds a
-# command-step paragraph and drops "after your prose status", and neither
-# opening is derived from the other.
+# command-step paragraph, and neither opening is derived from the other.
 claude_question_lead="Whenever you need Ivan's attention, call the \`AskUserQuestion\` tool in the same turn: for a decision or approval, a list of options, \"which do you want?\", a clarification, a blocker that needs him, \"tell Ivan\", or an action only he can take. The card must be answerable from its own text, because prose written before it may not reach him."
 claude_question_format='Put the recommended option first and the facts in the option descriptions.'
 claude_question_command='A command he must run is the one exception. End your turn with the command as a runnable block. The app'"'"'s end-of-turn box sits under it with a Done button, and the session shows as waiting on him. No card. He runs it and clicks once: for a command step, the end-of-turn box is the prompt. The check before ending a turn does not ask for a card here. In a session with no end-of-turn box, the card carries the command in its question text.'
 claude_question_background='Ivan corrected this on 2026-09-29, 2026-10-02 (twice), and 2026-10-16; the memory alone did not prevent recurrence.'
 [[ $(<"$claude_question_rule") == "# Decisions Via The Question Tool"$'\n\n'"$claude_question_lead $claude_question_format"$'\n\n'"$claude_question_command"$'\n\n'"$question"$'\n\n'"$claude_question_background" ]] ||
   fail "Claude question-tool rule is not the heading, its two opening paragraphs, the shared partial, and its background"
-codex_question_lead="Whenever you need Ivan's attention, call the \`request_user_input_async\` tool in the same turn, after your prose status: for a decision or approval, a list of options, \"which do you want?\", a clarification, a blocker that needs him, \"tell Ivan\", or an action only he can take."
+codex_question_lead="Whenever you need Ivan's attention, call the \`request_user_input_async\` tool in the same turn: for a decision or approval, a list of options, \"which do you want?\", a clarification, a blocker that needs him, \"tell Ivan\", or an action only he can take. The question must be answerable from its own text."
 codex_question_format="Put the recommended answer first and the facts in the question itself; the async tool's options are bare answers."
 codex_question_fallback="In Plan mode, use \`request_user_input\` instead. A subagent or a headless run (\`codex exec\`) is without the tool even when the async tool is listed, and so is a turn that lists neither: hand the question back by ending the turn with it."
 codex_question_wait='When asking Ivan a question, wait for his response by default. Set no automatic timeout or auto-resolution unless Ivan explicitly requests one for that question or workflow.'
