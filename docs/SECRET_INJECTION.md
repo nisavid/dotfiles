@@ -769,14 +769,50 @@ keeps that sign-in on the host in its own credentials file, outside this
 repository, so a new host, or one that lost that file, needs it again. Until the
 sign-in, Claude Code has no Context7 tools from a server; the `ctx7` command is
 not affected. The plugin's tools carry the plugin's prefix rather than
-`mcp__context7__`. Codex, Cursor, and OpenCode still launch the local server
-through `secret-exec`.
+`mcp__context7__`. Cursor and OpenCode still launch the local server through
+`secret-exec`.
+
+## Codex Context7 route
+
+Codex reaches Context7's remote server, `https://mcp.context7.com/mcp`, and
+takes the key from a header helper. The `~/.codex/config.toml` modifier writes
+the `context7` entry with `url` and `http_headers_helper`, and removes
+`type`, `command`, `args`, `cwd`, `env`, `env_vars`, `headers`,
+`http_headers`, `env_http_headers`, and `bearer_token_env_var`. Other settings
+of the entry, such as `enabled` and its timeouts, stay. The helper command is:
+
+```text
+~/.local/bin/secret-exec context7 -- ~/.local/lib/secret-exec/context7-http-headers
+```
+
+The modifier writes both paths in full and quotes them for the shell. Codex runs
+the command through `sh -c` when it connects, with a cleared environment plus
+the variables it gives MCP servers, and sends the one JSON object the command
+prints as HTTP headers. `secret-exec` resolves the `context7` profile for the
+helper alone. The helper reads `CONTEXT7_API_KEY`, prints
+`{"Authorization":"Bearer <key>"}`, and writes the key nowhere else; when the
+variable is missing, empty, or holds a character outside the bearer-token
+characters, it prints nothing and fails. The key is therefore in neither
+Codex's environment nor its configuration file, and no local Context7 server
+starts. Codex keeps the headers for the connection and runs the helper again
+only after a 401 or 403 response, so each new session reads the key once. The
+key reaches Codex's memory as a header value, and Codex sends it to Context7.
+
+Codex accepts a misspelled field in this entry without an error, so a typo
+loses the helper silently. `codex mcp list --json` shows the helper command
+only as `"<redacted>"`. `secret-exec-migrate --retire-plaintext` therefore
+requires the remote address, a helper, and no `http_headers`,
+`env_http_headers`, or `bearer_token_env_var`, and separately requires the
+helper file to be an executable regular file. A trial on 2026-11-23 with
+Codex 0.171.0 and the real `context7` profile listed and called Context7's
+tools this way, with the helper's run under 3 seconds, no process holding the
+key by name, and no `context7-mcp` process.
 
 ## Cursor MCP route
 
 Cursor reads `~/.cursor/mcp.json`, which holds servers the dotfiles do not
-own. A modifier sets only its `context7` entry to the same `secret-exec`
-launcher the Codex binding uses, and removes `type` (the stdio
+own. A modifier sets only its `context7` entry to the `secret-exec`
+launcher, and removes `type` (the stdio
 type, as the Claude Code modifier does), `url`, `auth`, `env`, `envFile`,
 `env_vars`, `headers`, `http_headers`, and `bearer_token_env_var` from that
 entry. Every other entry and setting passes through unchanged, including

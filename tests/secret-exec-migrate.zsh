@@ -137,6 +137,8 @@ EOF
 ln -s .config/zsh/zshenv.zsh "$fixture_home/.zshenv"
 : > "$fixture_home/.local/bin/secret-exec"
 chmod +x "$fixture_home/.local/bin/secret-exec"
+: > "$fixture_home/.local/lib/secret-exec/context7-http-headers"
+chmod +x "$fixture_home/.local/lib/secret-exec/context7-http-headers"
 cat > "$fixture_home/.codex/config.toml" <<'EOF'
 [mcp_servers.context7]
 command = "managed-by-fake-codex"
@@ -245,7 +247,7 @@ set -euo pipefail
 [[ $* == 'mcp list --json' ]] || exit 64
 command=$HOME/.local/bin/secret-exec
 jq -n --arg command "$command" '[
-  {name:"context7",transport:{type:"stdio",command:$command,args:["context7","--","npx","-y","@upstash/context7-mcp@3.2.4"],env:{},env_vars:[],cwd:null}},
+  {name:"context7",transport:{type:"streamable_http",url:"https://mcp.context7.com/mcp",bearer_token_env_var:null,http_headers:null,env_http_headers:null,http_headers_helper:"<redacted>"}},
   {name:"firecrawl",transport:{type:"stdio",command:$command,args:["firecrawl","--","npx","-y","firecrawl-mcp@3.22.3"],env:{},env_vars:[],cwd:null}},
   {name:"github",transport:{type:"stdio",command:$command,args:["github","--","npx","-y","mcp-remote@0.1.38","https://api.githubcopilot.com/mcp/","--header","Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"],env:{},env_vars:[],cwd:null}}
 ]'
@@ -585,6 +587,64 @@ set -e
 [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
   fail 'a Codex binding rejection must preserve every plaintext source'
 mv "$test_dir/codex" "$fake_bin/codex"
+
+# Codex reaches Context7's remote server through the header helper
+# (dotfiles#522). Retirement rejects the local launcher, a remote entry with no
+# helper or another address, and every field that can carry the key.
+cp "$fake_bin/codex" "$test_dir/codex"
+cat > "$fake_bin/codex" <<EOF
+#!/usr/bin/env zsh
+set -euo pipefail
+"$test_dir/codex" "\$@" | jq --argjson transport "\$FAKE_CONTEXT7_TRANSPORT" \
+  'map(if .name == "context7" then .transport = \$transport else . end)'
+EOF
+chmod +x "$fake_bin/codex"
+remote='{"type":"streamable_http","url":"https://mcp.context7.com/mcp","bearer_token_env_var":null,"http_headers":null,"env_http_headers":null,"http_headers_helper":"<redacted>"}'
+for context7_transport in \
+  "$(jq -nc --arg command "$fixture_home/.local/bin/secret-exec" '{type: "stdio", command: $command, args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"], env: {}, env_vars: [], cwd: null}')" \
+  "$(jq -c '.http_headers_helper = null' <<< "$remote")" \
+  "$(jq -c '.url = "https://mcp.context7.com/mcp/oauth"' <<< "$remote")" \
+  "$(jq -c '.http_headers = {Authorization: "Bearer context7-canary"}' <<< "$remote")" \
+  "$(jq -c --arg field "$context7_field" '.bearer_token_env_var = $field' <<< "$remote")" \
+  "$(jq -c --arg field "$context7_field" '.env_http_headers = {Authorization: $field}' <<< "$remote")"; do
+  set +e
+  FAKE_CONTEXT7_TRANSPORT=$context7_transport \
+    zsh "$migrator" --retire-plaintext > "$test_dir/codex-context7.out" 2>&1
+  exit_code=$?
+  set -e
+  (( exit_code != 0 )) || fail "retirement must reject this Codex Context7 binding: $context7_transport"
+  [[ $(<"$test_dir/codex-context7.out") == *'effective Codex MCP bindings do not match the canonical contract'* ]] ||
+    fail 'a Codex Context7 binding must be named as the retirement blocker'
+  [[ $(<"$test_dir/codex-context7.out") != *context7-canary* ]] ||
+    fail 'Codex Context7 diagnostics must not contain canary values'
+  [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] ||
+    fail 'a Codex Context7 rejection must preserve every plaintext source'
+done
+mv "$test_dir/codex" "$fake_bin/codex"
+
+# The helper the Codex entry runs must be installed as a regular executable.
+context7_helper=$fixture_home/.local/lib/secret-exec/context7-http-headers
+mv "$context7_helper" "$test_dir/context7-http-headers"
+for helper_state in missing symlink not-executable; do
+  case $helper_state in
+    symlink) ln -s "$test_dir/context7-http-headers" "$context7_helper" ;;
+    not-executable)
+      cp "$test_dir/context7-http-headers" "$context7_helper"
+      chmod -x "$context7_helper"
+      ;;
+  esac
+  set +e
+  zsh "$migrator" --retire-plaintext > "$test_dir/context7-helper.out" 2>&1
+  exit_code=$?
+  set -e
+  (( exit_code != 0 )) || fail "retirement must reject a $helper_state Context7 header helper"
+  [[ $(<"$test_dir/context7-helper.out") == *'the Context7 header helper must be an executable regular file before retirement'* ]] ||
+    fail "a $helper_state Context7 header helper must be named as the retirement blocker"
+  [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] ||
+    fail 'a Context7 helper rejection must preserve every plaintext source'
+  rm -f -- "$context7_helper"
+done
+mv "$test_dir/context7-http-headers" "$context7_helper"
 
 cat > "$fixture_home/.config/mcp-config.json" <<'EOF'
 {"mcpServers":{"firecrawl":{"url":"https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"}}}

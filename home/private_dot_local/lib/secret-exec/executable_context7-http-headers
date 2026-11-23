@@ -1,0 +1,24 @@
+#!/bin/zsh -f
+# Context7 header helper for Codex's `http_headers_helper` (dotfiles#522).
+#
+# Run it only under `secret-exec context7 -- <this file>`. It reads
+# CONTEXT7_API_KEY from its own environment and prints one JSON object that
+# holds one header, Authorization, for Context7's remote server. Codex reads
+# that object from stdout and sends it as HTTP headers.
+#
+# When the variable is missing, empty, or holds a character outside the bearer
+# token set, it prints nothing on stdout, names the problem on stderr without
+# the value, and exits 1. It writes the value nowhere but stdout: `print` is a
+# shell builtin, so the value never appears in a process's arguments, and no
+# file is written.
+emulate -L zsh
+setopt extended_glob no_unset
+
+key=${CONTEXT7_API_KEY-}
+# RFC 6750 bearer token characters. The set also keeps the value from needing
+# any JSON escape.
+if [[ -z $key || $key != [A-Za-z0-9._~+/-]##(=#) ]]; then
+  print -u2 -r -- 'context7-http-headers: CONTEXT7_API_KEY is missing or is not a bearer token'
+  exit 1
+fi
+print -r -- '{"Authorization":"Bearer '"$key"'"}'

@@ -80,7 +80,6 @@ with open(path, "rb") as config:
     doc = tomllib.load(config)
 assert doc["unrelated"] == "preserved"
 expected = {
-    "context7": ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"],
     "firecrawl": ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"],
     "github": [
         "github", "--", "npx", "-y", "mcp-remote@0.1.38",
@@ -93,9 +92,131 @@ for name, args in expected.items():
     assert server["command"] == f"{home}/.local/bin/secret-exec"
     assert list(server["args"]) == args
     assert not ({"type", "url", "headers", "http_headers", "bearer_token_env_var", "env_vars", "env"} & set(server))
-assert doc["mcp_servers"]["context7"]["startup_timeout_sec"] == 30
 assert doc["mcp_servers"]["firecrawl"]["cwd"] == "/tmp/firecrawl"
+# Context7 is remote, with its key from the header helper (dotfiles#522).
+assert doc["mcp_servers"]["context7"] == {
+    "url": "https://mcp.context7.com/mcp",
+    "http_headers_helper": f"{home}/.local/bin/secret-exec context7 -- {home}/.local/lib/secret-exec/context7-http-headers",
+    "startup_timeout_sec": 30,
+}, doc["mcp_servers"]["context7"]
 PYEOF
+! rg -n 'ambient-canary' "$test_dir/codex-output.toml" > /dev/null ||
+  fail 'Codex output must not keep a Context7 key'
+"$codex_modifier" < "$test_dir/codex-output.toml" | cmp -s - "$test_dir/codex-output.toml" ||
+  fail 'the Codex modifier must be idempotent'
+
+# Every earlier form of the Codex context7 entry becomes the remote entry: the
+# local launcher, keys in the environment, in a header, or named by a variable,
+# and no entry at all. Other settings and other servers stay as they are.
+codex_context7_forms=(
+  "command = \"$fixture_home/.local/bin/secret-exec\"
+args = [\"context7\", \"--\", \"npx\", \"-y\", \"@upstash/context7-mcp@3.2.4\"]
+enabled = false
+tool_timeout_sec = 90"
+  "command = \"npx\"
+args = [\"-y\", \"@upstash/context7-mcp\"]
+cwd = \"/tmp/context7\"
+env = { $context7_field = \"context7-canary\" }
+env_vars = [\"$context7_field\"]"
+  "type = \"streamable_http\"
+url = \"https://mcp.context7.example.invalid/mcp\"
+bearer_token_env_var = \"$context7_field\"
+env_http_headers = { \"Authorization\" = \"$context7_field\" }
+headers = { \"X-Key\" = \"context7-canary\" }"
+  ''
+)
+for form in "${codex_context7_forms[@]}"; do
+  {
+    print -r -- '[mcp_servers.notes]'
+    print -r -- 'command = "notes-mcp"'
+    if [[ -n $form ]]; then
+      print -r -- '[mcp_servers.context7]'
+      print -r -- "$form"
+    fi
+  } > "$test_dir/codex-form.toml"
+  "$codex_modifier" < "$test_dir/codex-form.toml" > "$test_dir/codex-form-output.toml"
+  python3 -I -S - "$test_dir/codex-form.toml" "$test_dir/codex-form-output.toml" "$fixture_home" <<'PYEOF' ||
+import sys, tomllib
+
+source_path, output_path, home = sys.argv[1:]
+with open(source_path, "rb") as config:
+    source = tomllib.load(config)["mcp_servers"].get("context7", {})
+with open(output_path, "rb") as config:
+    servers = tomllib.load(config)["mcp_servers"]
+assert servers["notes"] == {"command": "notes-mcp"}
+kept = {key: value for key, value in source.items() if key in {"enabled", "tool_timeout_sec"}}
+assert servers["context7"] == {
+    **kept,
+    "url": "https://mcp.context7.com/mcp",
+    "http_headers_helper": f"{home}/.local/bin/secret-exec context7 -- {home}/.local/lib/secret-exec/context7-http-headers",
+}, servers["context7"]
+PYEOF
+    fail "the Codex modifier must write the remote Context7 entry from: ${form:-no entry}"
+  ! rg -n 'context7-canary|context7.example|context7-mcp|/tmp/context7' "$test_dir/codex-form-output.toml" > /dev/null ||
+    fail 'Codex output must not keep an earlier Context7 field'
+done
+
+# The helper command survives a home path that needs shell quoting.
+spaced_data=${darwin_data//${fixture_home}/$test_dir/spaced home}
+[[ $spaced_data == *'spaced home'* ]] || fail 'the spaced-home fixture data must name the spaced home'
+chezmoi -S "$repo_root/home" execute-template --override-data "$spaced_data" \
+  < home/dot_codex/modify_private_config.toml.tmpl > "$test_dir/modify-codex-spaced"
+chmod +x "$test_dir/modify-codex-spaced"
+"$test_dir/modify-codex-spaced" < /dev/null | python3 -I -S -c '
+import shlex, sys, tomllib
+home = sys.argv[1]
+command = tomllib.loads(sys.stdin.read())["mcp_servers"]["context7"]["http_headers_helper"]
+assert shlex.split(command) == [
+    f"{home}/.local/bin/secret-exec", "context7", "--",
+    f"{home}/.local/lib/secret-exec/context7-http-headers",
+], command
+' "$test_dir/spaced home" || fail 'the Codex helper command must quote a home path with a space'
+
+# The header helper, run as Codex runs it: through `sh -c`, with a cleared
+# environment, under a stand-in secret-exec that supplies the key.
+helper_home=$test_dir/helper-home
+mkdir -p -- "$helper_home/.local/bin" "$helper_home/.local/lib/secret-exec"
+cp home/private_dot_local/lib/secret-exec/executable_context7-http-headers \
+  "$helper_home/.local/lib/secret-exec/context7-http-headers"
+chmod 755 "$helper_home/.local/lib/secret-exec/context7-http-headers"
+cat > "$helper_home/.local/bin/secret-exec" <<'EOF'
+#!/bin/zsh -f
+[[ $1 == context7 && $2 == -- ]] || exit 64
+shift 2
+if [[ -n ${STAND_IN_VALUE+set} ]]; then
+  export CONTEXT7_API_KEY=$STAND_IN_VALUE
+else
+  unset CONTEXT7_API_KEY
+fi
+exec "$@"
+EOF
+chmod 755 "$helper_home/.local/bin/secret-exec"
+helper_command="$helper_home/.local/bin/secret-exec context7 -- $helper_home/.local/lib/secret-exec/context7-http-headers"
+run_helper() {
+  env -i PATH=/usr/bin:/bin HOME=$helper_home "$@" sh -c "$helper_command" 2> "$test_dir/helper.err"
+}
+# Every bearer-token character class: letters, digits, and - . _ ~ + / =.
+stand_in_value='context7-canary_1.2~3+4/5=='
+helper_output=$(run_helper "STAND_IN_VALUE=$stand_in_value") ||
+  fail 'the Context7 helper must succeed when the key is set'
+print -r -- "$helper_output" | jq -se --arg value "$stand_in_value" '
+  length == 1 and .[0] == {Authorization: ("Bearer " + $value)}
+' > /dev/null || fail 'the Context7 helper must print exactly one JSON object with the Authorization header'
+[[ $helper_output == "{\"Authorization\":\"Bearer $stand_in_value\"}" ]] ||
+  fail 'the Context7 helper must print one line'
+for value in UNSET '' 'context7"canary' 'context7\canary' 'context7 canary' 'context7=canary'; do
+  if [[ $value == UNSET ]]; then
+    helper_args=()
+  else
+    helper_args=("STAND_IN_VALUE=$value")
+  fi
+  if helper_output=$(run_helper "${helper_args[@]}"); then
+    fail "the Context7 helper must fail for a missing or invalid key: ${value:-empty}"
+  fi
+  [[ -z $helper_output ]] || fail 'a failing Context7 helper must print nothing'
+  [[ $(<"$test_dir/helper.err") != *canary* ]] ||
+    fail 'the Context7 helper diagnostic must not contain the value'
+done
 
 claude_modifier=$test_dir/modify-claude
 render_modifier home/modify_private_dot_claude.json.tmpl "$claude_modifier"
