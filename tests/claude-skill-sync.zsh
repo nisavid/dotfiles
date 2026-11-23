@@ -58,12 +58,18 @@ plugin_skills=(
   tdd teach to-questionnaire to-spec to-tickets triage wait-what wayfinder
   wizard writing-for-agents
 )
-# Names provided by the MCP apps plugin (#480). The Firecrawl skills are not
-# plugin-provided for this sync: Claude loads them from the shared root.
+# Names provided by the MCP apps plugin (#480), by the official skill-creator
+# plugin, and by later Real Skills Unleashed additions (#514). The Firecrawl
+# skills are not plugin-provided for this sync: Claude loads them from the
+# shared root.
 extra_plugin_skills=(
   add-app-to-server convert-web-app create-mcp-app migrate-oai-app
+  skill-creator implement-spec probing pr retro
 )
 plugin_skills+=($extra_plugin_skills)
+# Shared-root names that a plugin also provides, kept on purpose so that the
+# shared copy stays projected (#514).
+kept_shared_skills=(hf-cli typesafe-ai workflow)
 mkdir -p \
   "$agent_skills/developing-shell-scripts" \
   "$agent_skills/new-skill" \
@@ -94,6 +100,10 @@ print -r -- preserved >"$claude_skills/new-skill"
 # A Firecrawl skill linked from the shared root is not plugin-provided.
 mkdir -p "$agent_skills/firecrawl-scrape"
 ln -s ../../.agents/skills/firecrawl-scrape "$claude_skills/firecrawl-scrape"
+for name in $kept_shared_skills; do
+  mkdir -p "$agent_skills/$name"
+  ln -s "../../.agents/skills/$name" "$claude_skills/$name"
+done
 ln -s ../../.agents/skills/retired-skill "$claude_skills/retired-skill"
 ln -s /missing/claude-specific-skill "$claude_skills/claude-specific-skill"
 ln -s ../../../../.agents/skills/retired-nested "$claude_skills/nested/retired-nested"
@@ -128,6 +138,11 @@ done
 [[ -L $claude_skills/firecrawl-scrape &&
   $(readlink "$claude_skills/firecrawl-scrape") == ../../.agents/skills/firecrawl-scrape ]] ||
   fail 'a Firecrawl skill link into the shared root was removed or changed'
+for name in $kept_shared_skills; do
+  [[ -L $claude_skills/$name &&
+    $(readlink "$claude_skills/$name") == "../../.agents/skills/$name" ]] ||
+    fail "the shared-root link for kept name $name was removed or changed"
+done
 [[ -L $claude_skills/create-mcp-app &&
   $(readlink "$claude_skills/create-mcp-app") == /elsewhere/create-mcp-app ]] ||
   fail 'an MCP apps-named link outside the shared root was touched'
@@ -154,7 +169,7 @@ snapshot() {
 home2=$test_root/home2
 mkdir -p "$home2/.agents/skills/developing-shell-scripts" \
   "$home2/.agents/skills/firecrawl-scrape" "$home2/.claude/skills"
-for name in $plugin_skills; do
+for name in $plugin_skills $kept_shared_skills; do
   mkdir -p "$home2/.agents/skills/$name"
 done
 HOME=$home2 zsh -f "$hook"
@@ -167,6 +182,11 @@ done
 [[ -L $home2/.claude/skills/firecrawl-scrape &&
   $(readlink "$home2/.claude/skills/firecrawl-scrape") == ../../.agents/skills/firecrawl-scrape ]] ||
   fail 'a Firecrawl skill was not projected like a regular shared skill'
+for name in $kept_shared_skills; do
+  [[ -L $home2/.claude/skills/$name &&
+    $(readlink "$home2/.claude/skills/$name") == "../../.agents/skills/$name" ]] ||
+    fail "kept name $name was not projected in the clean home"
+done
 before=$(snapshot "$home2/.claude/skills")
 HOME=$home2 zsh -f "$hook"
 [[ $(snapshot "$home2/.claude/skills") == $before ]] ||
@@ -207,5 +227,21 @@ done
 [[ -L $claude3/developing-shell-scripts &&
   $(readlink "$claude3/developing-shell-scripts") == "$agent3/developing-shell-scripts" ]] ||
   fail 'an existing absolute shared-root link to a regular skill was rewritten'
+
+# A real folder in the Claude skills folder that is named like a plugin-provided
+# skill is the owner's own and is never removed, whether or not the shared root
+# holds a folder of that name.
+home4=$test_root/home4
+mkdir -p "$home4/.agents/skills/developing-shell-scripts" "$home4/.claude/skills"
+for name in $extra_plugin_skills; do
+  mkdir -p "$home4/.agents/skills/$name" "$home4/.claude/skills/$name"
+  print -r -- own >"$home4/.claude/skills/$name/SKILL.md"
+done
+HOME=$home4 zsh -f "$hook"
+for name in $extra_plugin_skills; do
+  [[ -d $home4/.claude/skills/$name && ! -L $home4/.claude/skills/$name &&
+    $(<$home4/.claude/skills/$name/SKILL.md) == own ]] ||
+    fail "a real folder named like plugin-provided $name was touched"
+done
 
 print -r -- 'Claude skill sync: PASS'

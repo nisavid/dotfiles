@@ -23,16 +23,27 @@ main() {
 
   # Names that a selected Claude plugin provides. A user skill shadows the
   # plugin's skill of the same name, so these are never projected into Claude.
-  # The Firecrawl skills are deliberately absent: Claude loads them from the
-  # shared root, so they stay projected.
+  # The list is hand-kept on purpose (nisavid/dotfiles#514): which copy takes a
+  # name is decided per name, and the plugins on the host depend on the signed-in
+  # account.
+  # These names are absent on purpose, so the shared copy stays projected:
+  # - the Firecrawl skills: the shared root keeps them for every harness, and
+  #   the plugins that carry them are being removed;
+  # - hf-cli: its plugin is off, so no plugin copy loads;
+  # - typesafe-ai: its plugin comes from the account, and not every account
+  #   has it;
+  # - workflow: the shared copy is newer than the one the vercel plugin
+  #   bundles, and it goes with the other Workflow SDK skills in the shared
+  #   root.
   # Keep this separate from the retired-skill list above.
   is_plugin_provided_skill() {
     case $1 in
     add-app-to-server | ask-matt | code-review | codebase-design | \
       convert-web-app | create-mcp-app | diagnosing-bugs | domain-modeling | \
       grill-me | grill-with-docs | grilling | handoff | implement | \
-      improve-codebase-architecture | \
-      migrate-oai-app | prototype | research | setup-matt-pocock-skills | \
+      implement-spec | improve-codebase-architecture | \
+      migrate-oai-app | pr | probing | prototype | research | retro | \
+      setup-matt-pocock-skills | skill-creator | \
       tdd | teach | to-questionnaire | to-spec | to-tickets | triage | \
       wait-what | wayfinder | wizard | writing-for-agents)
       return 0
