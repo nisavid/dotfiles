@@ -769,7 +769,7 @@ keeps that sign-in on the host in its own credentials file, outside this
 repository, so a new host, or one that lost that file, needs it again. Until the
 sign-in, Claude Code has no Context7 tools from a server; the `ctx7` command is
 not affected. The plugin's tools carry the plugin's prefix rather than
-`mcp__context7__`. Cursor and OpenCode still launch the local server through
+`mcp__context7__`. OpenCode still launches the local server through
 `secret-exec`.
 
 ## Codex Context7 route
@@ -811,14 +811,25 @@ key by name, and no `context7-mcp` process.
 ## Cursor MCP route
 
 Cursor reads `~/.cursor/mcp.json`, which holds servers the dotfiles do not
-own. A modifier sets only its `context7` entry to the `secret-exec`
-launcher, and removes `type` (the stdio
-type, as the Claude Code modifier does), `url`, `auth`, `env`, `envFile`,
-`env_vars`, `headers`, `http_headers`, and `bearer_token_env_var` from that
-entry. Every other entry and setting passes through unchanged, including
-Cursor's Firecrawl entry, which this binding does not manage. A missing or
-empty file gains only the managed entry; a file that is not one JSON document
-fails the apply and leaves the file as it was.
+own. A modifier sets only its `context7` entry, to Context7's remote server at
+its OAuth address, `https://mcp.context7.com/mcp/oauth`, with `url` alone. It
+removes `command`, `args`, `type`, `auth`, `env`, `envFile`, `env_vars`,
+`headers`, `http_headers`, and `bearer_token_env_var` from that entry and keeps
+its other metadata, such as `timeout`. Cursor's configuration offers no command
+that could supply the key: a header is a literal, which would put the key in
+the file, or `${env:NAME}`, which would put it in Cursor's environment. Cursor
+therefore signs in with OAuth and registers itself as a client, and the
+`context7` profile is not involved. Every other entry and setting passes
+through unchanged, including Cursor's Firecrawl entry, which this binding does
+not manage. A missing or empty file gains only the managed entry; a file that
+is not one JSON document fails the apply and leaves the file as it was.
+
+The sign-in is the owner's step after the apply: from Cursor's MCP settings,
+and with `agent mcp login context7` for the command-line agent. Cursor keeps it
+on the host, outside this repository, so a new host needs it again. Until the
+sign-in, Cursor has no Context7 tools from a server. If the sign-in does not
+complete, or does not last through a restart of Cursor, Cursor goes back to the
+local binding in a later change (dotfiles#522).
 
 ## Codex exec-policy rule for firecrawl-axi
 

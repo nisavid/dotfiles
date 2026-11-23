@@ -134,7 +134,7 @@ the captured pre-state if the manager channel advanced.
 | Equipment | Claude | Codex | Cursor | Disposition |
 | --- | --- | --- | --- | --- |
 | Chrome DevTools | Native plugin | Direct MCP | Direct MCP | Reviewed proposal: Claude keeps the atomic MCP-plus-six-skill plugin; each bundled skill has an explicit temporary Codex/Cursor omission |
-| Context7 | Direct MCP | Direct MCP | Direct MCP | Owner decision of 2026-11-23 (dotfiles#521): Claude uses the official plugin and its remote server with OAuth, and the direct Claude MCP is removed. Under the same decision (dotfiles#522), Codex uses the remote server with its key from a `secret-exec` header helper, and its local server is removed. This proposed catalog still records the direct Claude and Codex routes |
+| Context7 | Direct MCP | Direct MCP | Direct MCP | Owner decision of 2026-11-23 (dotfiles#521): Claude uses the official plugin and its remote server with OAuth, and the direct Claude MCP is removed. Under the same decision (dotfiles#522), Codex uses the remote server with its key from a `secret-exec` header helper, Cursor uses it with OAuth, and their local servers are removed. This proposed catalog still records the direct Claude, Codex, and Cursor routes |
 | Firecrawl | Direct MCP | Direct MCP | Direct MCP | Recommended: the enabled Claude Firecrawl plugin contributes ten skills and **no MCP server** |
 | GitHub | Direct MCP | Native plugin | Direct MCP | Reviewed proposal: Claude retains process-scoped `secret-exec`; Codex keeps its app, MCP, and three skills while `yeet` is disabled; Cursor gains the direct route |
 | Greptile | Direct MCP | Intentional omission | Intentional omission | Recommended with explicit omissions: only the Claude route is currently observed |
@@ -144,7 +144,10 @@ route to the pinned, `secret-exec`-wrapped stdio provider used by the other
 harnesses. This keeps credential injection process-scoped under the proposal's
 existing secret-profile contract instead of defining an HTTP authentication
 header contract. It is proposed desired state only; it does not change the
-observed live Cursor state before an authorized `apply`.
+observed live Cursor state before an authorized `apply`. The managed Cursor
+binding no longer follows it: since dotfiles#522, the Cursor modifier writes
+Context7's remote OAuth address instead, as described in
+[Cursor MCP route](../SECRET_INJECTION.md#cursor-mcp-route).
 
 Every already-observed direct MCP selected by this proposal is classified for
 catalog addition in the inventory. This includes the existing Codex Context7
