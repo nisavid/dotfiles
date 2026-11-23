@@ -156,6 +156,101 @@ PYEOF
     fail 'Codex output must not keep an earlier Context7 field'
 done
 
+# A managed entry split over several table headers, written with dotted keys,
+# or placed after another top-level table is rewritten as one plain table, and a
+# second run changes nothing.
+codex_layout_expect=$test_dir/codex-layout-expect.py
+cat > "$codex_layout_expect" <<'PYEOF'
+import sys, tomllib
+
+name, output_path, home = sys.argv[1:]
+with open(output_path, "rb") as config:
+    servers = tomllib.load(config)["mcp_servers"]
+assert servers["notes"] == {"command": "notes-mcp"}, servers["notes"]
+launcher = f"{home}/.local/bin/secret-exec"
+expected = {
+    "context7": {
+        "url": "https://mcp.context7.com/mcp",
+        "http_headers_helper": f"{launcher} context7 -- {home}/.local/lib/secret-exec/context7-http-headers",
+    },
+    "firecrawl": {
+        "command": launcher,
+        "args": ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"],
+    },
+    "github": {
+        "command": launcher,
+        "args": [
+            "github", "--", "npx", "-y", "mcp-remote@0.1.38",
+            "https://api.githubcopilot.com/mcp/", "--header",
+            "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}",
+        ],
+    },
+}[name]
+assert servers[name] == {**expected, "startup_timeout_sec": 20}, servers[name]
+PYEOF
+for server in context7 firecrawl github; do
+  if [[ $server == context7 ]]; then
+    key_table=env
+    transport_field='command = "npx"'
+  else
+    key_table=http_headers
+    transport_field='url = "https://mcp.example.invalid/mcp"'
+  fi
+  print -r -- "[mcp_servers.$server]
+$transport_field
+startup_timeout_sec = 20
+
+[mcp_servers.notes]
+command = \"notes-mcp\"
+
+[mcp_servers.$server.$key_table]
+$context7_field = \"layout-canary\"" > "$test_dir/codex-layout-split.toml"
+  print -r -- "[mcp_servers]
+notes.command = \"notes-mcp\"
+$server.$transport_field
+$server.$key_table.$context7_field = \"layout-canary\"
+$server.startup_timeout_sec = 20" > "$test_dir/codex-layout-dotted.toml"
+  print -r -- "[mcp_servers.notes]
+command = \"notes-mcp\"
+
+[tui]
+theme = \"fixture\"
+
+[mcp_servers.$server]
+$transport_field
+startup_timeout_sec = 20
+
+[mcp_servers.$server.$key_table]
+$context7_field = \"layout-canary\"" > "$test_dir/codex-layout-around.toml"
+  for layout in split dotted around; do
+    "$codex_modifier" < "$test_dir/codex-layout-$layout.toml" > "$test_dir/codex-layout-output.toml" ||
+      fail "the Codex modifier must rewrite a $layout $server entry"
+    python3 -I -S "$codex_layout_expect" "$server" "$test_dir/codex-layout-output.toml" "$fixture_home" ||
+      fail "the Codex modifier must write the managed $server entry from a $layout layout"
+    ! rg -n 'layout-canary' "$test_dir/codex-layout-output.toml" > /dev/null ||
+      fail "Codex output must not keep a key from a $layout $server entry"
+    "$codex_modifier" < "$test_dir/codex-layout-output.toml" | cmp -s - "$test_dir/codex-layout-output.toml" ||
+      fail "a second run must not change a rewritten $layout $server entry"
+  done
+done
+# A top-level dotted key: tomlkit renders this one so that the instruction budget
+# reads back inside context7. The modifier writes the right config or fails with
+# no output.
+print -r -- 'model = "fixture"
+mcp_servers.context7.url = "https://mcp.context7.example.invalid/mcp"' > "$test_dir/codex-layout-top-dotted.toml"
+if "$codex_modifier" < "$test_dir/codex-layout-top-dotted.toml" > "$test_dir/codex-layout-output.toml" \
+  2> /dev/null; then
+  python3 -I -S -c '
+import sys, tomllib
+with open(sys.argv[1], "rb") as config:
+    doc = tomllib.load(config)
+assert doc["model"] == "fixture" and isinstance(doc["project_doc_max_bytes"], int), doc
+assert all("project_doc_max_bytes" not in server for server in doc["mcp_servers"].values()), doc
+' "$test_dir/codex-layout-output.toml" || fail 'the Codex modifier must not write a config that reads back differently'
+else
+  [[ ! -s $test_dir/codex-layout-output.toml ]] || fail 'a failing Codex modifier must print nothing'
+fi
+
 # The helper command survives a home path that needs shell quoting.
 spaced_data=${darwin_data//${fixture_home}/$test_dir/spaced home}
 [[ $spaced_data == *'spaced home'* ]] || fail 'the spaced-home fixture data must name the spaced home'
