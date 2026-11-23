@@ -36,10 +36,14 @@ Library
 # The provider selector, the systemd user units, the build-tool shims that run
 # builds in builds.slice, with the makepkg setting that goes with them, and the
 # memory telemetry collector that memory-telemetry.service runs are Linux
-# session integrations.
+# session integrations. So is the headless sway display for Claude Desktop
+# computer use: its sway config, its link helper, and the script that enables
+# its unit.
+.config/claude-display2-sway
 .config/environment.d/98-proton-pass.conf
 .config/pacman/makepkg.conf
 .config/systemd
+.local/bin/claude-display2-link
 .local/bin/cmake
 .local/bin/makepkg
 .local/bin/memory-telemetry
@@ -47,6 +51,7 @@ Library
 .local/bin/proton-drive-desktop
 .local/bin/standing-resource-admission
 .local/lib/builds-slice
+enable-claude-display2-sway.sh
 
 # Only Linux desktops read freedesktop desktop entries. These trees hold the
 # protonpass:// and claude-cli:// scheme handlers and the Claude Desktop login

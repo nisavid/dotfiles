@@ -73,12 +73,14 @@ zsh_syntax() {
 check_shell_syntax() {
   local failed=0
   check_each bash_syntax \
+    home/private_dot_local/bin/executable_claude-display2-link \
     home/run_after_restore-acl.sh \
     home/run_before_save-acl.sh \
     scripts/private-skill-transaction \
     scripts/private-skill-transaction.d/*.bash || failed=1
   check_each zsh_syntax \
     home/run_after_sync-global-agent-skills-to-claude.zsh \
+    tests/claude-display2-sway.zsh \
     tests/claude-skill-sync.zsh \
     tests/codex-firecrawl-axi-rules.zsh \
     tests/container-runtime-bindings.zsh \
@@ -103,6 +105,7 @@ check_shell_syntax() {
 group_shell_bindings() {
   zsh -f tests/ci-test-group.zsh
   check_shell_syntax
+  zsh -f tests/claude-display2-sway.zsh
   zsh -f tests/claude-skill-sync.zsh
   zsh -f tests/codex-firecrawl-axi-rules.zsh
   zsh -f tests/platform-portability.zsh

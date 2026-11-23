@@ -1,0 +1,134 @@
+#!/bin/sh
+# Link the shared runtime directory's display name to the socket of the
+# headless sway that claude-display2-sway.service runs in a private runtime
+# directory, and remove that link again when the service stops.
+#
+#   claude-display2-link link PRIVATE_DIR LINK
+#   claude-display2-link unlink PRIVATE_DIR LINK
+#
+# link waits up to CLAUDE_DISPLAY2_SOCKET_TIMEOUT seconds (default 10) for
+# exactly one wayland-N socket in PRIVATE_DIR, then points LINK at it. It
+# replaces LINK only when LINK is already a symlink, and creates an absent LINK
+# without replacing anything. It fails without touching LINK when LINK is
+# anything else, such as another compositor's socket or a file. The narrow
+# windows between that check and the ln call are described at the two ln calls
+# in do_link and are accepted.
+#
+# unlink removes LINK only when it is a symlink to an entry directly inside
+# PRIVATE_DIR. It leaves any other LINK in place.
+set -eu
+
+program=claude-display2-link
+
+die() {
+  printf '%s: %s\n' "$program" "$1" >&2
+  exit 1
+}
+
+usage() {
+  printf 'Usage: %s link|unlink PRIVATE_DIR LINK\n' "$program" >&2
+  exit 64
+}
+
+# Print the one wayland-N socket in the private directory. Return 1 when there
+# is none yet, and 2 when there are several, since the choice would be a guess.
+find_socket() {
+  found=
+  for candidate in "$private_dir"/wayland-*; do
+    case ${candidate##*/} in
+      wayland-*[!0-9]* | wayland-) continue ;;
+    esac
+    [ -S "$candidate" ] || continue
+    if [ -n "$found" ]; then
+      printf '%s: more than one Wayland socket in %s: %s and %s\n' \
+        "$program" "$private_dir" "$found" "$candidate" >&2
+      return 2
+    fi
+    found=$candidate
+  done
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
+# Succeed when the link points directly into the private directory.
+link_is_ours() {
+  target=$(readlink -- "$link_path") || return 1
+  case $target in
+    "$private_dir"/*/*) return 1 ;;
+    "$private_dir"/?*) return 0 ;;
+  esac
+  return 1
+}
+
+do_link() {
+  timeout=${CLAUDE_DISPLAY2_SOCKET_TIMEOUT:-10}
+  case $timeout in
+    '' | *[!0-9]*) die "CLAUDE_DISPLAY2_SOCKET_TIMEOUT must be a whole number of seconds: $timeout" ;;
+  esac
+  # Poll every tenth of a second, so the bound is timeout * 10 tries.
+  tries=$((timeout * 10))
+  while :; do
+    found_status=0
+    socket=$(find_socket) || found_status=$?
+    case $found_status in
+      0) break ;;
+      1) ;;
+      *) exit 1 ;;
+    esac
+    [ "$tries" -gt 0 ] ||
+      die "no Wayland socket appeared in $private_dir within ${timeout}s"
+    tries=$((tries - 1))
+    sleep 0.1
+  done
+
+  if [ -L "$link_path" ]; then
+    if ! link_is_ours; then
+      printf '%s: replacing the foreign symlink %s -> %s\n' \
+        "$program" "$link_path" "$(readlink -- "$link_path")" >&2
+    fi
+    # Something that replaces this symlink between the check and ln -sfn is
+    # replaced or, for a directory, written into; that window is accepted.
+    ln -sfn -- "$socket" "$link_path"
+  elif [ -e "$link_path" ]; then
+    die "$link_path exists and is not a symlink; refusing to replace it"
+  else
+    # ln refuses to replace a socket or file that appeared at LINK since the
+    # check above, and leaves it in place; a directory that appears there would
+    # receive the link inside it; that narrow window is accepted.
+    ln -sn -- "$socket" "$link_path" ||
+      die "could not create $link_path; something may have appeared there since the check, and it was left untouched"
+  fi
+  printf '%s: linked %s -> %s\n' "$program" "$link_path" "$socket" >&2
+}
+
+do_unlink() {
+  if [ -L "$link_path" ] && link_is_ours; then
+    rm -f -- "$link_path"
+    printf '%s: removed %s\n' "$program" "$link_path" >&2
+  elif [ -L "$link_path" ] || [ -e "$link_path" ]; then
+    printf '%s: leaving %s in place; it is not a link into %s\n' \
+      "$program" "$link_path" "$private_dir" >&2
+  fi
+}
+
+main() {
+  [ "$#" -eq 3 ] || usage
+  command=$1
+  private_dir=${2%/}
+  link_path=$3
+  case $private_dir in
+    /?*) ;;
+    *) die "PRIVATE_DIR must be an absolute path: $2" ;;
+  esac
+  case $link_path in
+    /?*) ;;
+    *) die "LINK must be an absolute path: $link_path" ;;
+  esac
+  case $command in
+    link) do_link ;;
+    unlink) do_unlink ;;
+    *) usage ;;
+  esac
+}
+
+main "$@"
