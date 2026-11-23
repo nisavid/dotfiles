@@ -702,9 +702,12 @@ exactly once: `name=profile??`, `name=?`, and `name=?profile` are malformed.
 A command may appear only once, with or without the suffix.
 
 The dispatcher rejects missing, duplicate, malformed, and recursive mappings.
-An absolute executable path bypasses command lookup and therefore bypasses the
-shim. The command map, shim directory, and later `PATH` entries are trusted
-user configuration.
+The absolute path of the real executable, outside the shim directory, bypasses
+command lookup and therefore bypasses the shim. The shim's own absolute path,
+which `command -v` prints when the shim directory comes first on `PATH`, does
+not: it relaunches under the shim's profile and drops any other profile's key.
+The command map, shim directory, and later `PATH` entries are trusted user
+configuration.
 
 ### App-boundary injection
 
