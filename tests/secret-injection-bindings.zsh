@@ -466,10 +466,30 @@ assert "real-skills-leashed" in off
 assert "real-skills-unleashed" in accepted
 assert {"investment-banking", "pitch-agent"} <= set(off)
 assert not {"investment-banking", "pitch-agent"} & set(accepted)
-assert plugins["oneCopyPerSkill"]["localWins"] == ["cloudflare", "claude-code-setup", "skill-creator", "context7"]
-assert set(plugins["oneCopyPerSkill"]["localWins"]) <= set(accepted)
-assert not any(entry.split("@")[0] in plugins["oneCopyPerSkill"]["localWins"]
-               for entry in plugins["oneCopyPerSkill"]["off"])
+PYEOF
+python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF' || fail 'localWins must be exactly cloudflare, skill-creator and context7, all accepted, and off exactly linear@claude-plugins-official, naming no local-wins plugin'
+import sys, tomllib
+with open(sys.argv[1], "rb") as data_file:
+    plugins = tomllib.load(data_file)["claudePlugins"]
+one_copy = plugins["oneCopyPerSkill"]
+assert one_copy["localWins"] == ["cloudflare", "skill-creator", "context7"]
+assert one_copy["off"] == ["linear@claude-plugins-official"]
+assert set(one_copy["localWins"]) <= set(plugins["accepted"])
+assert not any(entry.split("@")[0] in one_copy["localWins"] for entry in one_copy["off"])
+PYEOF
+# The account copies of these eleven win (dotfiles#538): no rule names them.
+python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF' || fail 'the eleven account-copy plugins must be accepted and have no entry in explicitlyOff, localWins, off or on'
+import sys, tomllib
+with open(sys.argv[1], "rb") as data_file:
+    plugins = tomllib.load(data_file)["claudePlugins"]
+one_copy = plugins["oneCopyPerSkill"]
+account_copies_win = {"agent-sdk-dev", "clangd-lsp", "claude-code-setup", "codex",
+                      "firebase", "firecrawl", "gopls-lsp", "lua-lsp", "mcp-apps",
+                      "rust-analyzer-lsp", "typescript-lsp"}
+assert account_copies_win <= set(plugins["accepted"])
+assert not account_copies_win & (set(plugins["explicitlyOff"]) | set(one_copy["localWins"]))
+assert not any(entry.split("@")[0] in account_copies_win
+               for entry in one_copy["off"] + one_copy["on"])
 PYEOF
 explicitly_off=$(python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF'
 import json, sys, tomllib
@@ -532,29 +552,25 @@ jq -e '.enabledPlugins | has("serena@claude-plugins-official") | not' "$test_dir
 jq -e --argjson off "$explicitly_off" '
   (.enabledPlugins | to_entries[7:]) as $added |
   ($added | map(select(.value == true) | .key) | sort) ==
-    ["claude-code-setup@claude-plugins-official", "cloudflare@claude-plugins-official", "context7@claude-plugins-official", "skill-creator@claude-plugins-official"] and
+    ["cloudflare@claude-plugins-official", "context7@claude-plugins-official", "skill-creator@claude-plugins-official"] and
   ($added | map(select(.value == false) | .key) | sort) == (
     [$off[] | (. + "@inline"), (. + "@synced")] - ["amd-skills@inline"] + [
       "supabase@claude-plugins-official",
       "real-skills-leashed@fixture-market",
       "remotion@other-market",
       "linear@claude-plugins-official",
-      "claude-code-setup@inline",
-      "claude-code-setup@synced",
       "cloudflare@inline",
       "cloudflare@synced",
       "skill-creator@inline",
       "skill-creator@synced",
       "context7@inline",
       "context7@synced",
-      "firecrawl@inline",
-      "firecrawl@synced",
       "github@claude-plugins-official",
       "greptile@claude-plugins-official"
     ] | sort) and
   ($added | length) == ($added | map(.key) | unique | length)
 ' "$test_dir/plugins-output.json" > /dev/null ||
-  fail 'the modifier must add false entries for exactly the explicitly-off names in both account forms and their installed keys, the local-wins and one-copy rules and the managed entries, and true for the four local-wins official entries'
+  fail 'the modifier must add false entries for exactly the explicitly-off names in both account forms and their installed keys, the local-wins and one-copy rules and the managed entries, and true for the three local-wins official entries'
 jq -e '
   .enabledPlugins as $p |
   ["investment-banking", "pitch-agent"] |
@@ -562,16 +578,15 @@ jq -e '
 ' "$test_dir/plugins-output.json" > /dev/null ||
   fail 'investment-banking and pitch-agent must be false in both account forms'
 
-# The local copy wins for cloudflare, claude-code-setup, skill-creator and
-# context7: the official entry is written true even where it exists as false,
-# with no account entries present; linear stays false at the official marketplace; every other
-# entry and setting is kept byte for byte, and a second run changes nothing.
+# The local copy wins for cloudflare, skill-creator and context7: the official
+# entry is written true even where it exists as false, with no account entries
+# present; linear stays false at the official marketplace; every other entry and
+# setting is kept byte for byte, and a second run changes nothing.
 cat > "$test_dir/local-wins-input.json" <<'EOF'
 {
   "unrelated": {"number": 1.50, "text": "é é"},
   "enabledPlugins": {
     "cloudflare@claude-plugins-official": false,
-    "claude-code-setup@claude-plugins-official": false,
     "skill-creator@claude-plugins-official": false,
     "context7@claude-plugins-official": false,
     "linear@claude-plugins-official": true,
@@ -584,20 +599,20 @@ EOF
 "$settings_modifier" < "$test_dir/local-wins-input.json" > "$test_dir/local-wins-output.json"
 jq -e '
   .enabledPlugins as $p |
-  ["cloudflare", "claude-code-setup", "skill-creator", "context7"] |
+  ["cloudflare", "skill-creator", "context7"] |
   all(. as $n |
     $p[$n + "@claude-plugins-official"] == true and
     $p[$n + "@inline"] == false and $p[$n + "@synced"] == false)
 ' "$test_dir/local-wins-output.json" > /dev/null ||
-  fail 'the four local-wins plugins must be true at the official marketplace and false in both account forms'
+  fail 'the three local-wins plugins must be true at the official marketplace and false in both account forms'
 jq -e '
   .enabledPlugins as $p |
   $p["linear@claude-plugins-official"] == false and
   $p["firecrawl@claude-plugins-official"] == true and
   $p["kept-fixture@claude-plugins-official"] == false and
-  $p["firecrawl@inline"] == false and $p["firecrawl@synced"] == false
+  ($p | has("firecrawl@inline") | not) and ($p | has("firecrawl@synced") | not)
 ' "$test_dir/local-wins-output.json" > /dev/null ||
-  fail 'linear must stay false at the official marketplace and the Firecrawl and unrelated entries must be kept'
+  fail 'linear must stay false at the official marketplace, the Firecrawl and unrelated entries must be kept, and no Firecrawl account entry may be written'
 diff <(jq 'del(.enabledPlugins)' "$test_dir/local-wins-input.json") \
   <(jq 'del(.enabledPlugins)' "$test_dir/local-wins-output.json") > /dev/null ||
   fail 'settings other than enabledPlugins must be preserved when the local copy wins'
@@ -605,6 +620,43 @@ jq 'del(.enabledPlugins)' "$test_dir/local-wins-output.json" | grep -q '"number"
   fail 'number literals must be preserved when the local copy wins'
 "$settings_modifier" < "$test_dir/local-wins-output.json" | cmp -s - "$test_dir/local-wins-output.json" ||
   fail 'the local-wins output must be unchanged by a second run'
+
+# The account copies win for eleven plugins (dotfiles#538): the modifier writes
+# no key for either copy of any of them, even when the registry lists their local
+# copies, and keeps an existing entry for either copy as it is, whatever its
+# value, so it forces neither copy on or off.
+account_copies_win='["agent-sdk-dev", "clangd-lsp", "claude-code-setup", "codex", "firebase", "firecrawl", "gopls-lsp", "lua-lsp", "mcp-apps", "rust-analyzer-lsp", "typescript-lsp"]'
+cp -- "$registry" "$test_dir/registry-before-account-copies.json"
+jq --argjson names "$account_copies_win" '
+  .plugins += ([$names[] | {key: (. + "@claude-plugins-official"), value: []}] | from_entries) |
+  .plugins["codex@openai-codex"] = [] |
+  .plugins["firebase@fixture-market"] = []
+' "$test_dir/registry-before-account-copies.json" > "$registry"
+print -r -- '{"enabledPlugins": {"kept-fixture@claude-plugins-official": true}}' |
+  "$settings_modifier" | jq -e --argjson names "$account_copies_win" '
+  def plugin_name: sub("@[^@]*$"; "");
+  [.enabledPlugins | keys[] | select(plugin_name | IN($names[]))] == [] and
+  .enabledPlugins["kept-fixture@claude-plugins-official"] == true
+' > /dev/null ||
+  fail 'the modifier must write no key for either copy of the eleven plugins whose account copies win'
+for forced in true false; do
+  jq -n --argjson names "$account_copies_win" --argjson forced "$forced" '
+    {enabledPlugins: ([$names[] |
+      {key: (. + "@claude-plugins-official"), value: $forced},
+      {key: (. + "@inline"), value: ($forced | not)},
+      {key: (. + "@synced"), value: ($forced | not)}] +
+      [{key: "codex@openai-codex", value: $forced},
+       {key: "firebase@fixture-market", value: $forced}] | from_entries)}
+  ' > "$test_dir/account-copies-input.json"
+  "$settings_modifier" < "$test_dir/account-copies-input.json" |
+    jq -e --argjson names "$account_copies_win" --slurpfile input "$test_dir/account-copies-input.json" '
+    def plugin_name: sub("@[^@]*$"; "");
+    (.enabledPlugins | with_entries(select(.key | plugin_name | IN($names[])))) ==
+      $input[0].enabledPlugins
+  ' > /dev/null ||
+    fail "the modifier must keep every existing entry of the eleven plugins whose account copies win as it is (local copies $forced)"
+done
+cp -- "$test_dir/registry-before-account-copies.json" "$registry"
 python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF' || fail 'the fixture names on neither list must appear in neither list'
 import sys, tomllib
 with open(sys.argv[1], "rb") as data_file:
