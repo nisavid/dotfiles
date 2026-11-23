@@ -68,6 +68,9 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
             "XDG_STATE_HOME": str(runtime / "state"),
             "CHEZMOI_CONFIG_FILE": str(config),
         }
+        # An inherited ZDOTDIR would make the fixture's zsh read the caller's
+        # startup files instead of the disposable HOME's.
+        environment.pop("ZDOTDIR", None)
         arguments = [
             "-D",
             str(destination),
