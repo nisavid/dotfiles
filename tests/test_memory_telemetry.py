@@ -6,6 +6,7 @@ any process other than the collector and fake journalctl the tests start.
 
 from __future__ import annotations
 
+import fcntl
 import gzip
 import hashlib
 import importlib.machinery
@@ -2307,6 +2308,40 @@ class RunTests(FixtureCase):
                    *mt.read_samples(self.state / "samples", 0, time.time() + 60)]
         for text in strings(records):
             self.assertFalse(any("\ud800" <= character <= "\udfff" for character in text), repr(text))
+
+    def test_a_second_run_on_the_same_state_refuses_to_start(self) -> None:
+        self.state.mkdir()
+        lock = self.state / "run.lock"
+        holder = subprocess.Popen(
+            [sys.executable, "-I", "-B", "-c",
+             "import fcntl, os, sys; descriptor = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600); "
+             "fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB); print('held', flush=True); sys.stdin.read()",
+             str(lock)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline(), "held\n")
+            result = subprocess.run(self.command("--duration", "2"), env=self.environment, text=True,
+                                    capture_output=True, timeout=60)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("another run is recording", result.stderr)
+            for name in (".latest.json.tmp", "latest.json", "samples", "journal.cursor"):
+                self.assertFalse((self.state / name).exists(), name)
+        finally:
+            holder.communicate(timeout=60)  # closes its stdin, so it exits and releases the lock
+
+        process = self.start(environment=self.environment | {"FAKE_JOURNAL_ENTRIES": "[]"})
+        self.wait_for(process, (self.state / "latest.json").exists, "a first sample")
+        # The running collector itself holds the lock, so a competing run is refused.
+        result = subprocess.run(self.command("--duration", "2"), env=self.environment, text=True,
+                                capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("another run is recording", result.stderr)
+        self.stop(process)
+        descriptor = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)  # the stopped run released it
+        finally:
+            os.close(descriptor)
 
     def test_invalid_options_are_refused(self) -> None:
         for option in ("--interval", "--slow-every", "--retention-days", "--max-incidents"):
