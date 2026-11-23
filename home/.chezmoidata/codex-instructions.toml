@@ -1,0 +1,6 @@
+# Codex warns on every turn when the combined user instructions (global
+# ~/.codex/AGENTS.md plus thread instructions) exceed project_doc_max_bytes.
+# The Codex config modifier sets that key to this value, and
+# tests/global-agents-policy.zsh fails when the rendered global policy outgrows it.
+[codexInstructions]
+projectDocMaxBytes = 65536

@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 TEMPLATE = ROOT / "home/dot_codex/modify_private_config.toml.tmpl"
+INSTRUCTIONS_DATA = ROOT / "home/.chezmoidata/codex-instructions.toml"
 RETIRED = (
     ("github", "yeet"),
     ("superpowers", "finishing-a-development-branch"),
@@ -44,6 +45,9 @@ def skill_entries(config: str) -> list[dict[str, object]]:
 def rendered_modifier(home: Path, darwin: bool = False, *, source: Path | None = None) -> str:
     data = {
         "chezmoi": {"homeDir": str(home), "os": "darwin" if darwin else "linux", "hostname": "test-host"},
+        # Supply the one tracked copy of the instruction budget, so a render from a
+        # substituted source tree still has it.
+        "codexInstructions": tomllib.loads(INSTRUCTIONS_DATA.read_text())["codexInstructions"],
         "gitIdentity": {"publicFixture": True, "selection": {"default": "personal", "byHostname": {}},
                         "identities": {"personal": {"editorTarget": "cursor", "branchPrefix": "nisavid/"}}},
     }
@@ -239,6 +243,47 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
         roots = set(parsed["sandbox_workspace_write"]["writable_roots"])
 
         self.assertTrue({str(self.home / path) for path in expected} <= roots)
+
+    def top_level_budget_lines(self, config: str) -> list[str]:
+        """Return the project_doc_max_bytes lines that sit before the first table."""
+        lines: list[str] = []
+        for line in config.splitlines():
+            if line.lstrip().startswith("["):
+                break
+            if re.match(r"\s*project_doc_max_bytes\s*=", line):
+                lines.append(line)
+        return lines
+
+    def test_sets_instruction_budget_at_top_level(self) -> None:
+        budget = tomllib.loads(INSTRUCTIONS_DATA.read_text())["codexInstructions"]["projectDocMaxBytes"]
+        self.assertIsInstance(budget, int)
+        inputs = {
+            "absent key with tables only": '[tui]\ntheme = "other"\n\n[mcp_servers.fixture]\ncommand = "x"\n',
+            "other value": 'project_doc_max_bytes = 1234\n\n[tui]\ntheme = "other"\n',
+            "other value beside other keys": 'unrelated = "keep"\nproject_doc_max_bytes = 99999999\n\n[tui]\nk = 1\n',
+            "empty file": "",
+            "nested table last": '[a]\nx = 1\n[a.b]\ny = 2\n',
+        }
+        for name, config in inputs.items():
+            with self.subTest(name):
+                once = self.apply(config)
+                parsed = tomllib.loads(once)
+                self.assertEqual(parsed["project_doc_max_bytes"], budget)
+                self.assertEqual(len(re.findall(r"(?m)^\s*project_doc_max_bytes\s*=", once)), 1)
+                self.assertEqual(len(self.top_level_budget_lines(once)), 1)
+                for key, value in parsed.items():
+                    if isinstance(value, dict):
+                        self.assertNotIn("project_doc_max_bytes", value, key)
+                self.assertEqual(self.apply(once), once)
+
+    def test_instruction_budget_leaves_other_settings_unchanged(self) -> None:
+        config = 'unrelated = "keep" # keep comment\n\n[projects."/fixture"]\ntrust_level = "untrusted"\n'
+        without_budget = tomllib.loads(self.apply(config))
+        without_budget.pop("project_doc_max_bytes")
+        baseline = tomllib.loads(config)
+        self.assertEqual(without_budget["unrelated"], baseline["unrelated"])
+        self.assertEqual(without_budget["projects"]["/fixture"], baseline["projects"]["/fixture"])
+        self.assertIn("# keep comment", self.apply(config))
 
     def test_adds_linux_roots_and_explicit_private_paths(self) -> None:
         self.work = base64.b64encode(
