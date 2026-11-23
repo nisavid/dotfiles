@@ -1,0 +1,7 @@
+A concern is cross-harness when it is meant to hold in more than one agent harness: a rule, a skill, a tool binding, or a behavior they share, and anything built to implement or enforce one of those, such as a hook. Work on it covers every harness it reaches at every stage: spec, architecture, design, implementation, tests, review, deployment, and regression coverage. A change that starts in one harness's part settles what it means for the others before it ships.
+
+Keep one source for what the harnesses share, and let their parts differ only where the harnesses differ. Test each part in its own harness, and against the same cases wherever the parts share a contract. Evidence from one harness is not evidence for another.
+
+Have an agent in each harness the change reaches review it; a review in one harness does not stand in for a review in another. Review Before Shipping still decides how deep each review goes and when it ends.
+
+When a harness is left out, because it cannot carry its part or because its part comes later, say which and why in the spec and the pull request, track what remains, and never describe the work as covering a harness it leaves out.
