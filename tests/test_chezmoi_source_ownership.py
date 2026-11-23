@@ -383,6 +383,67 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                 (source / "dot_config/bat/config").read_bytes(),
             )
 
+    def test_openai_profile_opens_catalog_only_on_enrolled_destinations(self) -> None:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
+            root = Path(temporary)
+            destination = root / "home"
+            destination.mkdir()
+            environment, arguments = self.environment(root, destination)
+            source = root / "source"
+            externals = source / ".chezmoiexternals"
+            externals.mkdir(parents=True)
+            shutil.copy(SOURCE / ".chezmoiexternals/openai-experiments.toml.tmpl", externals)
+            plain = destination / "plain"
+
+            identity = root / "destination.key"
+            config = Path(environment["CHEZMOI_CONFIG_FILE"])
+            config.write_text(f'encryption = "age"\n[age]\nidentity = "{identity}"\n')
+            owner = root / "catalog-owner.key"
+            subprocess.run(["age-keygen", "-o", owner], capture_output=True, check=True)
+            recipient = subprocess.check_output(["age-keygen", "-y", owner], text=True).strip()
+            binding = "OPENAI_API_KEY=pass://test-vault/test-item/password"
+            profile = "openai-experiments.fixture-at-example.org"
+            subprocess.run(
+                ["age", "-r", recipient, "-o", source / ".private-secret-exec.toml.age"],
+                input=f'[openaiExperiments]\nname = "{profile}"\nbinding = "{binding}"\n',
+                text=True, capture_output=True, check=True,
+            )
+
+            def chezmoi(*command: str | Path) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    ["chezmoi", "-S", source, *arguments, *command],
+                    env=environment, text=True, capture_output=True,
+                )
+
+            for identity_state in ("missing", "wrong recipient"):
+                with self.subTest(identity=identity_state):
+                    if identity_state == "wrong recipient":
+                        subprocess.run(["age-keygen", "-o", identity], capture_output=True, check=True)
+                    contents = f"ordinary dotfile with {identity_state} identity\n"
+                    (source / plain.name).write_text(contents)
+                    shown = chezmoi("cat", plain)
+                    self.assertEqual(shown.returncode, 0, shown.stderr)
+                    self.assertEqual(shown.stdout, contents)
+                    applied = chezmoi("apply", plain)
+                    self.assertEqual(applied.returncode, 0, applied.stderr)
+                    self.assertEqual(plain.read_text(), shown.stdout)
+
+            broker = destination / ".config/secret-exec"
+            broker.mkdir(parents=True)
+            (broker / "profiles").mkdir(mode=0o700)
+            (broker / "enroll-openai-experiments").touch(mode=0o600)
+            target = broker / "profiles" / f"{profile}.env"
+            rejected = chezmoi("apply", target)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("decrypt", rejected.stderr)
+            self.assertFalse(target.exists())
+
+            owner.replace(identity)
+            applied = chezmoi("apply", target)
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertEqual(target.read_text(), binding)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+
     def test_unbound_hindsight_is_ignored_and_preserves_existing_targets(self) -> None:
         sources = [
             *HINDSIGHT_SOURCE_ROOT.rglob("*.tmpl"),

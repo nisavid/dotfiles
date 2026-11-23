@@ -76,6 +76,7 @@ case $1 in
     case $5 in
       pass://fixture-store/member/token) fixture_value=member-canary ;;
       pass://fixture-store/other/token) fixture_value=other-canary ;;
+      pass://fixture-store/openai/password) fixture_value=openai-placeholder ;;
       *) exit 67 ;;
     esac
     [[ ${PROTON_PASS_AGENT_REASON:-} == 'secret-exec credential resolution' ]] || exit 68
@@ -537,5 +538,50 @@ exit_code=$?
 set -e
 PATH=$full_fixture_path
 (( exit_code != 0 )) || fail 'a missing later executable must fail closed without recursion'
+
+# The OpenAI experiments key reaches the launched command and its descendants,
+# except those that pass through a command shim or another profile's launch.
+# A shim, named or by its own path, relaunches under its own profile and drops
+# the key, so the real executable's absolute path is the bypass. Once enrolled,
+# OPENAI_API_KEY is managed, so every other profile's launch drops it, whether
+# that launch resolves or reuses its own values.
+unset SECRET_EXEC_INJECTED_PROFILES SECRET_EXEC_FALLBACK_PROFILES
+openai_profile=openai-experiments.fixture-at-example.org
+print -r -- 'OPENAI_API_KEY=pass://fixture-store/openai/password' \
+  > "$profile_dir/$openai_profile.env"
+chmod 600 "$profile_dir/$openai_profile.env"
+print -r -- 'tool-a=member?' > "$config_dir/commands.env"
+cat > "$real_bin/tool-a" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "marker=${SECRET_EXEC_INJECTED_PROFILES-unset}" \
+  "openai=${OPENAI_API_KEY-unset} member=${MEMBER_TOKEN-unset}"
+EOF
+chmod +x "$real_bin/tool-a"
+cp "$real_bin/tool-a" "$real_bin/direct-tool"
+launcher=$fixture_home/.local/bin/secret-exec
+
+output=$("$launcher" "$openai_profile" -- direct-tool)
+[[ $output == "marker=$openai_profile openai=openai-placeholder member=unset" ]] ||
+  fail "the OpenAI profile must inject its key into a direct child: $output"
+output=$("$launcher" "$openai_profile" -- zsh -fc direct-tool)
+[[ $output == "marker=$openai_profile openai=openai-placeholder member=unset" ]] ||
+  fail "the OpenAI key must reach a descendant that bypasses shims: $output"
+output=$("$launcher" "$openai_profile" -- tool-a)
+[[ $output == 'marker=member openai=unset member=member-canary' ]] ||
+  fail "a shim relaunch inside the OpenAI profile must drop its key: $output"
+output=$("$launcher" "$openai_profile" -- "$shim_dir/tool-a")
+[[ $output == 'marker=member openai=unset member=member-canary' ]] ||
+  fail "the shim's own absolute path must relaunch and drop the OpenAI key: $output"
+output=$("$launcher" "$openai_profile" -- "$real_bin/tool-a")
+[[ $output == "marker=$openai_profile openai=openai-placeholder member=unset" ]] ||
+  fail "the real executable's absolute path must keep the OpenAI key: $output"
+output=$(OPENAI_API_KEY=ambient-placeholder "$launcher" member -- direct-tool)
+[[ $output == 'marker=member openai=unset member=member-canary' ]] ||
+  fail "another profile's launch must drop an inherited OpenAI key: $output"
+output=$(OPENAI_API_KEY=ambient-placeholder SECRET_EXEC_INJECTED_PROFILES=member \
+  MEMBER_TOKEN=inherited-member "$launcher" member -- direct-tool)
+[[ $output == 'marker=member openai=unset member=inherited-member' ]] ||
+  fail "another profile's reuse must drop an inherited OpenAI key: $output"
+rm -- "$profile_dir/$openai_profile.env" "$real_bin/tool-a" "$real_bin/direct-tool"
 
 print -r -- 'secret command shim checks passed'
