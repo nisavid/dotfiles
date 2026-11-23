@@ -113,6 +113,24 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
                 self.assertIn("integrity check failed", result.stderr)
 
+    def test_python_reads_the_script_from_fd_3_without_a_path(self) -> None:
+        # bash 3.2 on macOS mis-scans text inside a process substitution, so the
+        # Python body must be a top-level heredoc. Python must read it from fd 3
+        # through -c, never as a /dev/fd path: with Python older than 3.10.9 or
+        # 3.11.1 on macOS, the zip-import probe of a /dev/fd script moves the
+        # shared offset to the end, Python runs an empty module and exits 0, and
+        # chezmoi then deletes the Codex config (CPython GH-87235).
+        for darwin in (False, True):
+            with self.subTest(darwin=darwin):
+                script = rendered_modifier(self.home, darwin)
+                self.assertFalse("<(" in script, "the modifier must not use a process substitution")
+                self.assertFalse("/dev/fd/" in script, "the modifier must not give Python a /dev/fd path")
+                launches = [line for line in script.splitlines() if line.startswith("python3 ")]
+                self.assertEqual(launches, [
+                    "python3 -I -S -c 'import sys; exec(compile(open(3, \"rb\").read(), "
+                    "\"codex-modifier\", \"exec\"))' 3<<'PYEOF'"
+                ])
+
     def test_runs_without_package_manager_cache_or_ambient_imports(self) -> None:
         poison = self.home / "poison"
         poison.mkdir()
@@ -122,7 +140,6 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
         bin_dir = self.home / "bin"
         bin_dir.mkdir()
         (bin_dir / "python3").symlink_to(sys.executable)
-        (bin_dir / "cat").symlink_to("/bin/cat")
         for name in ("uv", "pip", "pip3", "curl", "wget"):
             tool = bin_dir / name
             tool.write_text(f"#!/bin/sh\n: > '{marker}'\nexit 92\n")

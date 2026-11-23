@@ -8,7 +8,9 @@
 #   - top-level project_doc_max_bytes             (instruction-size budget)
 #   - [tui] theme, [desktop] git-branch-prefix   (portable prefs)
 #   - [desktop.open-in-target-preferences] global (parametrized editor target)
-#   - process-scoped Context7, Firecrawl, and GitHub MCP launchers
+#   - process-scoped Firecrawl and GitHub MCP launchers
+#   - Context7's remote server, its key printed as a header by a helper that
+#     runs under secret-exec (dotfiles#522)
 #   - macOS developer-tool writable_roots
 #   - private writable roots and project trusts (from an age catalog)
 #
@@ -32,12 +34,14 @@ export WORK_TOML_B64={{ "writable_roots = []\nprojects = []\n" | b64enc | quote 
 export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64enc | quote }}
 {{- end }}
 
-# python3 reads the script via process substitution; the live config arrives on stdin.
-python3 -I -S <(cat <<'PYEOF'
+# python3 reads the script from file descriptor 3 without a path, so no zip-import
+# probe moves its offset on older Pythons; the live config arrives on stdin.
+python3 -I -S -c 'import sys; exec(compile(open(3, "rb").read(), "codex-modifier", "exec"))' 3<<'PYEOF'
 import base64
 import binascii
 import hashlib
 import os
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -87,9 +91,6 @@ if "serena" in mcp:
     del mcp["serena"]
 secret_exec = os.path.join(home, ".local", "bin", "secret-exec")
 managed_mcp_servers = {
-    "context7": [
-        "context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4",
-    ],
     "firecrawl": [
         "firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3",
     ],
@@ -111,6 +112,26 @@ for name, args in managed_mcp_servers.items():
     server["command"] = secret_exec
     server["args"] = args
     mcp[name] = server
+
+# Context7 uses its remote server. Codex runs the helper command through sh -c
+# and sends the JSON object it prints as HTTP headers. secret-exec gives the key
+# to that short-lived helper only, so the key is in neither the environment of
+# Codex nor this file. Every stdio field and every field that can carry a key
+# goes; other settings, such as timeouts and enabled, stay.
+context7_helper = os.path.join(home, ".local", "lib", "secret-exec", "context7-http-headers")
+existing = mcp["context7"] if "context7" in mcp else None
+context7 = existing if hasattr(existing, "items") else tomlkit.table()
+for key in (
+    "type", "command", "args", "cwd", "env", "env_vars", "headers",
+    "http_headers", "env_http_headers", "bearer_token_env_var",
+):
+    if key in context7:
+        del context7[key]
+context7["url"] = "https://mcp.context7.com/mcp"
+context7["http_headers_helper"] = " ".join(
+    shlex.quote(part) for part in (secret_exec, "context7", "--", context7_helper)
+)
+mcp["context7"] = context7
 
 sww = ensure_table(doc, "sandbox_workspace_write")
 if "writable_roots" not in sww:
@@ -244,4 +265,3 @@ for path in sorted(retired_paths, key=str):
 
 sys.stdout.write(tomlkit.dumps(doc))
 PYEOF
-)

@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
+# Sets OpenCode's context7 entry to Context7's remote server at its OAuth
+# address (dotfiles#522). OpenCode's configuration has no form that runs a
+# command for a header, so OpenCode signs in with OAuth and no key reaches its
+# configuration or environment. The entry loses the local launch fields and
+# every field that can carry a key, including `oauth`, which can hold a client
+# secret or turn the sign-in off. It keeps an explicit disabled state and its
+# other metadata.
 set -euo pipefail
 
 config={{ joinPath .chezmoi.homeDir ".config/opencode/opencode.json" | quote }}
-launcher={{ joinPath .chezmoi.homeDir ".local/bin/secret-exec" | quote }}
 
 [[ -f $config && ! -L $config ]] || exit 0
 
 umask 077
 tmp=$(mktemp "${config}.tmp.XXXXXX")
 trap 'rm -f -- "$tmp"' EXIT
-jq --arg launcher "$launcher" '
+jq '
   .mcp = (.mcp // {}) |
   (.mcp.context7 // {}) as $existing |
   .mcp.context7 = ($existing |
-    del(.url, .headers, .env, .env_vars, .http_headers, .bearer_token_env_var) + {
-      type: "local",
-      command: [$launcher, "context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"],
+    del(.command, .environment, .env, .env_vars, .headers, .http_headers,
+      .bearer_token_env_var, .oauth) + {
+      type: "remote",
+      url: "https://mcp.context7.com/mcp/oauth",
       enabled: (if $existing | has("enabled") then $existing.enabled else true end)
     })
 ' "$config" > "$tmp"

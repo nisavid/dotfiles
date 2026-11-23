@@ -2,26 +2,26 @@
 # chezmoi modify_ script for ~/.cursor/mcp.json.
 #
 # Cursor owns this file and holds servers the dotfiles do not own. This script
-# sets only the context7 entry to the same process-scoped launcher the Claude
-# Code and Codex bindings use, drops every transport and credential key from
-# that entry (including the stdio `type`, as the Claude Code modifier does),
-# and passes every other entry and setting through unchanged. An
-# absent or empty file gains only the managed entry. A file that is not one
+# sets only the context7 entry: Context7's remote server at its OAuth address,
+# with `url` alone, so Cursor signs in with OAuth and no key reaches this file
+# or Cursor's environment (dotfiles#522). It drops the stdio launch fields and
+# every other transport and credential key from that entry, keeps the entry's
+# other metadata, and passes every other entry and setting through unchanged.
+# An absent or empty file gains only the managed entry. A file that is not one
 # JSON document fails the apply with no output.
 set -euo pipefail
 
-command={{ joinPath .chezmoi.homeDir ".local/bin/secret-exec" | quote }}
-
-jq --null-input --join-output --arg command "$command" '
-  def local_server($existing; $args):
-    (($existing // {}) + {command: $command, args: $args}) |
-    del(.type, .url, .auth, .env, .envFile, .env_vars, .headers, .http_headers, .bearer_token_env_var);
+jq --null-input --join-output '
+  def remote_server($existing; $url):
+    ($existing // {} |
+      del(.command, .args, .type, .url, .auth, .env, .envFile, .env_vars,
+        .headers, .http_headers, .bearer_token_env_var)) + {url: $url};
 
   ([inputs] |
     if length == 0 then {}
     elif length == 1 then .[0]
     else error("Cursor MCP config must hold one JSON document") end) |
   .mcpServers = (.mcpServers // {}) |
-  .mcpServers.context7 = local_server(.mcpServers.context7;
-    ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"])
+  .mcpServers.context7 = remote_server(.mcpServers.context7;
+    "https://mcp.context7.com/mcp/oauth")
 ' < /dev/stdin
