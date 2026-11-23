@@ -34,8 +34,9 @@ export WORK_TOML_B64={{ "writable_roots = []\nprojects = []\n" | b64enc | quote 
 export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64enc | quote }}
 {{- end }}
 
-# python3 reads the script via process substitution; the live config arrives on stdin.
-python3 -I -S <(cat <<'PYEOF'
+# python3 reads the script from file descriptor 3 without a path, so no zip-import
+# probe moves its offset on older Pythons; the live config arrives on stdin.
+python3 -I -S -c 'import sys; exec(compile(open(3, "rb").read(), "codex-modifier", "exec"))' 3<<'PYEOF'
 import base64
 import binascii
 import hashlib
@@ -112,11 +113,11 @@ for name, args in managed_mcp_servers.items():
     server["args"] = args
     mcp[name] = server
 
-# Context7 uses its remote server. Codex runs the helper command through
-# `sh -c` and sends the JSON object it prints as HTTP headers. secret-exec gives
-# the key to that short-lived helper only, so the key is in neither Codex's
-# environment nor this file. Every stdio field and every field that can carry
-# a key goes; other settings, such as timeouts and `enabled`, stay.
+# Context7 uses its remote server. Codex runs the helper command through sh -c
+# and sends the JSON object it prints as HTTP headers. secret-exec gives the key
+# to that short-lived helper only, so the key is in neither the environment of
+# Codex nor this file. Every stdio field and every field that can carry a key
+# goes; other settings, such as timeouts and enabled, stay.
 context7_helper = os.path.join(home, ".local", "lib", "secret-exec", "context7-http-headers")
 existing = mcp["context7"] if "context7" in mcp else None
 context7 = existing if hasattr(existing, "items") else tomlkit.table()
@@ -264,4 +265,3 @@ for path in sorted(retired_paths, key=str):
 
 sys.stdout.write(tomlkit.dumps(doc))
 PYEOF
-)
