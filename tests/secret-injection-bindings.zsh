@@ -91,8 +91,7 @@ for name, args in expected.items():
     server = doc["mcp_servers"][name]
     assert server["command"] == f"{home}/.local/bin/secret-exec"
     assert list(server["args"]) == args
-    assert not ({"type", "url", "headers", "http_headers", "bearer_token_env_var", "env_vars", "env"} & set(server))
-assert doc["mcp_servers"]["firecrawl"]["cwd"] == "/tmp/firecrawl"
+    assert set(server) == {"command", "args"}, server
 # Context7 is remote, with its key from the header helper (dotfiles#522).
 assert doc["mcp_servers"]["context7"] == {
     "url": "https://mcp.context7.com/mcp",
@@ -156,6 +155,136 @@ PYEOF
     fail 'Codex output must not keep an earlier Context7 field'
 done
 
+# Every managed entry drops the same fields that can carry a key, or choose the
+# credential Codex sends, and every field of the transport it does not use.
+for server in context7 firecrawl github; do
+  print -r -- "[mcp_servers.$server]
+type = \"fields-canary\"
+command = \"fields-canary\"
+args = [\"fields-canary\"]
+cwd = \"/tmp/fields-canary\"
+env = { $context7_field = \"fields-canary\" }
+env_vars = [\"$context7_field\"]
+url = \"https://fields-canary.example.invalid/mcp\"
+headers = { X-Key = \"fields-canary\" }
+http_headers = { X-Key = \"fields-canary\" }
+env_http_headers = { X-Key = \"$context7_field\" }
+bearer_token_env_var = \"$context7_field\"
+bearer_token = \"fields-canary\"
+oauth = { client_id = \"fields-canary\", client_secret = \"fields-canary\" }
+oauth_resource = \"https://fields-canary.example.invalid\"
+auth = \"oauth\"
+enabled = true" > "$test_dir/codex-fields.toml"
+  "$codex_modifier" < "$test_dir/codex-fields.toml" > "$test_dir/codex-fields-output.toml"
+  python3 -I -S - "$server" "$test_dir/codex-fields-output.toml" <<'PYEOF' ||
+import sys, tomllib
+
+name, output_path = sys.argv[1:]
+with open(output_path, "rb") as config:
+    server = tomllib.load(config)["mcp_servers"][name]
+expected = {"url", "http_headers_helper"} if name == "context7" else {"command", "args"}
+assert set(server) == expected | {"enabled"}, server
+PYEOF
+    fail "the Codex modifier must drop every key-carrying and other-transport field from $server"
+  ! rg -n "fields-canary|$context7_field" "$test_dir/codex-fields-output.toml" > /dev/null ||
+    fail "Codex output must not keep a key-carrying field of $server"
+done
+
+# A managed entry split over several table headers, written with dotted keys,
+# or placed after another top-level table is rewritten as one plain table, and a
+# second run changes nothing.
+codex_layout_expect=$test_dir/codex-layout-expect.py
+cat > "$codex_layout_expect" <<'PYEOF'
+import sys, tomllib
+
+name, output_path, home = sys.argv[1:]
+with open(output_path, "rb") as config:
+    servers = tomllib.load(config)["mcp_servers"]
+assert servers["notes"] == {"command": "notes-mcp"}, servers["notes"]
+launcher = f"{home}/.local/bin/secret-exec"
+expected = {
+    "context7": {
+        "url": "https://mcp.context7.com/mcp",
+        "http_headers_helper": f"{launcher} context7 -- {home}/.local/lib/secret-exec/context7-http-headers",
+    },
+    "firecrawl": {
+        "command": launcher,
+        "args": ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"],
+    },
+    "github": {
+        "command": launcher,
+        "args": [
+            "github", "--", "npx", "-y", "mcp-remote@0.1.38",
+            "https://api.githubcopilot.com/mcp/", "--header",
+            "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}",
+        ],
+    },
+}[name]
+assert servers[name] == {**expected, "startup_timeout_sec": 20}, servers[name]
+PYEOF
+for server in context7 firecrawl github; do
+  if [[ $server == context7 ]]; then
+    key_table=env
+    transport_field='command = "npx"'
+  else
+    key_table=http_headers
+    transport_field='url = "https://mcp.example.invalid/mcp"'
+  fi
+  print -r -- "[mcp_servers.$server]
+$transport_field
+startup_timeout_sec = 20
+
+[mcp_servers.notes]
+command = \"notes-mcp\"
+
+[mcp_servers.$server.$key_table]
+$context7_field = \"layout-canary\"" > "$test_dir/codex-layout-split.toml"
+  print -r -- "[mcp_servers]
+notes.command = \"notes-mcp\"
+$server.$transport_field
+$server.$key_table.$context7_field = \"layout-canary\"
+$server.startup_timeout_sec = 20" > "$test_dir/codex-layout-dotted.toml"
+  print -r -- "[mcp_servers.notes]
+command = \"notes-mcp\"
+
+[tui]
+theme = \"fixture\"
+
+[mcp_servers.$server]
+$transport_field
+startup_timeout_sec = 20
+
+[mcp_servers.$server.$key_table]
+$context7_field = \"layout-canary\"" > "$test_dir/codex-layout-around.toml"
+  for layout in split dotted around; do
+    "$codex_modifier" < "$test_dir/codex-layout-$layout.toml" > "$test_dir/codex-layout-output.toml" ||
+      fail "the Codex modifier must rewrite a $layout $server entry"
+    python3 -I -S "$codex_layout_expect" "$server" "$test_dir/codex-layout-output.toml" "$fixture_home" ||
+      fail "the Codex modifier must write the managed $server entry from a $layout layout"
+    ! rg -n 'layout-canary' "$test_dir/codex-layout-output.toml" > /dev/null ||
+      fail "Codex output must not keep a key from a $layout $server entry"
+    "$codex_modifier" < "$test_dir/codex-layout-output.toml" | cmp -s - "$test_dir/codex-layout-output.toml" ||
+      fail "a second run must not change a rewritten $layout $server entry"
+  done
+done
+# A top-level dotted key: tomlkit renders this one so that the instruction budget
+# reads back inside context7. The modifier writes the right config or fails with
+# no output.
+print -r -- 'model = "fixture"
+mcp_servers.context7.url = "https://mcp.context7.example.invalid/mcp"' > "$test_dir/codex-layout-top-dotted.toml"
+if "$codex_modifier" < "$test_dir/codex-layout-top-dotted.toml" > "$test_dir/codex-layout-output.toml" \
+  2> /dev/null; then
+  python3 -I -S -c '
+import sys, tomllib
+with open(sys.argv[1], "rb") as config:
+    doc = tomllib.load(config)
+assert doc["model"] == "fixture" and isinstance(doc["project_doc_max_bytes"], int), doc
+assert all("project_doc_max_bytes" not in server for server in doc["mcp_servers"].values()), doc
+' "$test_dir/codex-layout-output.toml" || fail 'the Codex modifier must not write a config that reads back differently'
+else
+  [[ ! -s $test_dir/codex-layout-output.toml ]] || fail 'a failing Codex modifier must print nothing'
+fi
+
 # The helper command survives a home path that needs shell quoting.
 spaced_data=${darwin_data//${fixture_home}/$test_dir/spaced home}
 [[ $spaced_data == *'spaced home'* ]] || fail 'the spaced-home fixture data must name the spaced home'
@@ -199,6 +328,7 @@ run_helper() {
 stand_in_value='context7-canary_1.2~3+4/5=='
 helper_output=$(run_helper "STAND_IN_VALUE=$stand_in_value") ||
   fail 'the Context7 helper must succeed when the key is set'
+[[ ! -s $test_dir/helper.err ]] || fail 'a successful Context7 helper must write nothing to stderr'
 print -r -- "$helper_output" | jq -se --arg value "$stand_in_value" '
   length == 1 and .[0] == {Authorization: ("Bearer " + $value)}
 ' > /dev/null || fail 'the Context7 helper must print exactly one JSON object with the Authorization header'

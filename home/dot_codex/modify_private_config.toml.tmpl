@@ -4,7 +4,10 @@
 # Codex owns this file and rewrites it continuously (per-session project trusts,
 # [hooks.state] hashes, marketplace timestamps, app-version paths, etc.). Rather than
 # manage the whole file, this script overlays only a minimal, curated set of settings
-# onto Codex's live file and passes everything else through untouched:
+# onto Codex's live file and passes everything else through untouched, except
+# that an mcp_servers table split around other tables, or written inline, is
+# rewritten as one plain table: its settings stay the same, but its comments
+# and formatting are lost. The overlaid settings and edits:
 #   - top-level project_doc_max_bytes             (instruction-size budget)
 #   - [tui] theme, [desktop] git-branch-prefix   (portable prefs)
 #   - [desktop.open-in-target-preferences] global (parametrized editor target)
@@ -13,6 +16,8 @@
 #     runs under secret-exec (dotfiles#522)
 #   - macOS developer-tool writable_roots
 #   - private writable roots and project trusts (from an age catalog)
+#   - the retired serena MCP entry, removed
+#   - [[skills.config]] entries that disable retired workflow skills
 #
 # Requires Python 3.9+; embedded TOMLKit bytes are verified before import.
 # No package manager, network access, or global install is used.
@@ -36,6 +41,10 @@ export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64en
 
 # python3 reads the script from file descriptor 3 without a path, so no zip-import
 # probe moves its offset on older Pythons; the live config arrives on stdin.
+# The script exits with status 86 only after it has written the whole config.
+# Python given an empty or cut-short script prints nothing and exits 0, so every
+# other status fails here, and chezmoi never receives an empty config.
+set +e
 python3 -I -S -c 'import sys; exec(compile(open(3, "rb").read(), "codex-modifier", "exec"))' 3<<'PYEOF'
 import base64
 import binascii
@@ -86,9 +95,65 @@ desk = ensure_table(doc, "desktop")
 desk["git-branch-prefix"] = os.environ["GIT_BRANCH_PREFIX"]
 ensure_table(desk, "open-in-target-preferences")["global"] = editor
 
+def rebuilt_table(parent, key):
+    # Rebuild parent[key] as one plain table from its values and remove the old
+    # parts. A table split over several headers, or written with dotted keys,
+    # cannot have its fields deleted reliably; the rebuilt copy can.
+    existing = parent[key] if key in parent else None
+    table = tomlkit.table()
+    if hasattr(existing, "items"):
+        for name, value in existing.unwrap().items():
+            table[name] = value
+    if key in parent:
+        del parent[key]
+    return table
+
+# An mcp_servers table split around other tables reads as a proxy, and an
+# inline one cannot be edited in place; a split table also changes again on a
+# second run. Either is rebuilt whole as one plain table, unmanaged entries
+# included.
+if "mcp_servers" in doc and not isinstance(doc["mcp_servers"], tomlkit.items.Table):
+    doc["mcp_servers"] = rebuilt_table(doc, "mcp_servers")
 mcp = ensure_table(doc, "mcp_servers")
 if "serena" in mcp:
     del mcp["serena"]
+
+def plain_entry(name):
+    # Return the named server entry as a table that can be edited in place. A
+    # plain or inline table stays where it is, with its comments, unless the
+    # whole mcp_servers table was rebuilt above; any other layout is rebuilt.
+    existing = mcp[name] if name in mcp else None
+    if isinstance(existing, tomlkit.items.InlineTable) or (
+        type(existing) is tomlkit.items.Table and not existing.is_super_table()
+    ):
+        return existing
+    return rebuilt_table(mcp, name)
+
+# Fields that can carry a key, or choose the credential Codex sends, go from
+# every managed entry: environment values and names, header values and names,
+# a token variable, an OAuth block (it can hold a client secret), a working
+# directory (it can hold a .env file that a server loads), a literal
+# bearer_token (Codex refuses to load any config that has one), and auth and
+# oauth_resource (they choose the credential Codex sends). The Codex evidence
+# is in docs/SECRET_INJECTION.md#codex-mcp-entries.
+key_fields = (
+    "env", "env_vars", "cwd", "headers", "http_headers", "env_http_headers",
+    "bearer_token_env_var", "bearer_token", "oauth", "oauth_resource", "auth",
+)
+# Each managed entry uses one transport, and the fields of the other one go
+# too: Codex rejects an entry that mixes them. Codex ignores type, so it goes
+# from both.
+stdio_fields = ("type", "command", "args", "cwd", "env", "env_vars")
+http_fields = (
+    "type", "url", "bearer_token_env_var", "http_headers_helper", "http_headers",
+    "env_http_headers", "oauth", "oauth_resource", "auth",
+)
+
+def drop_fields(entry, fields):
+    for key in fields:
+        if key in entry:
+            del entry[key]
+
 secret_exec = os.path.join(home, ".local", "bin", "secret-exec")
 managed_mcp_servers = {
     "firecrawl": [
@@ -101,14 +166,8 @@ managed_mcp_servers = {
     ],
 }
 for name, args in managed_mcp_servers.items():
-    existing = mcp[name] if name in mcp else None
-    server = existing if hasattr(existing, "items") else tomlkit.table()
-    for key in (
-        "type", "url", "env", "env_vars", "headers", "http_headers",
-        "bearer_token_env_var",
-    ):
-        if key in server:
-            del server[key]
+    server = plain_entry(name)
+    drop_fields(server, key_fields + http_fields)
     server["command"] = secret_exec
     server["args"] = args
     mcp[name] = server
@@ -119,14 +178,8 @@ for name, args in managed_mcp_servers.items():
 # Codex nor this file. Every stdio field and every field that can carry a key
 # goes; other settings, such as timeouts and enabled, stay.
 context7_helper = os.path.join(home, ".local", "lib", "secret-exec", "context7-http-headers")
-existing = mcp["context7"] if "context7" in mcp else None
-context7 = existing if hasattr(existing, "items") else tomlkit.table()
-for key in (
-    "type", "command", "args", "cwd", "env", "env_vars", "headers",
-    "http_headers", "env_http_headers", "bearer_token_env_var",
-):
-    if key in context7:
-        del context7[key]
+context7 = plain_entry("context7")
+drop_fields(context7, key_fields + stdio_fields)
 context7["url"] = "https://mcp.context7.com/mcp"
 context7["http_headers_helper"] = " ".join(
     shlex.quote(part) for part in (secret_exec, "context7", "--", context7_helper)
@@ -263,5 +316,31 @@ for path in sorted(retired_paths, key=str):
     entry["enabled"] = False
     configured_skills.append(entry)
 
-sys.stdout.write(tomlkit.dumps(doc))
+text = tomlkit.dumps(doc)
+# tomlkit can render some hand-written layouts, such as dotted mcp_servers keys
+# at the top level, so that they read back as different settings. Refuse to
+# write such a config rather than hand it to chezmoi.
+if tomlkit.parse(text).unwrap() != doc.unwrap():
+    raise SystemExit(
+        "Codex modifier: the rewritten config reads back differently;"
+        " write its mcp_servers entries as plain tables"
+    )
+
+def write_config(config_text):
+    sys.stdout.write(config_text)
+    sys.stdout.flush()
+    # The launcher accepts this status, and no other, as success.
+    return 86
+
+# One statement writes the config and returns the success status, so a script
+# cut short anywhere before its end writes nothing.
+raise SystemExit(write_config(text))
 PYEOF
+python_status=$?
+set -e
+if [ "$python_status" -ne 86 ]; then
+  if [ "$python_status" -eq 0 ]; then
+    echo 'Codex modifier: the Python script ended without writing a config' >&2
+  fi
+  exit 1
+fi

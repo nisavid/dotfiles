@@ -131,6 +131,29 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
                     "\"codex-modifier\", \"exec\"))' 3<<'PYEOF'"
                 ])
 
+    def test_fails_closed_when_the_script_writes_nothing(self) -> None:
+        # chezmoi deletes the target when a modify script exits 0 with no
+        # output, so a Python script that writes nothing must fail the modifier:
+        # an empty script, one that ends early, and the real one cut short.
+        script = rendered_modifier(self.home)
+        head, launch, rest = script.partition("3<<'PYEOF'\n")
+        body, end, tail = rest.partition("\nPYEOF\n")
+        self.assertTrue(launch and end)
+        last = body.rindex("\nraise SystemExit(write_config(text))")
+        for name, replacement in {
+            "empty script": "",
+            "no statements": "pass\n",
+            "exit 0": "import sys\nsys.exit(0)\n",
+            "cut short": body[:last + 1],
+        }.items():
+            with self.subTest(name):
+                result = self.run_modifier("", script=head + launch + replacement + "PYEOF\n" + tail)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+        result = self.run_modifier("", script=head + launch + body + end + tail)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("project_doc_max_bytes", result.stdout)
+
     def test_runs_without_package_manager_cache_or_ambient_imports(self) -> None:
         poison = self.home / "poison"
         poison.mkdir()
