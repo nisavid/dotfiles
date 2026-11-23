@@ -191,8 +191,12 @@ class SafeguardDeploymentTests(unittest.TestCase):
         result = subprocess.run([str(launcher), 'companion'], env=self.env, text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.lock.exists())
+        # Restore the valid lock so only the override can cause the rejection.
+        self.lock.write_text('')
         result = subprocess.run([str(launcher), 'controller', '--state-dir', str(self.root)], env=self.env, text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('usage: codex-quota-safeguard', result.stderr)
+        self.assertEqual(result.stdout, '')
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux bindings')
     def test_shared_lock_must_differ_from_the_state_observer_lock(self):
