@@ -25,6 +25,7 @@ cold_archive_include='{{ include ".private-cold-archive.md.age" | decrypt | trim
 question_partial_name=decisions-via-question-tool.tmpl
 question_partial="$source_root/.chezmoitemplates/$question_partial_name"
 claude_question_rule_template="$source_root/dot_claude/rules/decisions-via-question-tool.md.tmpl"
+claude_cards_rule="$source_root/dot_claude/rules/question-cards-stand-alone.md"
 typography_partial_name=distinctive-typography.tmpl
 typography_partial="$source_root/.chezmoitemplates/$typography_partial_name"
 claude_typography_rule_template="$source_root/dot_claude/rules/distinctive-typography.md.tmpl"
@@ -43,6 +44,7 @@ claude_cold_archive_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-cold-arc
 cold_archive_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-cold-archive-policy.XXXXXX")
 claude_question_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-question-rule.XXXXXX")
 question_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-question-policy.XXXXXX")
+cards_expected=$(mktemp "${TMPDIR:-/tmp}/global-agents-cards-expected.XXXXXX")
 claude_typography_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-typography-rule.XXXXXX")
 render_source_root=$source_root
 render_template=$template
@@ -51,6 +53,7 @@ render_claude_git_rule_template=$claude_git_rule_template
 render_claude_review_rule_template=$claude_review_rule_template
 render_claude_cold_archive_rule_template=$claude_cold_archive_rule_template
 render_claude_question_rule_template=$claude_question_rule_template
+render_claude_cards_rule=$claude_cards_rule
 render_claude_typography_rule_template=$claude_typography_rule_template
 render_fixture=
 chmod 600 "$rendered"
@@ -59,7 +62,7 @@ chmod 600 "$git_policy"
 chmod 600 "$pr_policy"
 chmod 600 "$claude_cold_archive_rule"
 chmod 600 "$cold_archive_policy"
-trap 'rm -f "$rendered" "$size_check_stderr" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_question_rule" "$question_policy" "$claude_typography_rule"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
+trap 'rm -f "$rendered" "$size_check_stderr" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_question_rule" "$question_policy" "$cards_expected" "$claude_typography_rule"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -147,6 +150,15 @@ grep -Fq 'mode-`0600` `~/.claude/rules/cold-archive.md` target' "$encryption_doc
 [[ $(chezmoi -S "$source_root" target-path "$claude_question_rule_template") == "$HOME/.claude/rules/decisions-via-question-tool.md" ]] ||
   fail "Claude question-tool rule template targets the wrong file"
 
+# The cards rule includes nothing, so it is a plain file with no template.
+[[ -f "$claude_cards_rule" ]] || fail "Claude question-cards rule is missing"
+[[ ! -e "$claude_cards_rule.tmpl" ]] || fail "Claude question-cards rule has a template beside its plain file"
+[[ $(mode_of "$claude_cards_rule") == 644 ]] || fail "Claude question-cards rule source mode must be 0644"
+[[ $(git -C "$repo_root" ls-files --stage -- "${claude_cards_rule#$repo_root/}" | awk '{print $1}') == 100644 ]] ||
+  fail "Claude question-cards rule Git mode must be 100644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_cards_rule") == "$HOME/.claude/rules/question-cards-stand-alone.md" ]] ||
+  fail "Claude question-cards rule targets the wrong file"
+
 [[ -f "$claude_typography_rule_template" ]] || fail "Claude typography rule template is missing"
 [[ ! -e "${claude_typography_rule_template%.tmpl}" ]] || fail "plain Claude typography rule still exists beside its template"
 [[ $(mode_of "$claude_typography_rule_template") == 644 ]] || fail "Claude typography rule source template mode must be 0644"
@@ -187,6 +199,8 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   chmod 644 "$render_claude_cold_archive_rule_template"
   render_claude_question_rule_template="$render_fixture/dot_claude/rules/${claude_question_rule_template:t}"
   cp -p -- "$claude_question_rule_template" "$render_claude_question_rule_template"
+  render_claude_cards_rule="$render_fixture/dot_claude/rules/${claude_cards_rule:t}"
+  cp -p -- "$claude_cards_rule" "$render_claude_cards_rule"
   render_claude_typography_rule_template="$render_fixture/dot_claude/rules/${claude_typography_rule_template:t}"
   cp -p -- "$claude_typography_rule_template" "$render_claude_typography_rule_template"
   render_source_root=$render_fixture
@@ -584,15 +598,18 @@ awk '
 ' "$rendered" > "$question_policy"
 assert_partial_carried_once "$question" "question-tool policy" "$template" "$claude_question_rule_template"
 
-# Each harness names its own tool and option format outside the partial;
-# the Claude rule and the Codex Interaction section are pinned exactly
-# around it, and the two leads may differ only in the tool name.
-claude_question_lead="Whenever you need Ivan's attention, call the \`AskUserQuestion\` tool in the same turn, after your prose status: for a decision or approval, a list of options, \"which do you want?\", a clarification, a blocker that needs him, \"tell Ivan\", or an action only he can take."
+# Each harness names its own tool and option format outside the partial.
+# The Claude rule and the Codex Interaction section are pinned exactly around
+# it, and each opening is pinned on its own: the Claude opening adds a
+# command-step paragraph and drops "after your prose status", and neither
+# opening is derived from the other.
+claude_question_lead="Whenever you need Ivan's attention, call the \`AskUserQuestion\` tool in the same turn: for a decision or approval, a list of options, \"which do you want?\", a clarification, a blocker that needs him, \"tell Ivan\", or an action only he can take. The card must be answerable from its own text, because prose written before it may not reach him."
 claude_question_format='Put the recommended option first and the facts in the option descriptions.'
+claude_question_command='A command he must run is the one exception. End your turn with the command as a runnable block. The app'"'"'s end-of-turn box sits under it with a Done button, and the session shows as waiting on him. No card. He runs it and clicks once: for a command step, the end-of-turn box is the prompt. The check before ending a turn does not ask for a card here. In a session with no end-of-turn box, the card carries the command in its question text.'
 claude_question_background='Ivan corrected this on 2026-09-29, 2026-10-02 (twice), and 2026-10-16; the memory alone did not prevent recurrence.'
-[[ $(<"$claude_question_rule") == "# Decisions Via The Question Tool"$'\n\n'"$claude_question_lead $claude_question_format $question"$'\n\n'"$claude_question_background" ]] ||
-  fail "Claude question-tool rule is not the heading, its lead and option format, the shared partial, and its background"
-codex_question_lead=${claude_question_lead//AskUserQuestion/request_user_input_async}
+[[ $(<"$claude_question_rule") == "# Decisions Via The Question Tool"$'\n\n'"$claude_question_lead $claude_question_format"$'\n\n'"$claude_question_command"$'\n\n'"$question"$'\n\n'"$claude_question_background" ]] ||
+  fail "Claude question-tool rule is not the heading, its two opening paragraphs, the shared partial, and its background"
+codex_question_lead="Whenever you need Ivan's attention, call the \`request_user_input_async\` tool in the same turn, after your prose status: for a decision or approval, a list of options, \"which do you want?\", a clarification, a blocker that needs him, \"tell Ivan\", or an action only he can take."
 codex_question_format="Put the recommended answer first and the facts in the question itself; the async tool's options are bare answers."
 codex_question_fallback="In Plan mode, use \`request_user_input\` instead. A subagent or a headless run (\`codex exec\`) is without the tool even when the async tool is listed, and so is a turn that lists neither: hand the question back by ending the turn with it."
 codex_question_wait='When asking Ivan a question, wait for his response by default. Set no automatic timeout or auto-resolution unless Ivan explicitly requests one for that question or workflow.'
@@ -612,6 +629,28 @@ for ((i = 1; i <= ${#question_required}; i++)); do
 done
 [[ $question == "${(pj:\n\n:)question_required}" ]] ||
   fail "question-tool policy is not exactly its settled paragraphs in order"
+
+# The question-cards rule is a plain file whose exact text is pinned here, one
+# entry per paragraph or list item, so a changed word fails the test.
+cards_heading='# Question Cards Stand Alone'
+cards_intro=$'Three things reach Ivan exactly as you wrote them: a question card\'s own text (the question, the option labels, and the option descriptions), your closing message (the text after your last tool call), and a file you link or send. Text you write before a tool call may reach him only as a short summary, or not at all, and you cannot tell from inside the turn which happened. A card\'s `preview` may not be drawn.'
+cards_lead='So every card stands on its own:'
+cards_items=(
+  $'1. A card never points elsewhere: no "above", "below", "as shown", "as described", or "in the preview".'
+  $'2. Anything he must read exactly (a command, a draft, a path, or a figure) goes in the card\'s own text, in the closing message, or in a file you link or send.'
+  $'3. A command he must run goes in the closing message as a fenced `bash` block of its own, the form the desktop app draws with a Run button. A card cannot show that block.'
+  $'4. No card depends on status prose written before it. Put what he needs to answer in the question and the option descriptions.'
+  $'5. `preview` carries nothing he needs.'
+)
+cards_command=$'A command step takes no card. End your turn with the command as a runnable block. The app\'s end-of-turn box sits under it with a Done button, and the session shows as waiting on him. He runs it and clicks once. Raise the box with the app\'s `wrap_up` tool: one question that says what the command does, a "Done" button, and the turn marked as blocked on him. Several commands go one block each in the same closing message, under one box. This is the only case without a card: every other need of his attention gets one. In a session with no end-of-turn box, the card carries the command in its question text, and a subagent hands the command back to its caller.'
+print -r -- "$cards_heading"$'\n\n'"$cards_intro"$'\n\n'"$cards_lead"$'\n\n'"${(pj:\n:)cards_items}"$'\n\n'"$cards_command" > "$cards_expected"
+cmp -s "$cards_expected" "$claude_cards_rule" ||
+  fail "Claude question-cards rule is not exactly its settled text"
+chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/question-cards-stand-alone.md" > "$claude_state"
+[[ $(jq -r '.[".claude/rules/question-cards-stand-alone.md"].perm' "$claude_state") == 420 ]] ||
+  fail "Claude question-cards rule target mode is not 0644"
+[[ $(jq -r '.[".claude/rules/question-cards-stand-alone.md"].contents' "$claude_state") == "$(<"$cards_expected")" ]] ||
+  fail "Claude question-cards rule target state differs from its settled text"
 
 # The typography rule is one paragraph that both harnesses render from the
 # one partial. Compare the two renderings directly, so neither can drift
