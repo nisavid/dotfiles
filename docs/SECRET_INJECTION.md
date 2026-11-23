@@ -769,8 +769,8 @@ keeps that sign-in on the host in its own credentials file, outside this
 repository, so a new host, or one that lost that file, needs it again. Until the
 sign-in, Claude Code has no Context7 tools from a server; the `ctx7` command is
 not affected. The plugin's tools carry the plugin's prefix rather than
-`mcp__context7__`. OpenCode still launches the local server through
-`secret-exec`.
+`mcp__context7__`. Codex, Cursor, and OpenCode reach the same remote server;
+the sections below describe each route.
 
 ## Codex Context7 route
 
@@ -830,6 +830,31 @@ on the host, outside this repository, so a new host needs it again. Until the
 sign-in, Cursor has no Context7 tools from a server. If the sign-in does not
 complete, or does not last through a restart of Cursor, Cursor goes back to the
 local binding in a later change (dotfiles#522).
+
+## OpenCode Context7 route
+
+When `~/.config/opencode/opencode.json` exists as a regular file, an
+after-update script sets its `context7` entry to Context7's remote server at
+its OAuth address: `type` is `remote` and `url` is
+`https://mcp.context7.com/mcp/oauth`. The script removes `command`,
+`environment`, `env`, `env_vars`, `headers`, `http_headers`,
+`bearer_token_env_var`, and `oauth` from that entry. `oauth` goes because it
+can hold a client secret or turn the sign-in off. The script keeps an explicit
+`enabled` value, or sets it to true, keeps the entry's other metadata, such as
+`timeout`, and leaves every other server and setting as it was. OpenCode's
+configuration offers no command that could supply the key: a header is a
+literal, which would put the key in the file, `{env:NAME}`, which would put it
+in OpenCode's environment, or `{file:path}`, which would leave it on disk in
+plain text. OpenCode therefore signs in with OAuth, and the `context7` profile
+is not involved. `secret-exec-migrate --retire-plaintext` requires that remote
+entry and rejects every removed field.
+
+The sign-in is the owner's step after the apply: `opencode mcp auth context7`.
+OpenCode keeps the tokens in its own data directory, outside this repository,
+so a new host needs the sign-in again. Until the sign-in, OpenCode has no
+Context7 tools from a server. If the sign-in does not complete, or does not
+last through a restart of OpenCode, OpenCode goes back to the local binding in
+a later change (dotfiles#522).
 
 ## Codex exec-policy rule for firecrawl-axi
 

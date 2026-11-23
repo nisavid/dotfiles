@@ -687,44 +687,68 @@ expect_cursor_failure 'a Cursor config with a non-object mcpServers must fail th
 opencode_hook=$test_dir/update-opencode-context7
 render_modifier home/run_after_update-opencode-context7.sh.tmpl "$opencode_hook"
 mkdir -p -- "$fixture_home/.config/opencode"
+# OpenCode signs in to Context7's remote server with OAuth (dotfiles#522): the
+# entry keeps only its metadata, the remote type, and the OAuth address.
 cat > "$fixture_home/.config/opencode/opencode.json" <<EOF
 {
   "unrelated": "preserved",
   "mcp": {
+    "notes": {"type": "local", "command": ["notes-mcp"]},
     "context7": {
       "type": "remote",
       "url": "https://mcp.context7.com/mcp",
       "headers": {"$context7_field": "literal-canary"},
+      "environment": {"$context7_field": "opencode-environment-canary"},
       "env": {"$context7_field": "environment-canary"},
       "env_vars": ["$context7_field"],
       "http_headers": {"X-API-Key": "$http_header_canary"},
       "bearer_token_env_var": "CONTEXT7_API_KEY",
+      "oauth": {"clientId": "client", "clientSecret": "oauth-secret-canary"},
       "timeout": 60000
     }
   }
 }
 EOF
 "$opencode_hook"
-jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
+jq -e '
   .unrelated == "preserved" and
+  .mcp.notes == {type: "local", command: ["notes-mcp"]} and
   .mcp.context7 == {
-    type: "local",
-    command: [$command, "context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"],
+    type: "remote",
+    url: "https://mcp.context7.com/mcp/oauth",
     enabled: true,
     timeout: 60000
   }
 ' "$fixture_home/.config/opencode/opencode.json" > /dev/null || \
-  fail 'OpenCode Context7 must use the process-scoped launcher while preserving metadata'
-! rg -n 'literal-canary|environment-canary|http-header-canary|CONTEXT7_API_KEY|mcp.context7.com' \
+  fail 'OpenCode Context7 must use the remote OAuth entry while preserving metadata'
+! rg -n 'literal-canary|environment-canary|http-header-canary|oauth-secret-canary|CONTEXT7_API_KEY|secret-exec|context7-mcp' \
   "$fixture_home/.config/opencode/opencode.json" >/dev/null || \
-  fail 'OpenCode output must not retain literal Context7 authentication data'
-chmod 600 "$fixture_home/.config/opencode/opencode.json"
+  fail 'OpenCode output must not retain Context7 authentication data or the local launcher'
+[[ $(stat -c %a "$fixture_home/.config/opencode/opencode.json" 2>/dev/null ||
+  stat -f %Lp "$fixture_home/.config/opencode/opencode.json") == 600 ]] ||
+  fail 'the OpenCode Context7 hook must leave the configuration private'
+cp "$fixture_home/.config/opencode/opencode.json" "$test_dir/opencode-once.json"
+"$opencode_hook"
+cmp -s "$fixture_home/.config/opencode/opencode.json" "$test_dir/opencode-once.json" ||
+  fail 'the OpenCode Context7 hook must be idempotent'
 jq '.mcp.context7.enabled = false' "$fixture_home/.config/opencode/opencode.json" > \
   "$test_dir/opencode-disabled.json"
 mv "$test_dir/opencode-disabled.json" "$fixture_home/.config/opencode/opencode.json"
 "$opencode_hook"
 jq -e '.mcp.context7.enabled == false' "$fixture_home/.config/opencode/opencode.json" > /dev/null || \
   fail 'OpenCode Context7 migration must preserve an explicit disabled state'
+# The earlier local launcher, an entry that turns the sign-in off, and a file
+# with no entry all end with the remote entry.
+for opencode_input in \
+  "{\"mcp\":{\"context7\":{\"type\":\"local\",\"command\":[\"$fixture_home/.local/bin/secret-exec\",\"context7\",\"--\",\"npx\",\"-y\",\"@upstash/context7-mcp@3.2.4\"],\"enabled\":true}}}" \
+  '{"mcp":{"context7":{"type":"remote","url":"https://mcp.context7.com/mcp/oauth","oauth":false}}}' \
+  '{"unrelated":"preserved"}'; do
+  print -r -- "$opencode_input" > "$fixture_home/.config/opencode/opencode.json"
+  "$opencode_hook"
+  jq -e '.mcp.context7 == {type: "remote", url: "https://mcp.context7.com/mcp/oauth", enabled: true}' \
+    "$fixture_home/.config/opencode/opencode.json" > /dev/null ||
+    fail "the OpenCode Context7 hook must write the remote entry from: $opencode_input"
+done
 
 aws_modifier=$test_dir/modify-aws-config
 render_modifier home/private_dot_aws/modify_private_config.tmpl "$aws_modifier"

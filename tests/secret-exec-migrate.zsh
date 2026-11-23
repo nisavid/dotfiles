@@ -707,9 +707,34 @@ set -e
   fail 'legacy OpenCode diagnostics must not contain credential values'
 [[ -e $fixture_home/.config/opencode/opencode.json ]] || \
   fail 'legacy OpenCode rejection must preserve the detected plaintext source'
-cat > "$fixture_home/.config/opencode/opencode.json" <<EOF
-{"mcp":{"context7":{"type":"local","command":["$fixture_home/.local/bin/secret-exec","context7","--","npx","-y","@upstash/context7-mcp@3.2.4"],"enabled":true}}}
-EOF
+# OpenCode signs in to Context7's remote server with OAuth (dotfiles#522).
+# Retirement rejects the local launcher, another address, and every field that
+# can carry a key or turn the sign-in off, and accepts only the remote entry.
+opencode_remote='{"type":"remote","url":"https://mcp.context7.com/mcp/oauth","enabled":true}'
+for opencode_entry in \
+  "$(jq -nc --arg command "$fixture_home/.local/bin/secret-exec" '{type: "local", command: [$command, "context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"], enabled: true}')" \
+  "$(jq -c '.url = "https://mcp.context7.com/mcp"' <<< "$opencode_remote")" \
+  "$(jq -c 'del(.enabled)' <<< "$opencode_remote")" \
+  "$(jq -c --arg field "$context7_field" '.environment = {($field): "context7-canary"}' <<< "$opencode_remote")" \
+  "$(jq -c '.oauth = false' <<< "$opencode_remote")" \
+  "$(jq -c '.oauth = {clientId: "client", clientSecret: "context7-canary"}' <<< "$opencode_remote")" \
+  "$(jq -c '.command = ["context7-mcp"]' <<< "$opencode_remote")"; do
+  jq -nc --argjson entry "$opencode_entry" '{mcp: {context7: $entry}}' > \
+    "$fixture_home/.config/opencode/opencode.json"
+  set +e
+  zsh "$migrator" --retire-plaintext > "$test_dir/opencode-context7.out" 2>&1
+  exit_code=$?
+  set -e
+  (( exit_code != 0 )) || fail "retirement must reject this OpenCode Context7 binding: $opencode_entry"
+  [[ $(<"$test_dir/opencode-context7.out") == *'OpenCode Context7 binding does not match the canonical remote contract'* ]] ||
+    fail 'an OpenCode Context7 binding must be named as the retirement blocker'
+  [[ $(<"$test_dir/opencode-context7.out") != *context7-canary* ]] ||
+    fail 'OpenCode Context7 diagnostics must not contain canary values'
+  [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] ||
+    fail 'an OpenCode Context7 rejection must preserve every plaintext source'
+done
+jq -nc --argjson entry "$opencode_remote" '{mcp: {context7: $entry}}' > \
+  "$fixture_home/.config/opencode/opencode.json"
 
 export FAKE_RM_FAIL=1
 set +e
