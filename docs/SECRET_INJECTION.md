@@ -787,17 +787,63 @@ repository, so a new host, or one that lost that file, needs it again. Until the
 sign-in, Claude Code has no Context7 tools from a server; the `ctx7` command is
 not affected. The plugin's tools carry the plugin's prefix rather than
 `mcp__context7__`. Codex, Cursor, and OpenCode reach the same remote server;
-the sections below describe each route.
+the sections below describe each route. The Codex route builds on the policy
+for Codex's MCP entries, described next.
+
+## Codex MCP entries
+
+The `~/.codex/config.toml` modifier manages three `mcp_servers` entries:
+`context7`, which uses Codex's streamable HTTP transport, and `firecrawl` and
+`github`, which use stdio. It also deletes a retired `serena` entry. It removes the same key-carrying fields from each,
+every field that can carry a key or choose the credential Codex sends:
+
+- `env`, `env_vars`, `headers`, `http_headers`, `env_http_headers`, and
+  `bearer_token_env_var`, which hold a key or name the variable that holds one.
+- `cwd`, because it can hold a `.env` file that a server loads.
+- `oauth`, because it can hold a client secret.
+- `bearer_token`, because Codex refuses to load any config that has it, for
+  either transport (Codex 0.171.0: "bearer_token is not supported for stdio",
+  and the same for `streamable_http`).
+- `auth` and `oauth_resource`, because they choose the credential Codex sends.
+  `auth = "ema_auth"` turns the Context7 helper route off without an error:
+  Codex 0.171.0 lists the entry as not enabled, with `auth_status`
+  `"unsupported"`.
+
+It also removes every field of the transport the entry does not use, since
+Codex rejects an entry that mixes them. From `context7` it removes the stdio
+fields `type`, `command`, `args`, `cwd`, `env`, and `env_vars`. From
+`firecrawl` and `github` it removes the HTTP fields `type`, `url`,
+`bearer_token_env_var`, `http_headers_helper`, `http_headers`,
+`env_http_headers`, `oauth`, `oauth_resource`, and `auth`. Codex ignores
+`type`, so it goes from both.
+
+A managed entry written with dotted keys, or split over several table headers,
+is first rewritten as one plain table. An `mcp_servers` table split around
+other tables, or written inline, is rebuilt whole as one plain table, which
+reformats its other entries and drops their comments without changing their
+settings.
+
+The modifier fails closed for every setting it writes, not only
+`mcp_servers`: the `[tui]` and `[desktop]` preferences, writable roots,
+project trusts, and skill entries come from the same run. Any failure of its
+Python script, such as malformed TOML or a failed check of the bundled
+TOMLKit, makes it exit 1 with no output, and chezmoi leaves `config.toml` as
+it was. The script also refuses a rewritten config that would read back as
+different settings: tomlkit renders some top-level dotted `mcp_servers` keys
+that way, and a config that holds a NaN value fails this check too, a known
+limit. The script exits with status 86 only after it has written the whole
+config, and the shell launcher treats every other status, including the 0 of
+an empty or cut-short script, as a failure. chezmoi would delete
+`config.toml` if the modifier exited 0 with no output.
 
 ## Codex Context7 route
 
 Codex reaches Context7's remote server, `https://mcp.context7.com/mcp`, and
 takes the key from a header helper. The `~/.codex/config.toml` modifier writes
-the `context7` entry with `url` and `http_headers_helper`, and removes
-`type`, `command`, `args`, `cwd`, `env`, `env_vars`, `headers`,
-`http_headers`, `env_http_headers`, `bearer_token_env_var`, and `oauth`. Other
-settings of the entry, such as `enabled` and its timeouts, stay. The helper
-command is:
+the `context7` entry with `url` and `http_headers_helper`, and removes the
+key-carrying and stdio fields listed in [Codex MCP entries](#codex-mcp-entries).
+Other settings of the entry, such as `enabled` and its timeouts, stay. The
+helper command is:
 
 ```text
 ~/.local/bin/secret-exec context7 -- ~/.local/lib/secret-exec/context7-http-headers
@@ -815,20 +861,6 @@ Codex's environment nor its configuration file, and no local Context7 server
 starts. Codex keeps the headers for the connection and runs the helper again
 only after a 401 or 403 response, so each new session reads the key once. The
 key reaches Codex's memory as a header value, and Codex sends it to Context7.
-
-The modifier removes the same fields from each entry it manages (`context7`,
-`firecrawl`, and `github`). It removes every field that can carry a key or lead
-a server to one: `env`, `env_vars`, `cwd`, `headers`, `http_headers`,
-`env_http_headers`, `bearer_token_env_var`, and `oauth`. `cwd` goes because it
-can hold a `.env` file that a server loads, and `oauth` because it can hold a
-client secret. It also removes every field of the transport the entry does not
-use, since Codex rejects an entry that mixes them. Codex rejects a literal
-`bearer_token` field for either transport, so no entry can hold a key that
-way. An entry written with dotted keys, or split over several table headers,
-is first rewritten as one plain table. When the rewritten config would read
-back as different settings, or the modifier's Python script ends without
-writing it, the modifier fails with no output, and chezmoi leaves
-`config.toml` as it was.
 
 Codex accepts a misspelled field in this entry without an error, so a typo
 loses the helper silently. `codex mcp list --json` shows the helper command

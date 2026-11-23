@@ -4,7 +4,10 @@
 # Codex owns this file and rewrites it continuously (per-session project trusts,
 # [hooks.state] hashes, marketplace timestamps, app-version paths, etc.). Rather than
 # manage the whole file, this script overlays only a minimal, curated set of settings
-# onto Codex's live file and passes everything else through untouched:
+# onto Codex's live file and passes everything else through untouched, except
+# that an mcp_servers table split around other tables, or written inline, is
+# rewritten as one plain table: its settings stay the same, but its comments
+# and formatting are lost. The overlaid settings and edits:
 #   - top-level project_doc_max_bytes             (instruction-size budget)
 #   - [tui] theme, [desktop] git-branch-prefix   (portable prefs)
 #   - [desktop.open-in-target-preferences] global (parametrized editor target)
@@ -13,6 +16,8 @@
 #     runs under secret-exec (dotfiles#522)
 #   - macOS developer-tool writable_roots
 #   - private writable roots and project trusts (from an age catalog)
+#   - the retired serena MCP entry, removed
+#   - [[skills.config]] entries that disable retired workflow skills
 #
 # Requires Python 3.9+; embedded TOMLKit bytes are verified before import.
 # No package manager, network access, or global install is used.
@@ -103,7 +108,10 @@ def rebuilt_table(parent, key):
         del parent[key]
     return table
 
-# An mcp_servers table split around other tables reads as a proxy, not a table.
+# An mcp_servers table split around other tables reads as a proxy, and an
+# inline one cannot be edited in place; a split table also changes again on a
+# second run. Either is rebuilt whole as one plain table, unmanaged entries
+# included.
 if "mcp_servers" in doc and not isinstance(doc["mcp_servers"], tomlkit.items.Table):
     doc["mcp_servers"] = rebuilt_table(doc, "mcp_servers")
 mcp = ensure_table(doc, "mcp_servers")
@@ -112,8 +120,8 @@ if "serena" in mcp:
 
 def plain_entry(name):
     # Return the named server entry as a table that can be edited in place. A
-    # plain or inline table stays where it is, with its comments; any other
-    # layout is rebuilt.
+    # plain or inline table stays where it is, with its comments, unless the
+    # whole mcp_servers table was rebuilt above; any other layout is rebuilt.
     existing = mcp[name] if name in mcp else None
     if isinstance(existing, tomlkit.items.InlineTable) or (
         type(existing) is tomlkit.items.Table and not existing.is_super_table()
@@ -121,13 +129,16 @@ def plain_entry(name):
         return existing
     return rebuilt_table(mcp, name)
 
-# Fields that can carry a key, or lead a server to one, go from every managed
-# entry: environment values and names, header values and names, a token
-# variable, an OAuth block (it can hold a client secret), and a working
-# directory (it can hold a .env file that a server loads).
+# Fields that can carry a key, or choose the credential Codex sends, go from
+# every managed entry: environment values and names, header values and names,
+# a token variable, an OAuth block (it can hold a client secret), a working
+# directory (it can hold a .env file that a server loads), a literal
+# bearer_token (Codex refuses to load any config that has one), and auth and
+# oauth_resource (they choose the credential Codex sends). The Codex evidence
+# is in docs/SECRET_INJECTION.md#codex-mcp-entries.
 key_fields = (
     "env", "env_vars", "cwd", "headers", "http_headers", "env_http_headers",
-    "bearer_token_env_var", "oauth",
+    "bearer_token_env_var", "bearer_token", "oauth", "oauth_resource", "auth",
 )
 # Each managed entry uses one transport, and the fields of the other one go
 # too: Codex rejects an entry that mixes them. Codex ignores type, so it goes

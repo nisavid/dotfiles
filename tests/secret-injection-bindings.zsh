@@ -155,8 +155,8 @@ PYEOF
     fail 'Codex output must not keep an earlier Context7 field'
 done
 
-# Every managed entry drops the same fields that can carry a key, or lead a
-# server to one, and every field of the transport it does not use.
+# Every managed entry drops the same fields that can carry a key, or choose the
+# credential Codex sends, and every field of the transport it does not use.
 for server in context7 firecrawl github; do
   print -r -- "[mcp_servers.$server]
 type = \"fields-canary\"
@@ -170,8 +170,9 @@ headers = { X-Key = \"fields-canary\" }
 http_headers = { X-Key = \"fields-canary\" }
 env_http_headers = { X-Key = \"$context7_field\" }
 bearer_token_env_var = \"$context7_field\"
+bearer_token = \"fields-canary\"
 oauth = { client_id = \"fields-canary\", client_secret = \"fields-canary\" }
-oauth_resource = \"https://resource.example.invalid\"
+oauth_resource = \"https://fields-canary.example.invalid\"
 auth = \"oauth\"
 enabled = true" > "$test_dir/codex-fields.toml"
   "$codex_modifier" < "$test_dir/codex-fields.toml" > "$test_dir/codex-fields-output.toml"
@@ -181,11 +182,7 @@ import sys, tomllib
 name, output_path = sys.argv[1:]
 with open(output_path, "rb") as config:
     server = tomllib.load(config)["mcp_servers"][name]
-# Context7 keeps its remote transport settings that carry no key.
-expected = (
-    {"url", "http_headers_helper", "oauth_resource", "auth"} if name == "context7"
-    else {"command", "args"}
-)
+expected = {"url", "http_headers_helper"} if name == "context7" else {"command", "args"}
 assert set(server) == expected | {"enabled"}, server
 PYEOF
     fail "the Codex modifier must drop every key-carrying and other-transport field from $server"
