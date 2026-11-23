@@ -36,6 +36,10 @@ export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64en
 
 # python3 reads the script from file descriptor 3 without a path, so no zip-import
 # probe moves its offset on older Pythons; the live config arrives on stdin.
+# The script exits with status 86 only after it has written the whole config.
+# Python given an empty or cut-short script prints nothing and exits 0, so every
+# other status fails here, and chezmoi never receives an empty config.
+set +e
 python3 -I -S -c 'import sys; exec(compile(open(3, "rb").read(), "codex-modifier", "exec"))' 3<<'PYEOF'
 import base64
 import binascii
@@ -310,5 +314,22 @@ if tomlkit.parse(text).unwrap() != doc.unwrap():
         "Codex modifier: the rewritten config reads back differently;"
         " write its mcp_servers entries as plain tables"
     )
-sys.stdout.write(text)
+
+def write_config(config_text):
+    sys.stdout.write(config_text)
+    sys.stdout.flush()
+    # The launcher accepts this status, and no other, as success.
+    return 86
+
+# One statement writes the config and returns the success status, so a script
+# cut short anywhere before its end writes nothing.
+raise SystemExit(write_config(text))
 PYEOF
+python_status=$?
+set -e
+if [ "$python_status" -ne 86 ]; then
+  if [ "$python_status" -eq 0 ]; then
+    echo 'Codex modifier: the Python script ended without writing a config' >&2
+  fi
+  exit 1
+fi

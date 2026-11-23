@@ -825,7 +825,10 @@ client secret. It also removes every field of the transport the entry does not
 use, since Codex rejects an entry that mixes them. Codex rejects a literal
 `bearer_token` field for either transport, so no entry can hold a key that
 way. An entry written with dotted keys, or split over several table headers,
-is first rewritten as one plain table.
+is first rewritten as one plain table. When the rewritten config would read
+back as different settings, or the modifier's Python script ends without
+writing it, the modifier fails with no output, and chezmoi leaves
+`config.toml` as it was.
 
 Codex accepts a misspelled field in this entry without an error, so a typo
 loses the helper silently. `codex mcp list --json` shows the helper command
