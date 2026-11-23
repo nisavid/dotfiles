@@ -66,9 +66,19 @@ class TriggerEvalContainerTests(unittest.TestCase):
         return cls(codex_home=self.codex_home, skill_path=self.skill_path, image=TEST_IMAGE if fixture else DEFAULT_IMAGE)
 
     def assert_removed(self, runtime: IsolatedCodexRuntime) -> None:
+        # List what exists rather than inspecting each name: an unreachable
+        # daemon also makes inspect fail, which would pass as "removed".
+        listings = {
+            "container": ["docker", "ps", "--all", "--format", "{{.Names}}"],
+            "volume": ["docker", "volume", "ls", "--format", "{{.Name}}"],
+        }
+        existing = {}
+        for kind, command in listings.items():
+            result = subprocess.run(command, text=True, capture_output=True, timeout=15)
+            self.assertEqual(result.returncode, 0, f"Could not list Docker {kind}s:\n{result.stderr}")
+            existing[kind] = set(result.stdout.splitlines())
         for kind, name in (("container", runtime.worker_name), ("container", runtime.broker_name), ("volume", runtime.volume_name)):
-            result = subprocess.run(["docker", kind, "inspect", name], text=True, capture_output=True, timeout=15)
-            self.assertNotEqual(result.returncode, 0, f"Leaked {kind}: {name}")
+            self.assertNotIn(name, existing[kind], f"Leaked {kind}: {name}")
 
     def inspect(self, runtime: IsolatedCodexRuntime) -> dict:
         result = subprocess.run(["docker", "inspect", runtime.worker_name], text=True, capture_output=True, check=True, timeout=15)
