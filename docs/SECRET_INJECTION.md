@@ -795,8 +795,9 @@ Codex reaches Context7's remote server, `https://mcp.context7.com/mcp`, and
 takes the key from a header helper. The `~/.codex/config.toml` modifier writes
 the `context7` entry with `url` and `http_headers_helper`, and removes
 `type`, `command`, `args`, `cwd`, `env`, `env_vars`, `headers`,
-`http_headers`, `env_http_headers`, and `bearer_token_env_var`. Other settings
-of the entry, such as `enabled` and its timeouts, stay. The helper command is:
+`http_headers`, `env_http_headers`, `bearer_token_env_var`, and `oauth`. Other
+settings of the entry, such as `enabled` and its timeouts, stay. The helper
+command is:
 
 ```text
 ~/.local/bin/secret-exec context7 -- ~/.local/lib/secret-exec/context7-http-headers
@@ -814,6 +815,17 @@ Codex's environment nor its configuration file, and no local Context7 server
 starts. Codex keeps the headers for the connection and runs the helper again
 only after a 401 or 403 response, so each new session reads the key once. The
 key reaches Codex's memory as a header value, and Codex sends it to Context7.
+
+The modifier removes the same fields from each entry it manages (`context7`,
+`firecrawl`, and `github`). It removes every field that can carry a key or lead
+a server to one: `env`, `env_vars`, `cwd`, `headers`, `http_headers`,
+`env_http_headers`, `bearer_token_env_var`, and `oauth`. `cwd` goes because it
+can hold a `.env` file that a server loads, and `oauth` because it can hold a
+client secret. It also removes every field of the transport the entry does not
+use, since Codex rejects an entry that mixes them. Codex rejects a literal
+`bearer_token` field for either transport, so no entry can hold a key that
+way. An entry written with dotted keys, or split over several table headers,
+is first rewritten as one plain table.
 
 Codex accepts a misspelled field in this entry without an error, so a typo
 loses the helper silently. `codex mcp list --json` shows the helper command

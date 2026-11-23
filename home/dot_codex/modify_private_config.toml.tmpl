@@ -117,6 +117,28 @@ def plain_entry(name):
         return existing
     return rebuilt_table(mcp, name)
 
+# Fields that can carry a key, or lead a server to one, go from every managed
+# entry: environment values and names, header values and names, a token
+# variable, an OAuth block (it can hold a client secret), and a working
+# directory (it can hold a .env file that a server loads).
+key_fields = (
+    "env", "env_vars", "cwd", "headers", "http_headers", "env_http_headers",
+    "bearer_token_env_var", "oauth",
+)
+# Each managed entry uses one transport, and the fields of the other one go
+# too: Codex rejects an entry that mixes them. Codex ignores type, so it goes
+# from both.
+stdio_fields = ("type", "command", "args", "cwd", "env", "env_vars")
+http_fields = (
+    "type", "url", "bearer_token_env_var", "http_headers_helper", "http_headers",
+    "env_http_headers", "oauth", "oauth_resource", "auth",
+)
+
+def drop_fields(entry, fields):
+    for key in fields:
+        if key in entry:
+            del entry[key]
+
 secret_exec = os.path.join(home, ".local", "bin", "secret-exec")
 managed_mcp_servers = {
     "firecrawl": [
@@ -130,12 +152,7 @@ managed_mcp_servers = {
 }
 for name, args in managed_mcp_servers.items():
     server = plain_entry(name)
-    for key in (
-        "type", "url", "env", "env_vars", "headers", "http_headers",
-        "bearer_token_env_var",
-    ):
-        if key in server:
-            del server[key]
+    drop_fields(server, key_fields + http_fields)
     server["command"] = secret_exec
     server["args"] = args
     mcp[name] = server
@@ -147,12 +164,7 @@ for name, args in managed_mcp_servers.items():
 # goes; other settings, such as timeouts and enabled, stay.
 context7_helper = os.path.join(home, ".local", "lib", "secret-exec", "context7-http-headers")
 context7 = plain_entry("context7")
-for key in (
-    "type", "command", "args", "cwd", "env", "env_vars", "headers",
-    "http_headers", "env_http_headers", "bearer_token_env_var",
-):
-    if key in context7:
-        del context7[key]
+drop_fields(context7, key_fields + stdio_fields)
 context7["url"] = "https://mcp.context7.com/mcp"
 context7["http_headers_helper"] = " ".join(
     shlex.quote(part) for part in (secret_exec, "context7", "--", context7_helper)

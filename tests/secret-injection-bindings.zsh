@@ -91,8 +91,7 @@ for name, args in expected.items():
     server = doc["mcp_servers"][name]
     assert server["command"] == f"{home}/.local/bin/secret-exec"
     assert list(server["args"]) == args
-    assert not ({"type", "url", "headers", "http_headers", "bearer_token_env_var", "env_vars", "env"} & set(server))
-assert doc["mcp_servers"]["firecrawl"]["cwd"] == "/tmp/firecrawl"
+    assert set(server) == {"command", "args"}, server
 # Context7 is remote, with its key from the header helper (dotfiles#522).
 assert doc["mcp_servers"]["context7"] == {
     "url": "https://mcp.context7.com/mcp",
@@ -154,6 +153,44 @@ PYEOF
     fail "the Codex modifier must write the remote Context7 entry from: ${form:-no entry}"
   ! rg -n 'context7-canary|context7.example|context7-mcp|/tmp/context7' "$test_dir/codex-form-output.toml" > /dev/null ||
     fail 'Codex output must not keep an earlier Context7 field'
+done
+
+# Every managed entry drops the same fields that can carry a key, or lead a
+# server to one, and every field of the transport it does not use.
+for server in context7 firecrawl github; do
+  print -r -- "[mcp_servers.$server]
+type = \"fields-canary\"
+command = \"fields-canary\"
+args = [\"fields-canary\"]
+cwd = \"/tmp/fields-canary\"
+env = { $context7_field = \"fields-canary\" }
+env_vars = [\"$context7_field\"]
+url = \"https://fields-canary.example.invalid/mcp\"
+headers = { X-Key = \"fields-canary\" }
+http_headers = { X-Key = \"fields-canary\" }
+env_http_headers = { X-Key = \"$context7_field\" }
+bearer_token_env_var = \"$context7_field\"
+oauth = { client_id = \"fields-canary\", client_secret = \"fields-canary\" }
+oauth_resource = \"https://resource.example.invalid\"
+auth = \"oauth\"
+enabled = true" > "$test_dir/codex-fields.toml"
+  "$codex_modifier" < "$test_dir/codex-fields.toml" > "$test_dir/codex-fields-output.toml"
+  python3 -I -S - "$server" "$test_dir/codex-fields-output.toml" <<'PYEOF' ||
+import sys, tomllib
+
+name, output_path = sys.argv[1:]
+with open(output_path, "rb") as config:
+    server = tomllib.load(config)["mcp_servers"][name]
+# Context7 keeps its remote transport settings that carry no key.
+expected = (
+    {"url", "http_headers_helper", "oauth_resource", "auth"} if name == "context7"
+    else {"command", "args"}
+)
+assert set(server) == expected | {"enabled"}, server
+PYEOF
+    fail "the Codex modifier must drop every key-carrying and other-transport field from $server"
+  ! rg -n "fields-canary|$context7_field" "$test_dir/codex-fields-output.toml" > /dev/null ||
+    fail "Codex output must not keep a key-carrying field of $server"
 done
 
 # A managed entry split over several table headers, written with dotted keys,
