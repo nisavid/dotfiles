@@ -5,9 +5,10 @@
 # to ~/.claude/settings.json; accepted is a record that it does not read. The
 # modifier writes no key for a plugin on neither list: one with no entry loads
 # normally, and an existing entry, such as one turned off by hand, is kept.
-# The modifier also forces github, greptile and context7 off at the official
-# marketplace and removes the stale serena@claude-plugins-official entry, as
-# before.
+# The modifier also forces github and greptile off at the official marketplace
+# and removes the stale serena@claude-plugins-official entry, as before. Claude
+# Code's Context7 server is the official context7 plugin's remote server
+# (dotfiles#521), so context7 is in localWins.
 [claudePlugins]
 # The accepted plugins, kept as a record; tests/secret-injection-bindings.zsh
 # checks that it shares no name with explicitlyOff.
@@ -50,6 +51,7 @@ accepted = [
   "pdf-viewer",
   "github",
   "greptile",
+  "context7",
   "searchfit-seo",
   "figma",
   "design",
@@ -108,10 +110,14 @@ explicitlyOff = [
 # even where the entry exists as false, and <name>@inline and <name>@synced are
 # false. The account copies of cloudflare and skill-creator match the local ones;
 # the account copy of claude-code-setup is a newer revision of the same version.
+# context7: the owner chose the official plugin and its remote server for Claude
+# Code (dotfiles#521), and an account copy would start a second Context7 server
+# that needs its own sign-in.
 localWins = [
   "cloudflare",
   "claude-code-setup",
   "skill-creator",
+  "context7",
 ]
 # Exact enabledPlugins entries that are false. firecrawl: the local copy wins
 # over the account one, and the official entry is left as it is, so firecrawl is

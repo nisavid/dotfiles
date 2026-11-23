@@ -755,11 +755,28 @@ the managed user-scope consumer binding. In that version,
 the command cannot see a parent directory's file and may remove the managed
 user-scope entry instead.
 
+Claude Code takes Context7 from the official `context7@claude-plugins-official`
+plugin, which connects to Context7's remote server and signs in with OAuth. It
+does not use the `context7` profile, and no `secret-exec` launch is involved.
+The `~/.claude.json` modifier removes a user-scope `context7` server in any
+form. The settings modifier keeps the official plugin on, even where its entry
+exists as false, and keeps the account copies `context7@inline` and
+`context7@synced` off, so no second Context7 server needs its own sign-in.
+`secret-exec-migrate --retire-plaintext` fails while `~/.claude.json` still has
+a `context7` server. The owner signs the plugin in once, through `/mcp`: choose
+the plugin's `context7` server and authenticate in the browser. Claude Code
+keeps that sign-in on the host in its own credentials file, outside this
+repository, so a new host, or one that lost that file, needs it again. Until the
+sign-in, Claude Code has no Context7 tools from a server; the `ctx7` command is
+not affected. The plugin's tools carry the plugin's prefix rather than
+`mcp__context7__`. Codex, Cursor, and OpenCode still launch the local server
+through `secret-exec`.
+
 ## Cursor MCP route
 
 Cursor reads `~/.cursor/mcp.json`, which holds servers the dotfiles do not
 own. A modifier sets only its `context7` entry to the same `secret-exec`
-launcher the Claude Code and Codex bindings use, and removes `type` (the stdio
+launcher the Codex binding uses, and removes `type` (the stdio
 type, as the Claude Code modifier does), `url`, `auth`, `env`, `envFile`,
 `env_vars`, `headers`, `http_headers`, and `bearer_token_env_var` from that
 entry. Every other entry and setting passes through unchanged, including

@@ -122,14 +122,14 @@ EOF
 jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
   .unrelated == "preserved" and
   .pluginUsage["context7@inline"] == {usageCount: 7} and
-  .mcpServers.context7 == {command: $command, args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"], timeout: 60000} and
+  (.mcpServers | has("context7") | not) and
   .mcpServers.firecrawl == {command: $command, args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"], tools: ["scrape"]} and
   .mcpServers.github == {command: $command, args: ["github", "--", "npx", "-y", "mcp-remote@0.1.38", "https://api.githubcopilot.com/mcp/", "--header", "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"], disabled: true} and
   .mcpServers.greptile == {command: $command, args: ["greptile", "--", "npx", "-y", "mcp-remote@0.1.38", "https://api.greptile.com/mcp", "--header", "Authorization:Bearer ${GREPTILE_API_KEY}"], timeout: 30000} and
   (.mcpServers | has("serena") | not) and
   (.pluginUsage | has("serena@claude-plugins-official") | not) and
   (.pluginUsage | has("serena@inline") | not) and
-  ([.mcpServers.context7, .mcpServers.firecrawl, .mcpServers.github, .mcpServers.greptile] |
+  ([.mcpServers.firecrawl, .mcpServers.github, .mcpServers.greptile] |
     all(. as $server | ["type", "url", "env", "env_vars", "headers", "http_headers", "bearer_token_env_var"] |
       all(. as $field | ($server | has($field) | not))))
 ' "$test_dir/claude-output.json" > /dev/null || fail 'Claude MCP bindings must use process-scoped launch profiles'
@@ -138,13 +138,41 @@ jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
 [[ $(tail -c 1 "$test_dir/claude-output.json" | od -An -c | tr -d ' ') == '}' ]] ||
   fail 'Claude output must end without a final newline, as Claude Code writes ~/.claude.json'
 
+# Claude Code takes Context7 from the official plugin (dotfiles#521): the
+# modifier removes a user-scope context7 entry in every form, the secret-exec
+# launcher, a remote url entry, and one with a key in env or headers, and leaves
+# the other managed entries as they are.
+claude_managed_output=$(jq -c '.mcpServers | {firecrawl, github, greptile}' "$test_dir/claude-output.json")
+for context7_entry in \
+  "{\"command\": \"$fixture_home/.local/bin/secret-exec\", \"args\": [\"context7\", \"--\", \"npx\", \"-y\", \"@upstash/context7-mcp@3.2.4\"]}" \
+  '{"type": "http", "url": "https://mcp.context7.com/mcp"}' \
+  "{\"command\": \"npx\", \"args\": [\"-y\", \"@upstash/context7-mcp\"], \"env\": {\"$context7_field\": \"context7-canary\"}}" \
+  "{\"type\": \"http\", \"url\": \"https://mcp.context7.com/mcp\", \"headers\": {\"$context7_field\": \"context7-canary\"}}"; do
+  jq --argjson entry "$context7_entry" '.mcpServers.context7 = $entry' \
+    "$test_dir/claude-input.json" | "$claude_modifier" > "$test_dir/claude-context7-output.json"
+  jq -e --argjson managed "$claude_managed_output" '
+    (.mcpServers | has("context7") | not) and
+    (.mcpServers | {firecrawl, github, greptile}) == $managed
+  ' "$test_dir/claude-context7-output.json" > /dev/null ||
+    fail "the Claude modifier must remove a user-scope context7 entry and keep the other managed entries: $context7_entry"
+  ! rg -n 'context7-canary' "$test_dir/claude-context7-output.json" > /dev/null ||
+    fail 'Claude output must not keep a Context7 key'
+done
+jq 'del(.mcpServers.context7)' "$test_dir/claude-input.json" | "$claude_modifier" |
+  jq -e '.mcpServers | has("context7") | not' > /dev/null ||
+  fail 'the Claude modifier must not add a context7 entry'
+"$claude_modifier" < "$test_dir/claude-output.json" | cmp -s - "$test_dir/claude-output.json" ||
+  fail 'the Claude modifier must be idempotent'
+
 settings_modifier=$test_dir/modify-claude-settings
 render_modifier home/dot_claude/modify_private_settings.json.tmpl "$settings_modifier"
 cat > "$test_dir/settings-input.json" <<'EOF'
 {
   "unrelated": "preserved",
   "enabledPlugins": {
-    "context7@claude-plugins-official": true,
+    "context7@claude-plugins-official": false,
+    "context7@inline": true,
+    "context7@synced": true,
     "firecrawl@claude-plugins-official": true,
     "github@claude-plugins-official": true,
     "greptile@claude-plugins-official": true,
@@ -155,27 +183,40 @@ EOF
 "$settings_modifier" < "$test_dir/settings-input.json" > "$test_dir/settings-output.json"
 jq -e '
   .unrelated == "preserved" and
-  .enabledPlugins["context7@claude-plugins-official"] == false and
+  .enabledPlugins["context7@claude-plugins-official"] == true and
+  .enabledPlugins["context7@inline"] == false and
+  .enabledPlugins["context7@synced"] == false and
   .enabledPlugins["firecrawl@claude-plugins-official"] == true and
   .enabledPlugins["github@claude-plugins-official"] == false and
   .enabledPlugins["greptile@claude-plugins-official"] == false and
   (.enabledPlugins | has("serena@claude-plugins-official") | not)
-' "$test_dir/settings-output.json" > /dev/null || fail 'credential-dependent plugin MCPs must be replaced without disabling Firecrawl skills'
+' "$test_dir/settings-output.json" > /dev/null || fail 'the official Context7 plugin must be on, its account copies off, and the GitHub and Greptile plugin MCPs off without disabling Firecrawl skills'
+# With no context7 entries at all, the official one is written true and the
+# account copies false (dotfiles#521).
+jq 'del(.enabledPlugins["context7@claude-plugins-official", "context7@inline", "context7@synced"])' \
+  "$test_dir/settings-input.json" | "$settings_modifier" | jq -e '
+  .enabledPlugins["context7@claude-plugins-official"] == true and
+  .enabledPlugins["context7@inline"] == false and
+  .enabledPlugins["context7@synced"] == false and
+  .enabledPlugins["github@claude-plugins-official"] == false and
+  .enabledPlugins["greptile@claude-plugins-official"] == false
+' > /dev/null || fail 'a missing official Context7 entry must be written true, with its account copies false'
 
 # Plugin enablement from the explicit lists (dotfiles#479).
-python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF' || fail 'accepted and explicitly-off plugin lists must hold 63 and 15 distinct, disjoint names'
+python3 -I -S - home/.chezmoidata/claude-plugins.toml <<'PYEOF' || fail 'accepted and explicitly-off plugin lists must hold 64 and 15 distinct, disjoint names'
 import sys, tomllib
 with open(sys.argv[1], "rb") as data_file:
     plugins = tomllib.load(data_file)["claudePlugins"]
 accepted, off = plugins["accepted"], plugins["explicitlyOff"]
-assert len(accepted) == len(set(accepted)) == 63
+assert len(accepted) == len(set(accepted)) == 64
 assert len(off) == len(set(off)) == 15
 assert not set(accepted) & set(off)
 assert "real-skills-leashed" in off
 assert "real-skills-unleashed" in accepted
 assert {"investment-banking", "pitch-agent"} <= set(off)
 assert not {"investment-banking", "pitch-agent"} & set(accepted)
-assert plugins["oneCopyPerSkill"]["localWins"] == ["cloudflare", "claude-code-setup", "skill-creator"]
+assert plugins["oneCopyPerSkill"]["localWins"] == ["cloudflare", "claude-code-setup", "skill-creator", "context7"]
+assert set(plugins["oneCopyPerSkill"]["localWins"]) <= set(accepted)
 assert not any(entry.split("@")[0] in plugins["oneCopyPerSkill"]["localWins"]
                for entry in plugins["oneCopyPerSkill"]["off"])
 PYEOF
@@ -240,7 +281,7 @@ jq -e '.enabledPlugins | has("serena@claude-plugins-official") | not' "$test_dir
 jq -e --argjson off "$explicitly_off" '
   (.enabledPlugins | to_entries[7:]) as $added |
   ($added | map(select(.value == true) | .key) | sort) ==
-    ["claude-code-setup@claude-plugins-official", "cloudflare@claude-plugins-official", "skill-creator@claude-plugins-official"] and
+    ["claude-code-setup@claude-plugins-official", "cloudflare@claude-plugins-official", "context7@claude-plugins-official", "skill-creator@claude-plugins-official"] and
   ($added | map(select(.value == false) | .key) | sort) == (
     [$off[] | (. + "@inline"), (. + "@synced")] - ["amd-skills@inline"] + [
       "supabase@claude-plugins-official",
@@ -253,15 +294,16 @@ jq -e --argjson off "$explicitly_off" '
       "cloudflare@synced",
       "skill-creator@inline",
       "skill-creator@synced",
+      "context7@inline",
+      "context7@synced",
       "firecrawl@inline",
       "firecrawl@synced",
-      "context7@claude-plugins-official",
       "github@claude-plugins-official",
       "greptile@claude-plugins-official"
     ] | sort) and
   ($added | length) == ($added | map(.key) | unique | length)
 ' "$test_dir/plugins-output.json" > /dev/null ||
-  fail 'the modifier must add false entries for exactly the explicitly-off names in both account forms and their installed keys, the local-wins and one-copy rules and the managed entries, and true for the three local-wins official entries'
+  fail 'the modifier must add false entries for exactly the explicitly-off names in both account forms and their installed keys, the local-wins and one-copy rules and the managed entries, and true for the four local-wins official entries'
 jq -e '
   .enabledPlugins as $p |
   ["investment-banking", "pitch-agent"] |
@@ -269,9 +311,9 @@ jq -e '
 ' "$test_dir/plugins-output.json" > /dev/null ||
   fail 'investment-banking and pitch-agent must be false in both account forms'
 
-# The local copy wins for cloudflare, claude-code-setup and skill-creator: the
-# official entry is written true even where it exists as false, with no account
-# entries present; linear stays false at the official marketplace; every other
+# The local copy wins for cloudflare, claude-code-setup, skill-creator and
+# context7: the official entry is written true even where it exists as false,
+# with no account entries present; linear stays false at the official marketplace; every other
 # entry and setting is kept byte for byte, and a second run changes nothing.
 cat > "$test_dir/local-wins-input.json" <<'EOF'
 {
@@ -280,6 +322,7 @@ cat > "$test_dir/local-wins-input.json" <<'EOF'
     "cloudflare@claude-plugins-official": false,
     "claude-code-setup@claude-plugins-official": false,
     "skill-creator@claude-plugins-official": false,
+    "context7@claude-plugins-official": false,
     "linear@claude-plugins-official": true,
     "firecrawl@claude-plugins-official": true,
     "kept-fixture@claude-plugins-official": false
@@ -290,12 +333,12 @@ EOF
 "$settings_modifier" < "$test_dir/local-wins-input.json" > "$test_dir/local-wins-output.json"
 jq -e '
   .enabledPlugins as $p |
-  ["cloudflare", "claude-code-setup", "skill-creator"] |
+  ["cloudflare", "claude-code-setup", "skill-creator", "context7"] |
   all(. as $n |
     $p[$n + "@claude-plugins-official"] == true and
     $p[$n + "@inline"] == false and $p[$n + "@synced"] == false)
 ' "$test_dir/local-wins-output.json" > /dev/null ||
-  fail 'the three local-wins plugins must be true at the official marketplace and false in both account forms'
+  fail 'the four local-wins plugins must be true at the official marketplace and false in both account forms'
 jq -e '
   .enabledPlugins as $p |
   $p["linear@claude-plugins-official"] == false and

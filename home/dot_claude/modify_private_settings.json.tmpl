@@ -23,10 +23,12 @@ set -euo pipefail
 #   <name>@claude-plugins-official, even where that entry exists as false, and
 #   false as <name>@inline and <name>@synced: the local copy is the one that
 #   loads, because an account that does not carry the plugin has no copy of it
-#   and this modifier cannot follow the signed-in account;
+#   and this modifier cannot follow the signed-in account; context7 is one of
+#   them, so Claude Code's Context7 server is the official plugin's remote
+#   server (dotfiles#521);
 # - each oneCopyPerSkill.off entry is false, and an existing oneCopyPerSkill.on
 #   entry is true;
-# - context7, github and greptile at claude-plugins-official are false;
+# - github and greptile at claude-plugins-official are false;
 # - the stale serena@claude-plugins-official entry is removed.
 # @inline and @synced keys use the name the plugin's own
 # .claude-plugin/plugin.json declares, not its directory name; the
@@ -74,7 +76,6 @@ jq \
     .enabledPlugins[$name + "@synced"] = false) |
   reduce $one_copy_on[] as $entry (.;
     if .enabledPlugins | has($entry) then .enabledPlugins[$entry] = true else . end) |
-  .enabledPlugins["context7@claude-plugins-official"] = false |
   .enabledPlugins["github@claude-plugins-official"] = false |
   .enabledPlugins["greptile@claude-plugins-official"] = false
 ' < /dev/stdin

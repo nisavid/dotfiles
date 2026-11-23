@@ -142,10 +142,10 @@ cat > "$fixture_home/.codex/config.toml" <<'EOF'
 command = "managed-by-fake-codex"
 EOF
 cat > "$fixture_home/.claude.json" <<EOF
-{"mcpServers":{"context7":{"command":"$fixture_home/.local/bin/secret-exec","args":["context7","--","npx","-y","@upstash/context7-mcp@3.2.4"]},"firecrawl":{"command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp@3.22.3"]},"github":{"command":"$fixture_home/.local/bin/secret-exec","args":["github","--","npx","-y","mcp-remote@0.1.38","https://api.githubcopilot.com/mcp/","--header","Authorization:Bearer \${GITHUB_PERSONAL_ACCESS_TOKEN}"]},"greptile":{"command":"$fixture_home/.local/bin/secret-exec","args":["greptile","--","npx","-y","mcp-remote@0.1.38","https://api.greptile.com/mcp","--header","Authorization:Bearer \${GREPTILE_API_KEY}"]}}}
+{"mcpServers":{"firecrawl":{"command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp@3.22.3"]},"github":{"command":"$fixture_home/.local/bin/secret-exec","args":["github","--","npx","-y","mcp-remote@0.1.38","https://api.githubcopilot.com/mcp/","--header","Authorization:Bearer \${GITHUB_PERSONAL_ACCESS_TOKEN}"]},"greptile":{"command":"$fixture_home/.local/bin/secret-exec","args":["greptile","--","npx","-y","mcp-remote@0.1.38","https://api.greptile.com/mcp","--header","Authorization:Bearer \${GREPTILE_API_KEY}"]}}}
 EOF
 cat > "$fixture_home/.claude/settings.json" <<'EOF'
-{"enabledPlugins":{"context7@claude-plugins-official":false,"github@claude-plugins-official":false,"greptile@claude-plugins-official":false}}
+{"enabledPlugins":{"context7@claude-plugins-official":true,"github@claude-plugins-official":false,"greptile@claude-plugins-official":false}}
 EOF
 cat > "$fixture_home/.aws/config" <<EOF
 [default]
@@ -543,6 +543,31 @@ for canary in AKIACANARY AwsSecret github-canary context7-canary firecrawl-canar
 done
 [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
   fail 'a legacy-Claude rejection must preserve every plaintext source'
+mv "$test_dir/claude.json" "$fixture_home/.claude.json"
+
+# Claude Code takes Context7 from the official plugin (dotfiles#521), so any
+# user-scope context7 server in ~/.claude.json blocks retirement: the old
+# secret-exec launcher, a remote entry without a key, and a remote entry that
+# carries a key.
+cp "$fixture_home/.claude.json" "$test_dir/claude.json"
+for context7_entry in \
+  "{\"command\":\"$fixture_home/.local/bin/secret-exec\",\"args\":[\"context7\",\"--\",\"npx\",\"-y\",\"@upstash/context7-mcp@3.2.4\"]}" \
+  '{"type":"http","url":"https://mcp.context7.com/mcp"}' \
+  "{\"type\":\"http\",\"url\":\"https://mcp.context7.com/mcp\",\"headers\":{\"$context7_field\":\"context7-canary\"}}"; do
+  jq --argjson entry "$context7_entry" '.mcpServers.context7 = $entry' \
+    "$test_dir/claude.json" > "$fixture_home/.claude.json"
+  set +e
+  zsh "$migrator" --retire-plaintext > "$test_dir/claude-context7.out" 2>&1
+  exit_code=$?
+  set -e
+  (( exit_code != 0 )) || fail 'retirement must reject a user-scope Claude Context7 server'
+  [[ $(<"$test_dir/claude-context7.out") == *'Claude config still has a user-scope Context7 MCP server'* ]] || \
+    fail 'a user-scope Claude Context7 server must be named as the retirement blocker'
+  [[ $(<"$test_dir/claude-context7.out") != *context7-canary* ]] || \
+    fail 'Claude Context7 diagnostics must not contain canary values'
+  [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+    fail 'a Claude Context7 rejection must preserve every plaintext source'
+done
 mv "$test_dir/claude.json" "$fixture_home/.claude.json"
 
 cp "$fake_bin/codex" "$test_dir/codex"

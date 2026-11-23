@@ -3,20 +3,20 @@ set -euo pipefail
 
 command={{ joinPath .chezmoi.homeDir ".local/bin/secret-exec" | quote }}
 
+# Claude Code's Context7 server is the official context7 plugin's remote server
+# (dotfiles#521), so the user-scope context7 entry is removed in every form.
 jq --join-output --arg command "$command" '
   def local_server($existing; $args):
     (($existing // {}) + {command: $command, args: $args}) |
     del(.type, .url, .env, .env_vars, .headers, .http_headers, .bearer_token_env_var);
 
   .mcpServers = (.mcpServers // {}) |
-  del(.mcpServers.serena) |
+  del(.mcpServers.serena, .mcpServers.context7) |
   .pluginUsage = (.pluginUsage // {}) |
   del(
     .pluginUsage["serena@claude-plugins-official"],
     .pluginUsage["serena@inline"]
   ) |
-  .mcpServers.context7 = local_server(.mcpServers.context7;
-    ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"]) |
   .mcpServers.firecrawl = local_server(.mcpServers.firecrawl;
     ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"]) |
   .mcpServers.github = local_server(.mcpServers.github;
