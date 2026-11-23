@@ -16,6 +16,9 @@ claude_git_rule_template="$source_root/dot_claude/rules/private_git-defaults.md.
 review_partial_name=review-before-shipping.tmpl
 review_partial="$source_root/.chezmoitemplates/$review_partial_name"
 claude_review_rule_template="$source_root/dot_claude/rules/review-before-shipping.md.tmpl"
+cross_harness_partial_name=cross-harness-work.tmpl
+cross_harness_partial="$source_root/.chezmoitemplates/$cross_harness_partial_name"
+claude_cross_harness_rule_template="$source_root/dot_claude/rules/cross-harness-work.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
 codex_config_modifier="$source_root/dot_codex/modify_private_config.toml.tmpl"
 cold_archive_envelope_name=.private-cold-archive.md.age
@@ -40,6 +43,8 @@ claude_git_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-git-rule.XXXXXX")
 identity_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-identity-policy.XXXXXX")
 claude_review_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-review-rule.XXXXXX")
 review_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-review-policy.XXXXXX")
+claude_cross_harness_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-cross-harness-rule.XXXXXX")
+cross_harness_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-cross-harness-policy.XXXXXX")
 claude_cold_archive_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-cold-archive-rule.XXXXXX")
 cold_archive_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-cold-archive-policy.XXXXXX")
 claude_question_rule=$(mktemp "${TMPDIR:-/tmp}/global-agents-claude-question-rule.XXXXXX")
@@ -51,6 +56,7 @@ render_template=$template
 render_claude_rule_template=$claude_rule_template
 render_claude_git_rule_template=$claude_git_rule_template
 render_claude_review_rule_template=$claude_review_rule_template
+render_claude_cross_harness_rule_template=$claude_cross_harness_rule_template
 render_claude_cold_archive_rule_template=$claude_cold_archive_rule_template
 render_claude_question_rule_template=$claude_question_rule_template
 render_claude_cards_rule=$claude_cards_rule
@@ -62,7 +68,7 @@ chmod 600 "$git_policy"
 chmod 600 "$pr_policy"
 chmod 600 "$claude_cold_archive_rule"
 chmod 600 "$cold_archive_policy"
-trap 'rm -f "$rendered" "$size_check_stderr" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_question_rule" "$question_policy" "$cards_expected" "$claude_typography_rule"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
+trap 'rm -f "$rendered" "$size_check_stderr" "$target_state" "$git_policy" "$pr_policy" "$claude_rule" "$claude_state" "$claude_git_rule" "$identity_policy" "$claude_review_rule" "$review_policy" "$claude_cross_harness_rule" "$cross_harness_policy" "$claude_cold_archive_rule" "$cold_archive_policy" "$claude_question_rule" "$question_policy" "$cards_expected" "$claude_typography_rule"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -109,7 +115,7 @@ source_git_mode=$(git -C "$repo_root" ls-files --stage -- home/dot_codex/private
 [[ $(mode_of "$claude_rule_template") == 644 ]] || fail "Claude rule template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$claude_rule_template") == "$HOME/.claude/rules/ticket-tracker-preflight.md" ]] ||
   fail "Claude rule template targets the wrong file"
-for partial in "$identity_partial" "$checkpoint_partial" "$review_partial" "$question_partial" "$typography_partial"; do
+for partial in "$identity_partial" "$checkpoint_partial" "$review_partial" "$cross_harness_partial" "$question_partial" "$typography_partial"; do
   [[ -f "$partial" ]] || fail "${partial:t} partial is missing"
   [[ $(mode_of "$partial") == 644 ]] || fail "${partial:t} partial mode must be 0644"
 done
@@ -121,6 +127,10 @@ done
 [[ $(mode_of "$claude_review_rule_template") == 644 ]] || fail "Claude review rule source template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$claude_review_rule_template") == "$HOME/.claude/rules/review-before-shipping.md" ]] ||
   fail "Claude review rule template targets the wrong file"
+[[ -f "$claude_cross_harness_rule_template" ]] || fail "Claude cross-harness rule template is missing"
+[[ $(mode_of "$claude_cross_harness_rule_template") == 644 ]] || fail "Claude cross-harness rule source template mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_cross_harness_rule_template") == "$HOME/.claude/rules/cross-harness-work.md" ]] ||
+  fail "Claude cross-harness rule template targets the wrong file"
 
 [[ -f "$cold_archive_envelope" ]] || fail "cold-archive envelope is missing"
 [[ -f "$claude_cold_archive_rule_template" ]] || fail "Claude cold-archive rule template is missing"
@@ -179,6 +189,7 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$identity_partial" "$render_fixture/.chezmoitemplates/$identity_partial_name"
   cp -p -- "$checkpoint_partial" "$render_fixture/.chezmoitemplates/$checkpoint_partial_name"
   cp -p -- "$review_partial" "$render_fixture/.chezmoitemplates/$review_partial_name"
+  cp -p -- "$cross_harness_partial" "$render_fixture/.chezmoitemplates/$cross_harness_partial_name"
   cp -p -- "$question_partial" "$render_fixture/.chezmoitemplates/$question_partial_name"
   cp -p -- "$typography_partial" "$render_fixture/.chezmoitemplates/$typography_partial_name"
   cp -p -- "$source_root/.chezmoitemplates/outcome-reassessment.tmpl" "$render_fixture/.chezmoitemplates/outcome-reassessment.tmpl"
@@ -194,6 +205,8 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$claude_git_rule_template" "$render_claude_git_rule_template"
   render_claude_review_rule_template="$render_fixture/dot_claude/rules/${claude_review_rule_template:t}"
   cp -p -- "$claude_review_rule_template" "$render_claude_review_rule_template"
+  render_claude_cross_harness_rule_template="$render_fixture/dot_claude/rules/${claude_cross_harness_rule_template:t}"
+  cp -p -- "$claude_cross_harness_rule_template" "$render_claude_cross_harness_rule_template"
   render_claude_cold_archive_rule_template="$render_fixture/dot_claude/rules/${claude_cold_archive_rule_template:t}"
   grep -Fv -- "$cold_archive_envelope_name" "$claude_cold_archive_rule_template" > "$render_claude_cold_archive_rule_template"
   chmod 644 "$render_claude_cold_archive_rule_template"
@@ -243,7 +256,7 @@ assert_policy_fits_budget "$policy_bytes" "$policy_budget"
 
 # The pins below read the section under each heading, and awk stops at the
 # next heading, so a repeated heading would hide the second copy.
-for heading in 'Git Checkpoints And Publication' 'Review Before Shipping' 'Git Identity' 'Interaction' 'Pull Requests And Issues'; do
+for heading in 'Git Checkpoints And Publication' 'Review Before Shipping' 'Cross-Harness Work' 'Git Identity' 'Interaction' 'Pull Requests And Issues'; do
   [[ $(grep -Fxc -- "## $heading" "$rendered") == 1 ]] ||
     fail "Codex policy must have exactly one $heading section"
 done
@@ -537,6 +550,45 @@ done
 [[ $review == "${(pj:\n\n:)review_required}" ]] ||
   fail "review policy is not exactly its settled paragraphs in order"
 
+chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules/cross-harness-work.md" > "$claude_state"
+[[ $(jq -r '.[".claude/rules/cross-harness-work.md"].perm' "$claude_state") == 420 ]] ||
+  fail "Claude cross-harness rule target mode is not 0644"
+
+(
+  cd "$render_source_root"
+  chezmoi -S "$render_source_root" execute-template < "$render_claude_cross_harness_rule_template" > "$claude_cross_harness_rule"
+)
+[[ $(jq -r '.[".claude/rules/cross-harness-work.md"].contents' "$claude_state") == "$(<"$claude_cross_harness_rule")" ]] ||
+  fail "Claude cross-harness rule target state differs from its rendering"
+cross_harness=$(render_partial "$cross_harness_partial_name")
+[[ -n $cross_harness ]] || fail "cross-harness partial renders empty"
+[[ $(<"$claude_cross_harness_rule") == "# Cross-Harness Work"$'\n\n'"$cross_harness" ]] ||
+  fail "Claude cross-harness rule is not the heading plus the shared cross-harness partial"
+
+awk '
+  $0 == "## Cross-Harness Work" { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+' "$rendered" > "$cross_harness_policy"
+# The section carries the shared partial and nothing else, so Codex-only text
+# can't stand in for a clause the Claude rule lacks.
+[[ $(<"$cross_harness_policy") == $'\n'"$cross_harness" ]] ||
+  fail "Codex policy does not carry the cross-harness partial in Cross-Harness Work"
+assert_partial_carried_once "$cross_harness" "cross-harness policy" "$template" "$claude_cross_harness_rule_template"
+
+# One entry per paragraph of the partial, as the owner approved it.
+cross_harness_required=(
+  "A concern is cross-harness when it is meant to hold in more than one agent harness: a rule, a skill, a tool binding, or a behavior they share, and anything built to implement or enforce one of those, such as a hook. Work on it covers every harness it reaches at every stage: spec, architecture, design, implementation, tests, review, deployment, and regression coverage. A change that starts in one harness's part settles what it means for the others before it ships."
+  'Keep one source for what the harnesses share, and let their parts differ only where the harnesses differ. Test each part in its own harness, and against the same cases wherever the parts share a contract. Evidence from one harness is not evidence for another.'
+  'Have an agent in each harness the change reaches review it; a review in one harness does not stand in for a review in another. Review Before Shipping still decides how deep each review goes and when it ends.'
+  'When a harness is left out, because it cannot carry its part or because its part comes later, say which and why in the spec and the pull request, track what remains, and never describe the work as covering a harness it leaves out.'
+)
+for ((i = 1; i <= ${#cross_harness_required}; i++)); do
+  [[ $(<"$cross_harness_policy") == *"$cross_harness_required[$i]"* ]] || fail "cross-harness policy is missing required paragraph $i"
+done
+[[ $cross_harness == "${(pj:\n\n:)cross_harness_required}" ]] ||
+  fail "cross-harness policy is not exactly its settled paragraphs in order"
+
 # The same words reach both harnesses, so none of them may name one.
 harness_specific=(
   'Claude'
@@ -549,6 +601,7 @@ harness_specific=(
 )
 for phrase in $harness_specific; do
   ! grep -Fiq -- "$phrase" "$review_partial" || fail "review policy names a harness: $phrase"
+  ! grep -Fiq -- "$phrase" "$cross_harness_partial" || fail "cross-harness policy names a harness: $phrase"
   ! grep -Fiq -- "$phrase" "$question_partial" || fail "question-tool policy names a harness: $phrase"
 done
 
@@ -702,6 +755,9 @@ next_heading=$(awk '$0 == "## Development Work" { found = 1; next } found && /^#
 next_heading=$(awk '$0 == "## Git Checkpoints And Publication" { found = 1; next } found && /^## / { print; exit }' "$rendered")
 [[ $next_heading == '## Review Before Shipping' ]] || \
   fail 'review policy is not immediately after the Git checkpoint policy'
+next_heading=$(awk '$0 == "## Review Before Shipping" { found = 1; next } found && /^## / { print; exit }' "$rendered")
+[[ $next_heading == '## Cross-Harness Work' ]] || \
+  fail 'cross-harness policy is not immediately after the review policy'
 
 git_policy_words=$(wc -w < "$git_policy" | tr -d ' ')
 ((git_policy_words <= 160)) || fail "Git checkpoint policy exceeds 160 words ($git_policy_words)"
