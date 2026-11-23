@@ -700,8 +700,11 @@ The rule is narrow:
   Identity-bearing credentials, such as GitHub or AWS tokens, stay on the
   individual tools that use them.
 - The mapping is best-effort, so an unavailable provider never stops the
-  application. It starts without the key and notifies once, and its hooks then
-  run keyless at once (see [Best-effort launches](#best-effort-launches)).
+  application. It starts without the key and notifies once unless it cannot
+  write the readiness state folder or no notifier is available. Launches of the
+  same profile inside it then skip the provider at once, and its hooks can still
+  read a key from the project `.env` or plaintext configuration, as documented
+  above (see [Best-effort launches](#best-effort-launches)).
 - `jev-axi` itself stays mapped strictly (`jev-axi=typesafe`). Inside a wrapped
   host it reuses the injected key without a provider lookup; in a terminal it
   resolves the key through the provider and fails closed.
@@ -922,13 +925,27 @@ a later change (dotfiles#522).
 
 ## Codex exec-policy rule for firecrawl-axi
 
-`firecrawl-axi` takes its Firecrawl key from `secret-exec`. Inside Codex's
-sandbox a `secret-exec` launch fails: the readiness helper sets the mode of its
-state folder and writes there on every call, and the sandbox mounts that folder
-read-only. A strict `secret-exec firecrawl -- firecrawl-axi` therefore fails
-there. The bare name `firecrawl-axi`, with no command shim deployed, runs
-without a key, so `search`, `scrape`, and `parse` work under the daily limit
-and every other command fails.
+`firecrawl-axi` takes its Firecrawl key from `secret-exec`, through a
+best-effort command shim mapped to the `firecrawl` profile (see
+[Command shims](#command-shims)). Inside Codex's sandbox the key cannot
+resolve, as long as Codex itself does not run under the `firecrawl` profile
+(the dotfiles wrap it under `typesafe`): the readiness helper sets the mode of
+its state folder and writes there on every call, and the sandbox mounts that
+folder read-only. Without an inherited fallback marker for `firecrawl` (see
+[Best-effort launches](#best-effort-launches)), a strict
+`secret-exec firecrawl -- firecrawl-axi` therefore fails there. The bare name
+`firecrawl-axi` goes through the shim, which, under the same conditions, falls
+back: it prints `secret-exec: starting firecrawl-axi without firecrawl
+credentials` on standard error, sends no notification because the state folder
+exists and it cannot write there (the folder exists on any host where the
+readiness helper has run), and runs the command without a key. `search`,
+`scrape`, and `parse` then work under the daily limit, and the commands that
+need a key fail with `firecrawl-axi`'s `AUTH_REQUIRED` error.
+Outside the sandbox, in a terminal or in a call that a rule below allows, the
+shim falls back the same way when the credential provider is unavailable, and
+without an inherited fallback marker each such fallback sends one notification,
+unless it cannot write the readiness state folder or no notifier is available
+(see [Best-effort launches](#best-effort-launches)).
 
 Codex's exec policy runs a command outside the sandbox, without a prompt, when
 its rules allow it. A shell line with several commands runs outside the sandbox
@@ -944,20 +961,20 @@ The file holds four rules, each with a `justification`, `match` examples, and
 1. `firecrawl-axi` followed by `search`, `scrape`, `map`, `crawl`,
    `dev-search`, `github-search`, `papers`, `agent`, or `monitors` is allowed.
 2. The same nine after the prefix `secret-exec firecrawl -- firecrawl-axi` are
-   allowed. This explicit form carries the key before a command shim for
-   `firecrawl-axi` exists. The bare form of rule 1 carries it only through such
-   a shim, mapped to the `firecrawl` profile (see
-   [Command shims](#command-shims)).
+   allowed. This explicit form carries the key on its own. The bare form of
+   rule 1 carries it through the deployed shim when the credential provider is
+   available.
 3. `firecrawl-axi setup` requires a prompt, because it writes hooks into
    harness settings.
 4. `secret-exec firecrawl -- firecrawl-axi setup` requires a prompt for the same
    reason.
 
-`parse` deliberately has no rule. It runs inside the
-sandbox, where it works without a key under the daily limit. In version 0.1.1
-of `firecrawl-axi`, uploading a local file can run `curl` with arguments taken
-from the server's reply, and the code checks only that the program is `curl`.
-Outside the sandbox, a crafted reply could write any file in the home folder.
+`parse` deliberately has no rule. It runs inside the sandbox, where it works
+through the shim's fallback without a key under the daily limit. In version
+0.1.1 of `firecrawl-axi`, uploading a local file can run `curl` with arguments
+taken from the server's reply, and the code checks only that the program is
+`curl`. Outside the sandbox, a crafted reply could write any file in the home
+folder.
 
 Two `host_executable` lines, for `firecrawl-axi` and for `secret-exec`, end the
 file. Without them, Codex falls back to the program's base name and would match
@@ -982,8 +999,11 @@ that one process, so Codex's own environment does not hold the key. The nine
 subcommands make HTTPS calls, and in version 0.1.1 their code starts no other
 program and writes no file. One argument reads a local file: `scrape
 --schema-file <path>` reads that file outside the sandbox and uploads it when it
-parses as a JSON object. A `firecrawl-axi` call inside a pipeline whose other
-parts no rule allows stays in the sandbox and runs without the key.
+parses as a JSON object. A bare-name `firecrawl-axi` call inside a pipeline
+whose other parts no rule allows stays in the sandbox and, as long as Codex
+does not run under the `firecrawl` profile, runs without the key through the
+shim's fallback; without an inherited fallback marker for `firecrawl`, the
+strict form, `secret-exec firecrawl -- firecrawl-axi`, fails there.
 
 ### Limits
 
