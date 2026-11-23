@@ -1647,6 +1647,70 @@ wait_for_notify_log ||
   fail 'a best-effort failure inside a command substitution must notify'
 [[ $(grep -Fc 'Credentials unavailable' "$FAKE_NOTIFY_LOG") == 1 ]] ||
   fail 'a best-effort failure inside a command substitution must notify once'
+
+# A fallback that cannot write the readiness state folder, as inside a sandbox
+# that mounts it read-only, sends no notification but keeps its line. Mode 600
+# passes access(2) yet refuses a new entry, as a sandbox denial can. The folder
+# is left as found, and a folder that does not exist yet still notifies.
+state_folder=$XDG_STATE_HOME/secret-exec
+[[ -d $state_folder ]] || fail 'the readiness state folder must exist by now'
+zmodload zsh/stat
+state_folder_snapshot() {
+  [[ -e $state_folder ]] || { print -r -- absent; return 0; }
+  local -a folder_mode
+  zstat -A folder_mode +mode -- "$state_folder" || return 1
+  print -r -- "$folder_mode[1]" "$state_folder"/*(DN:t)
+}
+run_state_folder_fallback() {
+  : > "$FAKE_NOTIFY_LOG"
+  : > "$best_effort_runs"
+  state_snapshot_before=$(state_folder_snapshot)
+  set +e
+  state_fallback_output=$(BEST_EFFORT_RUNS=$best_effort_runs \
+    zsh "$launcher" --best-effort member-local -- print-best-effort \
+    2>"$test_dir/state-folder.err")
+  state_fallback_status=$?
+  set -e
+  state_snapshot_after=$(state_folder_snapshot)
+}
+assert_state_folder_fallback() {
+  (( state_fallback_status == 0 )) &&
+    [[ $state_fallback_output == "$best_effort_clean" &&
+      $(<"$best_effort_runs") == ran ]] ||
+    fail "a fallback ($1) must run the target once: status=$state_fallback_status output=$state_fallback_output"
+  [[ $(<"$test_dir/state-folder.err") == $'secret-exec: a trusted native-store adapter is required\nsecret-exec: starting print-best-effort without member-local credentials' ]] ||
+    fail "a fallback ($1) must print its line: $(<"$test_dir/state-folder.err")"
+  [[ $state_snapshot_after == "$state_snapshot_before" ]] ||
+    fail "a fallback ($1) must leave the state folder as found: $state_snapshot_before -> $state_snapshot_after"
+}
+for state_folder_mode expected_access in 500 unwritable 600 writable; do
+  chmod "$state_folder_mode" "$state_folder"
+  state_folder_access=writable
+  [[ -w $state_folder ]] || state_folder_access=unwritable
+  run_state_folder_fallback
+  chmod 700 "$state_folder"
+  [[ $state_folder_access == "$expected_access" ]] ||
+    fail "mode $state_folder_mode must look $expected_access to access(2) for this case to hold"
+  assert_state_folder_fallback "unwritable state folder, mode $state_folder_mode"
+  zselect -t 50 2>/dev/null || true
+  [[ ! -s $FAKE_NOTIFY_LOG ]] ||
+    fail "a fallback that cannot write the state folder (mode $state_folder_mode) must not notify"
+done
+run_state_folder_fallback
+assert_state_folder_fallback 'writable state folder'
+wait_for_notify_log ||
+  fail 'a fallback with a writable state folder must notify'
+[[ $(grep -Fc 'Credentials unavailable' "$FAKE_NOTIFY_LOG") == 1 ]] ||
+  fail 'a fallback with a writable state folder must notify exactly once'
+state_folder=$test_dir/absent-state/secret-exec
+XDG_STATE_HOME=${state_folder:h} run_state_folder_fallback
+assert_state_folder_fallback 'state folder not created yet'
+[[ $state_snapshot_after == absent ]] ||
+  fail 'a fallback must not create the state folder'
+wait_for_notify_log ||
+  fail 'a fallback before the state folder exists must notify'
+[[ $(grep -Fc 'Credentials unavailable' "$FAKE_NOTIFY_LOG") == 1 ]] ||
+  fail 'a fallback before the state folder exists must notify exactly once'
 rm -- "$native_store_adapter"
 mv "$test_dir/native-store-adapter.real" "$native_store_adapter"
 

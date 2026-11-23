@@ -216,8 +216,23 @@ On fallback, the launcher unsets every value it had already exported and the
 provider request variables, and it does not export the provenance marker.
 Standard error keeps the usual value-free diagnostic and gains one `starting
 <command> without <profile> credentials` line. The launcher sends one desktop
-notification and then execs the target, so the target's own exit status is the
-launch status.
+notification, except as described next, and then execs the target, so the
+target's own exit status is the launch status.
+
+A fallback sends no notification when the readiness state folder,
+`${XDG_STATE_HOME:-$HOME/.local/state}/secret-exec`, exists and the launcher
+cannot create a file in it. Inside a sandbox that mounts that folder read-only,
+such as Codex's, the provider is unavailable by design, and a notification
+that asks for a restart cannot help. The launcher tells by trying to create a
+probe file in the folder, which it removes at once. It does not rely on a
+permission test such as `access(2)`, which can report a folder writable that a
+sandbox still refuses; Landlock does that. The probe runs only on fallback,
+after the line on standard error, and leaves the folder's entries as it found
+them. Every other fallback still notifies: a locked store, a provider failure
+or timeout, a missing helper, or a state folder that does not exist yet. The
+exception covers every profile and every cause, so a folder that is unwritable
+for another reason, such as a wrong owner, also sends no notification; standard
+error still carries the reason.
 
 A fallback also adds the profile's name to `SECRET_EXEC_FALLBACK_PROFILES`, a
 non-secret, space-separated marker that the target and its children inherit.
@@ -225,7 +240,7 @@ Inside that process tree, a later launch of a profile the marker names, strict
 or best-effort, starts its target at once without credentials: it removes every
 managed name, skips the readiness helper and the provider, and prints nothing
 and sends no notification. The provider failed moments earlier, and the host
-that fell back has already notified. This keeps hook commands inside a
+that fell back has already reported it. This keeps hook commands inside a
 fallen-back host from waiting on an unavailable provider or notifying again.
 Launches of other profiles resolve as usual and pass the marker through. A
 `github` launch ignores the marker, as it ignores an inherited provenance
@@ -651,7 +666,9 @@ mapping is the exception: it always resolves and repeats its identity check
 A mapping ends with `?`, as in `name=profile?`, to make it best-effort. Its
 shim launches through `secret-exec --best-effort`, so an unavailable provider
 starts the command without that profile's credentials and sends a
-notification (see [Best-effort launches](#best-effort-launches)). A failed
+notification. Where the launch cannot write the readiness state folder, as
+inside Codex's sandbox, it still prints its fallback line on standard error
+but sends no notification (see [Best-effort launches](#best-effort-launches)). A failed
 GitHub identity check still stops a best-effort `github` shim. A mapping
 without the suffix keeps failing closed. The suffix follows the profile name
 exactly once: `name=profile??`, `name=?`, and `name=?profile` are malformed.
