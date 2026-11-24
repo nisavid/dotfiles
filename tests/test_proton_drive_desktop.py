@@ -5562,6 +5562,7 @@ class PublicCommandTests(unittest.TestCase):
             import subprocess
             import sys
             import tempfile
+            import time
             from unittest import mock
 
             case, test_file, program_name, root_name, pid_file_name = sys.argv[1:]
@@ -5624,6 +5625,17 @@ class PublicCommandTests(unittest.TestCase):
                     **kwargs,
                 )
                 processes.append(process)
+                # The shortened 0.05 s timeouts can beat a Python start; wait
+                # for the leader's handshake (3 s, under the 5 s outer cap).
+                deadline = time.monotonic() + 3
+                while True:
+                    try:
+                        json.loads(pid_file.read_text())
+                        break
+                    except (FileNotFoundError, ValueError):
+                        if time.monotonic() > deadline:
+                            raise RuntimeError("producer handshake missing")
+                        time.sleep(0.005)
                 return process
 
             def safe_fstat(descriptor):
