@@ -55,6 +55,13 @@ def private_bus_diagnostics(output):
     ]
 
 
+def read_process_information(path):
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
 def with_mode(information, mode):
     values = list(information)
     values[0] = stat.S_IFMT(information.st_mode) | mode
@@ -5755,8 +5762,8 @@ class PublicCommandTests(unittest.TestCase):
                         timeout=5,
                         check=False,
                     )
-                    if pid_file.exists():
-                        process_information = json.loads(pid_file.read_text())
+                    process_information = read_process_information(pid_file)
+                    if process_information is not None:
                         # A SIGKILLed group member can still be mid-exit for a few
                         # milliseconds; 3 s is generous headroom for a loaded host.
                         exit_deadline = time.monotonic() + 3
@@ -5768,8 +5775,8 @@ class PublicCommandTests(unittest.TestCase):
                                 break
                             time.sleep(0.005)
                 finally:
-                    if process_information is None and pid_file.exists():
-                        process_information = json.loads(pid_file.read_text())
+                    if process_information is None:
+                        process_information = read_process_information(pid_file)
                     if (
                         process_information is not None
                         and process_is_live(process_information["child"])
