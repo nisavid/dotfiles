@@ -736,18 +736,27 @@ def import_recovery(home: Path, record: dict, packet: Path) -> dict:
                 "recovery archive root differs",
             )
             root = artifact_root(staging, target, specification)
-            root.mkdir(parents=True, mode=entries[archive_root][1])
-            root.chmod(entries[archive_root][1])
+            # Keep every directory owner-writable while its children are written,
+            # then apply the recorded directory modes deepest-first.
+            root.mkdir(parents=True, mode=0o700)
+            root.chmod(0o700)
+            directory_modes = {root: entries[archive_root][1]}
             for name, (data, mode) in entries.items():
                 if name == archive_root:
                     continue
                 path = root / name[len(archive_root) + 1 :]
                 if data is None:
                     path.mkdir(parents=True, exist_ok=True)
+                    path.chmod(0o700)
+                    directory_modes[path] = mode
                 else:
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(data)
-                path.chmod(mode)
+                    path.chmod(mode)
+            for path in sorted(
+                directory_modes, key=lambda item: len(item.parts), reverse=True
+            ):
+                path.chmod(directory_modes[path])
             evidence = (
                 staging
                 / ".local/share/provingkit/evidence"
