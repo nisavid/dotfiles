@@ -85,6 +85,7 @@ read-only snapshot command.
 ├── samples/20261008T16.jsonl          the current UTC hour, one JSON object per line
 ├── samples/20261008T15.jsonl.gz       closed hours, compressed
 ├── incidents/20261008T155523.333881Z-oomd-kill.json   one kill record per incident
+├── run.lock                           held by the running collector; a second run exits with status 1
 └── journal.cursor                     where to resume reading the journal
 ```
 

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import fnmatch
 import gzip
 import hashlib
@@ -1975,6 +1976,20 @@ def run(options: argparse.Namespace) -> int:
     os.umask(0o077)  # the record names this user's processes and units
     state = state_directory(options.state_dir)
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Two runs on one state directory would interleave its temporary files and sample segments.
+    lock = os.open(state / "run.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"memory-telemetry: another run is recording in {state}", file=sys.stderr)
+            return 1
+        return collect(options, state)
+    finally:
+        os.close(lock)
+
+
+def collect(options: argparse.Namespace, state: Path) -> int:
     journal = Journal(options.journalctl, state / "journal.cursor")
     collector = Collector(options, make_sources(options), state, journal)
     stopping = False
