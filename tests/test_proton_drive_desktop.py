@@ -5634,6 +5634,11 @@ class PublicCommandTests(unittest.TestCase):
                         break
                     except (FileNotFoundError, ValueError):
                         if time.monotonic() > deadline:
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            process.wait()
                             raise RuntimeError("producer handshake missing")
                         time.sleep(0.005)
                 return process
@@ -5750,15 +5755,18 @@ class PublicCommandTests(unittest.TestCase):
                         timeout=5,
                         check=False,
                     )
-                    process_information = json.loads(pid_file.read_text())
-                    # A SIGKILLed group member can still be mid-exit for a few
-                    # milliseconds; 3 s is generous headroom for a loaded host.
-                    exit_deadline = time.monotonic() + 3
-                    while True:
-                        child_was_live = process_is_live(process_information["child"])
-                        if not child_was_live or time.monotonic() >= exit_deadline:
-                            break
-                        time.sleep(0.005)
+                    if pid_file.exists():
+                        process_information = json.loads(pid_file.read_text())
+                        # A SIGKILLed group member can still be mid-exit for a few
+                        # milliseconds; 3 s is generous headroom for a loaded host.
+                        exit_deadline = time.monotonic() + 3
+                        while True:
+                            child_was_live = process_is_live(
+                                process_information["child"]
+                            )
+                            if not child_was_live or time.monotonic() >= exit_deadline:
+                                break
+                            time.sleep(0.005)
                 finally:
                     if process_information is None and pid_file.exists():
                         process_information = json.loads(pid_file.read_text())
@@ -5780,6 +5788,9 @@ class PublicCommandTests(unittest.TestCase):
                 self.assertEqual("", completed.stderr)
                 self.assertNotIn("synthetic-secret-canary", completed.stdout)
                 self.assertEqual(0, completed.returncode)
+                self.assertIsNotNone(
+                    process_information, "producer wrote no pid file"
+                )
                 report = json.loads(completed.stdout)
                 self.assertEqual(expected, report["result"])
                 self.assertTrue(report["direct_child_reaped"])
