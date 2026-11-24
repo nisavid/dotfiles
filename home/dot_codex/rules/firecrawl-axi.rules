@@ -20,7 +20,7 @@ prefix_rule(
 prefix_rule(
     pattern = ["secret-exec", "firecrawl", "--", "firecrawl-axi", WEB_SUBCOMMANDS],
     decision = "allow",
-    justification = "explicit secret-exec form of the firecrawl-axi web-only subcommands, for use before the command shim is deployed (dotfiles#499)",
+    justification = "explicit secret-exec form of the firecrawl-axi web-only subcommands; it carries the Firecrawl key on its own (dotfiles#499)",
     match = [["secret-exec", "firecrawl", "--", "firecrawl-axi", "scrape", "https://example.com"]],
     not_match = [["secret-exec", "firecrawl", "--", "sh"], ["secret-exec", "github", "--", "firecrawl-axi", "search", "x"]],
 )
