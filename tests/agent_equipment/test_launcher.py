@@ -26,6 +26,7 @@ PACKAGE_NAMES = (
     "canonical.py",
     "direct_mcp.py",
     "discovery.py",
+    "execution_authority.py",
     "inventory.py",
     "model.py",
     "plan_action_set.py",

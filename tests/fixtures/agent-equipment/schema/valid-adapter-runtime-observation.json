@@ -10,7 +10,7 @@
     "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "plan_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "capability_identity": "capability:claude-native-plugin-v1",
-    "capability_digest": "sha256:52ddfe33697f159dca8d1d170259f430071760c22e0a10b46404ac4e11c05844",
+    "capability_digest": "sha256:1e1721b77ae8c60595c805e5302836e726f209f5bc0e1cfbafe58b3676ed92b5",
     "manager_version_evidence_digest": "sha256:c4a5a1878eff82ef30703ca6a3da147e4b94b66dc2b337867e04e3d4ebf1935d",
     "harness": "claude",
     "route_identity": "route:claude/mattpocock-plugin",

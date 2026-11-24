@@ -91,6 +91,9 @@
     "record_versions": {
       "observe_request": "adapter-contract-v1",
       "runtime_observation": "adapter-contract-v1",
+      "prepare_request": "adapter-contract-v1",
+      "prepared_state_facts": "adapter-contract-v1",
+      "adapter_manifest_set": "agent-equipment-preparation-adapter-manifest-set/v1",
       "planned_action": "adapter-contract-v1",
       "mutation_receipt": "adapter-contract-v1",
       "captured_state": "agent-equipment-captured-state/v1"
@@ -98,7 +101,7 @@
     "automated_control_owners": [
       "reconciler_owned"
     ],
-    "capability_digest": "sha256:52ddfe33697f159dca8d1d170259f430071760c22e0a10b46404ac4e11c05844"
+      "capability_digest": "sha256:1e1721b77ae8c60595c805e5302836e726f209f5bc0e1cfbafe58b3676ed92b5"
       }
     ]
   }

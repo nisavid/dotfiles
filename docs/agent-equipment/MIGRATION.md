@@ -4,8 +4,16 @@ This is the design deliverable for Issue #59. It specifies a future migration;
 it does not authorize, start, or perform one. Running it requires separate
 authorization for one fully resolved plan and its exact digests.
 
-Execution also requires the manifest-bound CPython 3.12 or newer runtime and a
-closed, externally issued `ApplyAuthorization`. The exact authorization bytes
+Execution also requires a completed candidate-independent preparation and a
+closed, externally issued `ApplyAuthorization`. Preparation is not migration:
+the separately packaged `PreparationGate` validates static inputs, calls only
+manifest-bound read-only `prepare`, seals the capture and prepared authority
+sets, and atomically commits its evidence-only bundle and receipt. The apply
+issuer resolves that receipt only through its authenticated producer-owned
+store, rehashes the exact bundle bytes, and derives the bundle digest and both
+authority-set tuples before issuance. It cannot accept caller-supplied trusted
+expected tuples. Execution also requires the manifest-bound CPython 3.12 or
+newer runtime. The exact authorization bytes
 and independently supplied `trusted_apply_authorization_digest` are distinct
 inputs; neither this runbook nor candidate output can create authority.
 Its top-level `execution_domain_identity` must equal the independently trusted
@@ -25,6 +33,11 @@ fact again before migration.
 ## Preconditions and authority gate
 
 Complete all of these before the executor opens an action checkpoint:
+
+An empty admitted action set is already a terminal verified no-op. It creates no
+authority sets, preparation bundle or receipt, apply authorization, nonce claim,
+checkpoint, or adapter call. The nonempty authority-set contracts do not apply
+to that no-op.
 
 0. Run the installed wrapper's CPython 3.12+ gate before importing candidate
    code or reading native state. Recompute the runtime identity and executable
@@ -63,23 +76,31 @@ Complete all of these before the executor opens an action checkpoint:
    `agent-equipment-plan-action-set/v1` projection described below. Capture every
    route and affected surface, close every route over the exact adapter
    capability and manager-version evidence it requires, validate both JSON
-   Schemas and cross-record semantics against that separately supplied action
+   schemas and cross-record semantics against that separately supplied action
    set, and atomically seal the action set, captured-state manifest, and private
-   recovery blobs. Resolve again against that capture; a changed plan or action
-   projection must be regenerated, recaptured, and resealed. Then derive and
-   independently validate the closed all-and-only
-   `CaptureObservationAuthoritySet`, seal the `PreparedActionAuthoritySet` from
-   that exact artifact and adapter-derived post-state, and retain both exact
-   identity/digest tuples for authorization.
+   recovery blobs. Resolve the complete plan again against that sealed capture.
+   A changed plan or action projection invalidates the capture and requires a
+   regenerated projection and a new capture. Only after that stable resolution
+   may the admitted action set and sealed capture enter the candidate-independent
+   preparation gate. The gate calls only each exact
+   manifest-bound read-only
+   `prepare` seam, accepts closed `PreparedStateFacts` with complete normalized
+   pre/post self-digests, derives both complete authority sets, verifies matching
+   pre-state, and atomically commits the complete bundle and receipt. An
+   identical bundle may be reused only after
+   complete binding revalidation; durability uncertainty produces no receipt and
+   requires that retry path.
 9. Project and seal the closed acceptance expected-case manifest from that
    validated plan and capture. Include the complete static registry, every
    automated action, and every explicit read-only verification and mutating
    migration node. Bind every route's exact capability and manager-version
    evidence. Do not derive plan nodes from `ACCEPTANCE.md` or this runbook.
-10. Present the secret-free dry-run, exact candidate implementation identity and
+10. Present the secret-free dry-run, authenticated preparation receipt and its
+   rehashed exact bundle, exact candidate implementation identity and
    complete installed-implementation manifest digest, catalog digest, lock
    digest, plan digest, plan-action-set digest, capability-set digest, sealed
-   captured-state identity and digest, capture-observation-authority-set
+   captured-state identity and digest, preparation-bundle digest,
+   capture-observation-authority-set
    identity/digest, prepared-action-authority-set identity/digest, expected-case
    manifest digest, exact surface set, native-rolling limitations, and the closed
    digest of that exact operator review package. Obtain
@@ -91,20 +112,27 @@ Complete all of these before the executor opens an action checkpoint:
    Obtain its
    canonical `trusted_apply_authorization_digest` through a separate authenticated
    channel; do not infer it from the record.
-11. After authorization and before any action checkpoint or mutation, strictly
-    parse the record and validate its canonical identity and complete digest.
-    Reject a missing, unknown, expired, not-yet-valid, misbound, or foreign-
-    domain authorization.
-    Then observe every affected live surface and every bound capability and
-    manager-version evidence source, and recompute the installed-implementation
-    manifest digest
+11. After authorization and before final live comparison, nonce claim, action
+    checkpoint, or mutation, give the exact authorization bytes and independent
+    trust to `ApplyPreclaimGate`. It strictly validates the authorization,
+    resolves the authorization-bound preparation-bundle digest through the
+    authenticated producer-owned store, and revalidates the receipt, bundle,
+    and all seven exact artifact streams. Reject a missing, unknown, expired,
+    not-yet-valid, misbound, or foreign-domain authorization, and reject
+    unresolvable preparation evidence, with
+    zero adapter calls and zero checkpoint transitions. Only the resulting
+    admitted immutable value enters #116. Then observe every affected live
+    surface and every bound capability and manager-version evidence source, and
+    recompute the installed-implementation manifest digest
     under the same candidate identity. Require the complete authorized tuple and
     live evidence to equal the sealed capture. Any drift invalidates the
     authorization. Mutate nothing, recapture, resolve, reseal, and obtain new
     authorization for the new exact tuple. Only after that comparison succeeds,
     atomically claim the nonce in the durable authorization ledger named by that
     domain. A previously claimed or unpersistable nonce, or a claim in another
-    ledger domain, stops before the first action checkpoint.
+    ledger domain, stops before the first action checkpoint. The final live
+    comparison precedes the nonce compare-and-swap; no checkpoint or adapter
+    mutation may precede the durable claim.
 
 The current public command vocabulary is `status`, `unmanaged`, `add`, `update`,
 and `apply`. `status`, `unmanaged`, `add`, and `update` are nonmutating.
@@ -480,39 +508,45 @@ each step.
 ### 1. Resolve, capture, seal, authorize, and compare
 
 Resolve and validate the entire plan, emit and independently validate its exact
-complete automated-action projection, acquire the apply lease, capture every
-route and surface, validate the capture against the separately supplied action
-set, and resolve again against it. If the capture changes the plan or action
-projection, regenerate and recapture until the plan, action set, and capture
-agree. Atomically seal the plan-action set, captured-state manifest, and private
-recovery blobs. Before authorization issuance, derive and independently validate
-the complete `CaptureObservationAuthoritySet`: one canonically ordered
-observation per plan action and no others, with exact candidate, implementation,
-plan, plan-action-set, capability, capture, surface, controlled-component, and
-normalized-pre-state bindings. Seal its independently trusted identity and
-digest. The raw observation-list and standalone expected-observation-digest API
-does not exist. Derive the complete `PreparedActionAuthoritySet` from that exact
-artifact: one canonically ordered member per plan action and no others, with
-exact plan/capability/capture bindings, adapter-normalized pre/post states,
-controlled-component identities, desired-state fragment, operation, surface,
-and compensation. Require each prepared pre-state to equal its matching capture-
-observation member, then seal the prepared set's independently trusted identity
-and digest. Project and seal the exact acceptance expected-case manifest,
+complete automated-action projection, acquire the apply lease, and capture every
+route and surface. Resolve the complete plan again against that sealed capture;
+if the plan or action projection changes, regenerate the projection and capture
+again before preparation. The candidate-independent separately packaged
+`PreparationGate` then validates every static binding before adapter access and calls
+only each exact adapter-manifest-bound read-only `prepare` seam. Its closed
+`PreparedStateFacts` response supplies the complete normalized captured pre-state
+and expected post-state with self-digests, never scope, controlled components,
+authority identity/digest, or mutation capability. The gate requires matching
+pre-state, derives the all-and-only canonical capture and prepared authority
+sets, and atomically commits their exact byte streams with the plan-action set,
+captured state, capability bindings, adapter-manifest set, and gate manifest in
+one content-addressed `PreparationBundle`. Its `PreparationReceipt` is
+evidence-only. Reuse requires complete binding revalidation and exact committed
+bytes; partial entries, conflicts, and durability uncertainty never resolve a
+receipt. The issuer retrieves the receipt and bundle only through the
+authenticated producer-owned store, rehashes the bytes, and derives the bundle
+digest and both authority-set tuples. The raw observation-list and caller-
+supplied expected-tuple APIs do not exist. Project and seal the exact acceptance
+expected-case manifest,
 including all explicit verification and migration nodes, then obtain
 the exact closed `ApplyAuthorization` naming the complete candidate,
 implementation-manifest, catalog, lock, plan, action-set, capture-observation-
 authority-set, prepared-action-authority-set, capability-set, captured-state,
-and expected-case-manifest tuple
+preparation-bundle digest, and expected-case-manifest tuple
 plus the command, run, validity
 window, fresh nonce, independently trusted execution-domain identity, and exact
 operator-review-package digest. Receive
 `trusted_apply_authorization_digest` through
 the external authority channel.
 
-After authorization, strictly validate the exact bytes and digest and verify the
-trusted time window. Then recompute the installed implementation manifest and
-reread every affected surface and bound capability and manager-version evidence
-source. Proceed only
+After authorization, `ApplyPreclaimGate` strictly validates the exact bytes,
+independent digest, trusted time window, and complete binding tuple. It resolves
+the authorization-bound preparation-bundle digest through the authenticated
+producer-owned store and revalidates the receipt, bundle, and all seven exact
+artifact streams. Only its admitted immutable value enters #116's final live
+comparison. Recompute the installed implementation manifest and reread every
+affected surface and bound capability and manager-version evidence source.
+Proceed only
 when the candidate identity, implementation digest, and all live evidence equal
 the authorized sealed capture. Otherwise release the proposal without mutation,
 recapture, resolve, reseal, and obtain new authorization. A ledger claim is never
@@ -521,12 +555,21 @@ action checkpoint, durably claim the nonce by CAS in the one authoritative
 ledger namespace and target named by `execution_domain_identity`.
 
 Completion: the authorized plan, sealed action set, sealed capture, and expected-
-case manifest have identical bindings; the authorization identity and canonical
-digest are exact; its execution domain is independently trusted; its nonce is
-claimed once for this run in that domain; the post-authorization
+case manifest have identical bindings; apply preclaim has authenticated and
+revalidated the exact authorization, receipt, bundle, and seven artifact
+streams; the authorization identity and canonical digest are exact; its
+execution domain is independently trusted; its nonce is claimed once for this
+run in that domain; the post-authorization
 live comparison is exact; both authority sets match the exact identity/digest
 tuples bound by the validated apply authorization; all route and surface cross-references validate; no
 harness state has changed; no action checkpoint exists yet.
+
+This preparation and preclaim boundary is #115 only. #116 begins only after
+admission with final live comparison and authorized nonce-claim composition,
+then checkpoint creation, ordered execution, compensation, and recovery. #128
+is a separate later live-route reassessment; this contract neither makes that
+decision nor authorizes a live installation, release, credential use, or host
+mutation.
 
 ### 2. Replace the blanket Claude projector
 
@@ -832,7 +875,8 @@ A completed run whose live state still equals its expected state is a no-op on
 rerun. A compensated run is historical evidence, not a license to replay; a new
 apply requires a fresh sealed capture and authorization naming the complete
 candidate implementation identity/manifest digest, catalog, lock, plan,
-plan-action-set, capability-set, captured-state identity/digest, and sealed
+plan-action-set, capability-set, captured-state identity/digest,
+preparation-bundle digest, and sealed
 expected-case-manifest digest tuple plus a new run identity, validity window,
 and execution nonce. An already claimed nonce never authorizes the new apply.
 
@@ -962,8 +1006,10 @@ output for seeded secret values.
 2. Locate the newest nonterminal run and verify its candidate implementation
    identity/manifest digest, catalog, lock, plan, plan-action-set, capture-
    observation-authority-set identity/digest, prepared-action-authority-set
-   identity/digest, capability-set, captured-state identity/digest, and sealed
-   expected-case-manifest digest plus every route capability binding against the
+   identity/digest, capability-set, captured-state identity/digest, and
+   authorization-bound preparation-bundle digest and expected-case-manifest
+   digest plus every route
+   capability binding against the
    authorized `ApplyAuthorization`. Revalidate both exact authority-set artifacts
    against those apply-bound tuples. Require its canonical digest to equal the original
    `trusted_apply_authorization_digest`, its execution domain to equal
