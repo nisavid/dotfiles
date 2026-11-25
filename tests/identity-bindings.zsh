@@ -40,7 +40,7 @@ fixture_data='{
     },
     "identities": {
       "personal": {
-        "email": "ivan@nisavid.io",
+        "email": "ivan@example.invalid",
         "editorTarget": "cursor",
         "branchPrefix": "nisavid/",
         "noTracking": false
@@ -108,7 +108,7 @@ PATH=$test_dir/no-helper-bin "$chezmoi_bin" -S "$repo_root/home" execute-templat
 personal_include=$test_dir/personal-include
 chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
   < home/dot_config/git/personal.inc.tmpl > "$personal_include"
-rg -F 'email = "ivan@nisavid.io"' "$personal_include" >/dev/null ||
+rg -F 'email = "ivan@example.invalid"' "$personal_include" >/dev/null ||
   fail 'Personal Git include did not resolve the synthetic personal identity'
 
 modifier=$test_dir/modify-codex

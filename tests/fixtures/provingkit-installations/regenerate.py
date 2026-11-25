@@ -27,6 +27,54 @@ all_members = [
     "proseweaving",
 ]
 result = {"producer_commit": "147e1ddfc969b5119001488ce1556627d3b2449b", "cases": {}}
+# The projector copies its policy's owner address into the Claude catalog only.
+# The captured fixtures carry this synthetic address instead, and the receipt
+# digests are recomputed to match. Catalogs without an owner address, such as
+# the Cursor catalog, stay as emitted.
+SYNTHETIC_OWNER_EMAIL = "ivan@example.invalid"
+CATALOGS = {
+    "claude": ".claude-plugin/marketplace.json",
+    "cursor": ".cursor-plugin/marketplace.json",
+}
+
+
+def compact_json(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+
+
+def replace_owner_email(output, target):
+    """Swap the catalog owner address and restore the receipt's digests."""
+    catalog = CATALOGS.get(target)
+    if catalog is None:
+        return
+    catalog_path = output / catalog
+    catalog_data = json.loads(catalog_path.read_bytes())
+    if "email" not in catalog_data.get("owner", {}):
+        return
+    catalog_data["owner"]["email"] = SYNTHETIC_OWNER_EMAIL
+    catalog_path.write_text(compact_json(catalog_data))
+    receipt_path = output / "RECEIPT.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    inventory = []
+    tree = hashlib.sha256(b"provingkit-tree-v1\0")
+    for name in sorted(
+        p.relative_to(output).as_posix()
+        for p in output.rglob("*")
+        if p.is_file() and p.name != "RECEIPT.json"
+    ):
+        data = (output / name).read_bytes()
+        inventory.append({"path": name, "sha256": hashlib.sha256(data).hexdigest()})
+        encoded = name.encode()
+        tree.update(
+            len(encoded).to_bytes(8, "big")
+            + encoded
+            + len(data).to_bytes(8, "big")
+            + data
+        )
+    receipt["files"] = inventory
+    receipt["artifact_sha256"] = tree.hexdigest()
+    receipt_path.write_text(compact_json(receipt))
+
 
 with tempfile.TemporaryDirectory(prefix="provingkit-public-fixture-") as temporary:
     root = Path(temporary)
@@ -126,6 +174,7 @@ with tempfile.TemporaryDirectory(prefix="provingkit-public-fixture-") as tempora
                 check=True,
                 capture_output=True,
             )
+            replace_owner_email(output, target)
             receipt_bytes = (output / "RECEIPT.json").read_bytes()
             receipt = json.loads(receipt_bytes)
             files = {

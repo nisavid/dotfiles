@@ -39,7 +39,7 @@ aws_secret_setting=aws_secret_access
 aws_secret_setting+=_key
 aws_session_setting=aws_session
 aws_session_setting+=_token
-darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","hostname":"test-host"},"gitIdentity":{"publicFixture":true,"selection":{"default":"personal","byHostname":{}},"identities":{"personal":{"email":"ivan@nisavid.io","editorTarget":"cursor","branchPrefix":"nisavid/","noTracking":false}}}}'
+darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","hostname":"test-host"},"gitIdentity":{"publicFixture":true,"selection":{"default":"personal","byHostname":{}},"identities":{"personal":{"email":"ivan@example.invalid","editorTarget":"cursor","branchPrefix":"nisavid/","noTracking":false}}}}'
 
 render_modifier() {
   local source=$1
