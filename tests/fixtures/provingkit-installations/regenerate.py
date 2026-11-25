@@ -27,9 +27,10 @@ all_members = [
     "proseweaving",
 ]
 result = {"producer_commit": "147e1ddfc969b5119001488ce1556627d3b2449b", "cases": {}}
-# The projector copies its policy's owner address into the Claude and Cursor
-# catalogs. The captured fixtures carry this synthetic address instead, and the
-# receipt digests are recomputed to match.
+# The projector copies its policy's owner address into the Claude catalog only.
+# The captured fixtures carry this synthetic address instead, and the receipt
+# digests are recomputed to match. Catalogs without an owner address, such as
+# the Cursor catalog, stay as emitted.
 SYNTHETIC_OWNER_EMAIL = "ivan@example.invalid"
 CATALOGS = {
     "claude": ".claude-plugin/marketplace.json",
@@ -48,6 +49,8 @@ def replace_owner_email(output, target):
         return
     catalog_path = output / catalog
     catalog_data = json.loads(catalog_path.read_bytes())
+    if "email" not in catalog_data.get("owner", {}):
+        return
     catalog_data["owner"]["email"] = SYNTHETIC_OWNER_EMAIL
     catalog_path.write_text(compact_json(catalog_data))
     receipt_path = output / "RECEIPT.json"

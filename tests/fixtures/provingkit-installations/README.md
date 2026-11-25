@@ -7,11 +7,12 @@ shell file. The captured receipt, inventory, tree digest, target catalogs, and
 file modes are independent oracles for the installer tests. Mode manifests use
 the upstream `path`, `mode`, `origin` TSV format.
 
-The fixtures differ from the projector's raw output in one respect. The Claude
-and Cursor catalogs name an owner address that the projector takes from its own
+The Claude fixtures differ from the projector's raw output in one respect. The
+Claude catalog names an owner address that the projector takes from its own
 policy. `regenerate.py` replaces it with the synthetic `ivan@example.invalid`
-and recomputes the receipt inventory, tree digest, and receipt digest to match,
-so those values bind the substituted catalogs. The receipt's policy digest is
+and recomputes that target's receipt inventory, tree digest, and receipt digest
+to match, so those values bind the substituted catalog. The receipt's policy
+digest is unchanged. The Codex and Cursor fixtures are the projector's output
 unchanged.
 
 - `a`: three catalog members, all version 1.0.0.
