@@ -928,6 +928,21 @@ sign-in, Cursor has no Context7 tools from a server. If the sign-in does not
 complete, or does not last through a restart of Cursor, Cursor goes back to the
 local binding in a later change (dotfiles#522).
 
+Three limits were observed on the host on 2026-11-24 (dotfiles#522); the Cursor
+app itself has not been observed:
+
+- The command-line agent's sign-in is per workspace. `agent mcp list` showed
+  `context7: ready` only in the workspace that was signed in, and `needs
+  approval` or `requires_authentication` in other folders. A workspace without
+  the sign-in has no tools from the managed server until the owner runs `agent
+  mcp login context7` there. No agent runs that step.
+- In print mode the command-line agent refuses an MCP tool call unless the run
+  passes `--force`. `--approve-mcps` only approves loading the server.
+- Cursor's marketplace plugin `context7-plugin` defines a second Context7
+  server, at Context7's address without a sign-in. This repository does not
+  manage Cursor's plugins. The managed entry is the one dotfiles#522
+  checked.
+
 ## OpenCode Context7 route
 
 When `~/.config/opencode/opencode.json` exists as a regular file, an
