@@ -55,7 +55,7 @@ major rollout is never permitted.
 
 | Artifact | Role |
 | --- | --- |
-| `docs/agent-equipment/CONTEXT.md` | Domain language and identity boundaries |
+| `docs/agent-equipment/GLOSSARY.md` | Domain language and identity boundaries |
 | `docs/agent-equipment/ARCHITECTURE.md` | Resolver, command, adapter, and executor contract |
 | `docs/agent-equipment/catalog-v1.schema.json` | Authored catalog serialization contract |
 | `docs/agent-equipment/lock-v1.schema.json` | Expanded lock serialization contract |
@@ -1112,7 +1112,7 @@ Later steps do not begin until the named evidence passes.
 
 | Path | Replacement |
 | --- | --- |
-| `.scratch/global-agent-equipment/CONTEXT.md` | `docs/agent-equipment/CONTEXT.md` |
+| `.scratch/global-agent-equipment/CONTEXT.md` | `docs/agent-equipment/GLOSSARY.md` |
 | `.scratch/global-agent-equipment/map.md` | This handoff plus Issues #44–#61 and the durable architecture documents |
 
 ### Retired only during the separately authorized migration

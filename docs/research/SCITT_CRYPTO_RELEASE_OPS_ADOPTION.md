@@ -60,7 +60,7 @@ mechanisms:
 
 The local starting points are the [cross-precedent audit](CRYPTO_RELEASE_OPS_PRECEDENT_AUDIT.md),
 the [generic consumer research](../agent-equipment/research/generic-release-trust-components.md),
-and the current source [context](../agent-equipment/CONTEXT.md),
+and the current source [context](../agent-equipment/GLOSSARY.md),
 [architecture](../agent-equipment/ARCHITECTURE.md), and
 [implementation handoff](../agent-equipment/IMPLEMENTATION_HANDOFF.md).
 

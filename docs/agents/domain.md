@@ -4,7 +4,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`CONTEXT-MAP.md`** at the repo root: it names each context in this repo and points at that context's `CONTEXT.md`. Read each one relevant to the topic.
+- **`GLOSSARY-MAP.md`** at the repo root: it names each context in this repo and points at that context's `GLOSSARY.md`. Read each one relevant to the topic.
 - **`docs/adr/`**: read ADRs that touch the area you're about to work in.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
@@ -15,11 +15,11 @@ Multi-context repo. Contexts live under `docs/<context>/` rather than `src/<cont
 
 ```text
 /
-├── CONTEXT-MAP.md                     ← names each context, links its glossary
+├── GLOSSARY-MAP.md                    ← names each context, links its glossary
 ├── docs/
 │   ├── adr/                           ← system-wide decisions (created lazily)
-│   ├── agent-equipment/CONTEXT.md     ← context glossary
-│   └── secret-injection/CONTEXT.md    ← context glossary
+│   ├── agent-equipment/GLOSSARY.md    ← context glossary
+│   └── secret-injection/GLOSSARY.md   ← context glossary
 └── home/                              ← chezmoi source state
 ```
 
@@ -27,7 +27,7 @@ The map lists only contexts in this repository. Related external repositories ma
 
 ## Use the glossary's vocabulary
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in the relevant context's `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in the relevant context's `GLOSSARY.md`. Don't drift to synonyms the glossary explicitly avoids.
 
 If the concept you need isn't in the glossary yet, that's a signal: either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
 

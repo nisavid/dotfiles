@@ -42,7 +42,7 @@ The Base Loadout boundary is also settled in the repository context:
 - Base Loadout independently binds its complete release tuple and every required byte stream, uses a candidate-independent protected launcher and create-only archive, and emits a receipt only after durable archive success.
 - The generic verifier/installer and Base Loadout release-authority assembly remain independently versioned and accepted even if they share one Crypto Ops source project.
 
-[The current source context](../agent-equipment/CONTEXT.md), [architecture](../agent-equipment/ARCHITECTURE.md), [implementation handoff](../agent-equipment/IMPLEMENTATION_HANDOFF.md), and [generic component research](../agent-equipment/research/generic-release-trust-components.md) define those boundaries. The accepted [#212 Base Loadout consumer profile](https://github.com/nisavid/dotfiles/issues/212#issuecomment-5494463333) fixes their exact generic-to-application mapping.
+[The current source context](../agent-equipment/GLOSSARY.md), [architecture](../agent-equipment/ARCHITECTURE.md), [implementation handoff](../agent-equipment/IMPLEMENTATION_HANDOFF.md), and [generic component research](../agent-equipment/research/generic-release-trust-components.md) define those boundaries. The accepted [#212 Base Loadout consumer profile](https://github.com/nisavid/dotfiles/issues/212#issuecomment-5494463333) fixes their exact generic-to-application mapping.
 
 ## Requirements-to-precedents crosswalk
 
