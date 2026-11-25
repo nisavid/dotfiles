@@ -5725,7 +5725,9 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                 ambient.chmod(0o755)
         inputs.support_bin = secure_support
         if not trusted_path_ancestors_supported(inputs.root):
-            self.skipTest("trusted-wrapper ancestors are UID-mapped in this sandbox")
+            require_age_tooling_or_skip(
+                "trusted-wrapper ancestors are UID-mapped in this sandbox"
+            )
 
         result = inputs.run(timeout=180)
 

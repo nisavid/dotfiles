@@ -113,7 +113,8 @@ group_shell_bindings() {
   zsh -f tests/privacy-scan.zsh
   python3 scripts/privacy-scan --root . --require-age-manifest
   zsh -f tests/identity-bindings.zsh
-  zsh -f tests/secret-exec.zsh
+  REQUIRE_POSIX_ACL_CHECKS=1 \
+    zsh -f tests/secret-exec.zsh
   zsh -f tests/secret-command-shims.zsh
   zsh -f tests/secret-exec-migrate.zsh
   zsh -f tests/secret-injection-bindings.zsh
