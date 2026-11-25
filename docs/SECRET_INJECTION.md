@@ -923,21 +923,24 @@ is not one JSON document fails the apply and leaves the file as it was.
 
 The sign-in is the owner's step after the apply: from Cursor's MCP settings,
 and with `agent mcp login context7` for the command-line agent. Cursor keeps it
-on the host, outside this repository, and per workspace, so a new host or a new
-workspace needs it again. Until the sign-in, Cursor has no Context7 tools from
-the managed server. If the sign-in does not complete, or does not last through
-a restart of Cursor, Cursor goes back to the local binding in a later change
-(dotfiles#522).
+on the host, outside this repository. As observed on 2026-11-24, it also keeps
+the sign-in per workspace, so a new host or a new workspace needs it again;
+that is the current behaviour, not a settled design, and finding a sign-in that
+covers every workspace is open work in dotfiles#573. Until the sign-in, Cursor
+has no Context7 tools from the managed server. If the sign-in does not
+complete, or does not last through a restart of Cursor, Cursor goes back to the
+local binding in a later change (dotfiles#522).
 
 Three limits were observed on the host on 2026-11-24; the Cursor app itself
 has not been observed:
 
-- The command-line agent's sign-in is per workspace (dotfiles#522).
-  `agent mcp list` showed `context7: ready` only in the workspace that was
-  signed in. In the home folder it showed `needs approval`, and in a new
-  folder `requires_authentication`. For another workspace, #522 prescribes
-  that the owner run `agent mcp login context7` there. No agent runs that
-  step.
+- The command-line agent's sign-in is per workspace for now (dotfiles#522).
+  That is the current behaviour, and dotfiles#573 is open work on a sign-in
+  that covers every workspace. `agent mcp list` showed `context7: ready` only
+  in the workspace that was signed in. In the home folder it showed
+  `needs approval`, and in a new folder `requires_authentication`. For
+  another workspace, #522 prescribes that the owner run
+  `agent mcp login context7` there. No agent runs that step.
 - In print mode the command-line agent refuses an MCP tool call unless the run
   passes `--force` (dotfiles#522). `--approve-mcps` only approves loading the
   server (dotfiles#568).
