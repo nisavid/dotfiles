@@ -864,6 +864,11 @@ print -rn -- '{"unrelated":"preserved"}' | "$cursor_modifier" | jq -e '
 print -rn -- '{"mcpServers":null,"unrelated":"preserved"}' | "$cursor_modifier" | jq -e '
   .unrelated == "preserved" and (.mcpServers | keys) == ["context7"]
 ' > /dev/null || fail 'Cursor config with a null mcpServers must gain only the wrapped entry'
+# A false mcpServers is the case that needs the `// {}` guard: jq creates a
+# missing or null object on assignment, but cannot index into a boolean.
+print -rn -- '{"mcpServers":false,"unrelated":"preserved"}' | "$cursor_modifier" | jq -e '
+  .unrelated == "preserved" and (.mcpServers | keys) == ["context7"]
+' > /dev/null || fail 'Cursor config with a false mcpServers must gain only the wrapped entry'
 "$cursor_modifier" < /dev/null | jq -e '(.mcpServers | keys) == ["context7"]' > /dev/null ||
   fail 'an empty Cursor config must gain only the wrapped entry'
 
