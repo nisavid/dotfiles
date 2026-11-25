@@ -315,6 +315,57 @@ class RecoveryCommandTests(unittest.TestCase):
                 )
                 self.assertEqual(inventory(), before)
 
+    def assert_read_only_directory_imported(self, manifest, packet, directory):
+        """Import must write a read-only directory's children, then restore its mode."""
+        code, report = self.import_fixture(packet)
+
+        self.assertEqual((code, report["outcome"]), (0, "artifacts_imported"), report)
+        data_root = self.home / ".local/share/provingkit"
+        for target, specification in manifest["targets"].items():
+            if target == "claude" and directory != ".":
+                continue
+            artifact = data_root / "artifacts" / target / specification["artifact_sha256"]
+            read_only = artifact if directory == "." else artifact / directory
+            self.assertEqual(read_only.stat().st_mode & 0o777, 0o555, target)
+            self.assertTrue(any(read_only.iterdir()), target)
+
+    @linux_amd64
+    def test_read_only_root_does_not_block_writing_its_children(self):
+        self.selection, packet, manifest = fixture_recovery_packet(
+            self.base, root_mode=0o555
+        )
+
+        self.assert_read_only_directory_imported(manifest, packet, ".")
+
+    @linux_amd64
+    def test_read_only_nested_directory_does_not_block_writing_its_children(self):
+        self.selection, packet, manifest = fixture_recovery_packet(self.base)
+        directory = ".agents"
+        for target in ("agent-plugins", "agent-plugins-local"):
+            path = f"artifacts/{target}.tar.gz"
+
+            def change(members, target=target):
+                item = next(
+                    item
+                    for item, _data in members
+                    if item.name == f"{target}/{directory}"
+                )
+                item.mode = 0o555
+
+            self.replace_constituent(
+                packet,
+                path,
+                self.rewrite_archive(self.packet_contents(packet)[path], change),
+            )
+            contents = self.packet_contents(packet)
+            recorded = json.loads(contents["MANIFEST.json"])
+            recorded["targets"][target]["directories"][directory] = "0555"
+            contents["MANIFEST.json"] = (json.dumps(recorded) + "\n").encode()
+            self.write_packet(packet, contents)
+            manifest = recorded
+
+        self.assert_read_only_directory_imported(manifest, packet, directory)
+
     def packet_contents(self, packet):
         with tarfile.open(packet) as archive:
             return {item.name: archive.extractfile(item).read() for item in archive}
