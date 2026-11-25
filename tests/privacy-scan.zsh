@@ -83,6 +83,65 @@ if [[ -e $isolated_tool/__pycache__ ]]; then
   exit 1
 fi
 
+python3 - "$repo_root" "$isolated_tool" "$test_root" <<'PY'
+import ast
+import hashlib
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+repo, tools, root = map(Path, sys.argv[1:])
+local_part = "courier"
+domain = "mailbox.invalid"
+address = local_part + "@" + domain
+digest = hashlib.sha256(address.encode()).hexdigest()
+cases = {
+    "exact": address,
+    "uppercase": address.upper(),
+    "plus": local_part + "+tag@" + domain,
+    "other-domain": local_part + "@" + "elsewhere.invalid",
+    "other-local": "reader@" + domain,
+    "prefix": "other-" + address,
+}
+for case, value in cases.items():
+    tree = root / case
+    tree.mkdir()
+    (tree / value).touch()
+    (tree / "source.txt").write_text(value + "\n", encoding="utf-8")
+
+for path in ("scripts/privacy-scan", "tests/fixtures/age-admission-bootstrap/scripts/privacy-scan"):
+    source = (repo / path).read_text(encoding="utf-8")
+    allowance, = (
+        node for node in ast.parse(source).body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "ALLOWED_EMAIL_SHA256S" for t in node.targets)
+    )
+    values = ast.literal_eval(allowance.value)
+    if not isinstance(values, set) or not values or not all(
+        isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) for value in values
+    ):
+        raise SystemExit(f"{path}: expected a set of lowercase SHA-256 digests")
+    if "0" * 64 in values:
+        raise SystemExit(f"{path}: zero placeholder in digest allowance")
+    lines = source.splitlines(keepends=True)
+    lines[allowance.lineno - 1:allowance.end_lineno] = [f"ALLOWED_EMAIL_SHA256S = {{{digest!r}}}\n"]
+    scanner_copy = tools / "digest-test-scanner"
+    scanner_copy.write_text("".join(lines), encoding="utf-8")
+    for case in cases:
+        result = subprocess.run(
+            [sys.executable, scanner_copy, "--root", root / case], capture_output=True, text=True
+        )
+        if case in ("exact", "uppercase"):
+            if result.returncode or result.stdout or result.stderr:
+                raise SystemExit(f"{path}: expected no finding for {case}")
+        elif result.returncode != 1 or result.stderr or not re.fullmatch(
+            r"redacted-path:sha256:[0-9a-f]{16}:0: \[email-filename\] review required\n"
+            r"source\.txt:1: \[email\] review required\n", result.stdout
+        ):
+            raise SystemExit(f"{path}: expected filename and content findings for {case}")
+PY
+
 artifact_at=@
 openssl_formula=openssl${artifact_at}3.5.rb
 sq_formula=sequoia-sq-pqc${artifact_at}1.4.0.rb
