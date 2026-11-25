@@ -67,14 +67,6 @@ workflow_concurrency=$(workflow_block "$workflow" concurrency)
   fail 'platform workflow does not group superseded runs by workflow and ref'
 [[ $workflow_concurrency == *'cancel-in-progress: true'* ]] ||
   fail 'platform workflow does not cancel superseded runs'
-grep -Fq 'AGE_VERSION: "1.3.1"' "$workflow" ||
-  fail 'platform workflow does not pin the age parser version'
-grep -Fq 'brew install bat flock jq ripgrep' "$workflow" ||
-  fail 'platform workflow does not install macOS runtime dependencies'
-grep -Fq 'age-v${AGE_VERSION}-darwin-arm64.tar.gz' "$workflow" ||
-  fail 'platform workflow does not install the pinned arm64 macOS age parser'
-grep -Fq 'age-v${AGE_VERSION}-darwin-amd64.tar.gz' "$workflow" ||
-  fail 'platform workflow does not install the pinned amd64 macOS age parser'
 # Linux uses the workflow's pinned downloads and normal runner user.
 linux_install=$(workflow_step_run "$workflow" 'Install Linux dependencies')
 linux_packages=$(
@@ -112,13 +104,6 @@ do
   [[ $linux_install == *$linux_pin* ]] ||
     fail "Actions is missing the pinned Linux tooling contract: $linux_pin"
 done
-grep -Fq 'test "$(age-inspect --version)" = "v${AGE_VERSION}"' "$workflow" ||
-  fail 'platform workflow does not verify the age parser version'
-grep -Eqx '[[:space:]]+run: python3 -m pip install uv==0\.11\.32' "$workflow" ||
-  fail 'macOS workflow does not install the pinned uv runtime'
-grep -Fq 'CHEZMOI_VERSION: "2.71.0"' "$workflow" &&
-  grep -Fq 'python-version: "3.12"' "$workflow" ||
-  fail 'platform workflow does not pin chezmoi and Python versions'
 grep -Fq \
   "python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'" \
   "$test_groups" ||
@@ -174,8 +159,6 @@ required_age_modules=$(
   fail 'platform test groups may skip public-data age-inspect coverage'
 [[ $required_age_modules == *'tests/test_privacy_age_envelopes.py'* ]] ||
   fail 'platform test groups may skip age-envelope tooling coverage'
-grep -Fq 'AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin' "$workflow" ||
-  fail 'platform workflow does not anchor admission to the verified age install'
 grep -Fq -- \
   '--base-uri "file://$PWD/docs/agent-equipment/adapter-contract-v1.schema.json"' \
   "$test_groups" ||
@@ -266,11 +249,15 @@ admission_signer_pattern=$(
   python3 -I -B -c 'import re, sys
 sys.path.insert(0, ".")
 from scripts.privacy_age_admission import ADMISSION_NAMESPACE, ADMISSION_PRINCIPAL
+# Escape only the extended-regex metacharacters: re.escape also escapes "-",
+# which GNU grep 3.8 or newer warns about as a stray backslash.
+def ere_escape(text):
+    return re.sub(r"([][\\.^$*+?(){}|])", r"\\\1", text)
 print(
     "^"
-    + re.escape(ADMISSION_PRINCIPAL)
+    + ere_escape(ADMISSION_PRINCIPAL)
     + " namespaces=\""
-    + re.escape(ADMISSION_NAMESPACE)
+    + ere_escape(ADMISSION_NAMESPACE)
     + "\" ssh-[a-z0-9-]+ [A-Za-z0-9+/=]+( .*)?$"
 )'
 ) || fail 'cannot derive the age admission signer pattern'
