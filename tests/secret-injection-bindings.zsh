@@ -797,11 +797,18 @@ cursor_other_entries=$(cat <<'EOF'
     }
 EOF
 )
-# Cursor signs in to Context7's remote server with OAuth: the entry holds
-# its OAuth address alone (dotfiles#522).
-cursor_remote_entry=$(cat <<EOF
+# Cursor runs Context7 as a local server through secret-exec, so every
+# workspace has it without a per-workspace sign-in (dotfiles#573).
+cursor_wrapped_entry=$(cat <<EOF
     "context7": {
-      "url": "https://mcp.context7.com/mcp/oauth"
+      "command": "$fixture_home/.local/bin/secret-exec",
+      "args": [
+        "context7",
+        "--",
+        "npx",
+        "-y",
+        "@upstash/context7-mcp@3.2.4"
+      ]
     }
 EOF
 )
@@ -818,7 +825,7 @@ $cursor_other_entries
 }" > "$test_dir/cursor-input.json"
 print -rn -- "{
   \"mcpServers\": {
-$cursor_remote_entry,
+$cursor_wrapped_entry,
 $cursor_other_entries
   }
 }" > "$test_dir/cursor-expected.json"
@@ -827,32 +834,35 @@ cmp -s "$test_dir/cursor-output.json" "$test_dir/cursor-expected.json" ||
   fail 'Cursor MCP config must replace only the Context7 entry and keep every other byte'
 ! rg -n 'context7-canary|context7.example' "$test_dir/cursor-output.json" >/dev/null ||
   fail 'Cursor output must retire the Context7 URL and credential'
+! rg -n 'CONTEXT7_API_KEY|mcp.context7.com' "$test_dir/cursor-output.json" >/dev/null ||
+  fail 'Cursor output must hold neither a Context7 key nor the remote address'
 "$cursor_modifier" < "$test_dir/cursor-output.json" | cmp -s - "$test_dir/cursor-output.json" ||
   fail 'the Cursor MCP modifier must be idempotent'
 
 # A Context7 entry with other credential-carrying keys loses them and keeps
-# unrelated metadata; the earlier local launcher becomes the remote entry.
+# unrelated metadata.
 print -rn -- "{\"mcpServers\":{\"context7\":{\"type\":\"http\",\"command\":\"npx\",\"args\":[\"mcp-remote\"],\"env\":{\"A\":\"b\"},\"env_vars\":[\"A\"],\"auth\":{\"$cursor_client_id_field\":\"a\",\"$cursor_client_secret_field\":\"b\"},\"envFile\":\".env\",\"http_headers\":{\"$authorization_key\":\"c\"},\"bearer_token_env_var\":\"A\",\"timeout\":60000}}}" |
-  "$cursor_modifier" | jq -e '
-  .mcpServers == {context7: {url: "https://mcp.context7.com/mcp/oauth", timeout: 60000}}
+  "$cursor_modifier" | jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
+  .mcpServers == {context7: {command: $command, args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"], timeout: 60000}}
 ' > /dev/null || fail 'Cursor Context7 entry must lose every transport and credential key and keep other metadata'
-print -rn -- "{\"mcpServers\":{\"context7\":{\"command\":\"$fixture_home/.local/bin/secret-exec\",\"args\":[\"context7\",\"--\",\"npx\",\"-y\",\"@upstash/context7-mcp@3.2.4\"]}}}" |
-  "$cursor_modifier" | jq -e '
-  .mcpServers == {context7: {url: "https://mcp.context7.com/mcp/oauth"}}
-' > /dev/null || fail 'the earlier Cursor Context7 launcher must become the remote entry'
+# The remote OAuth entry that dotfiles#530 wrote becomes the wrapped entry.
+print -rn -- '{"mcpServers":{"context7":{"url":"https://mcp.context7.com/mcp/oauth"}}}' |
+  "$cursor_modifier" | jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
+  .mcpServers == {context7: {command: $command, args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"]}}
+' > /dev/null || fail 'the remote Cursor Context7 entry must become the wrapped entry'
 
-# Without an entry, a servers object, or a file, the remote entry appears.
+# Without an entry, a servers object, or a file, the wrapped entry appears.
 print -rn -- '{"mcpServers":{"notebooks":{"command":"uvx"}},"unrelated":"preserved"}' |
-  "$cursor_modifier" | jq -e '
+  "$cursor_modifier" | jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
   .unrelated == "preserved" and
   .mcpServers.notebooks == {command: "uvx"} and
-  .mcpServers.context7 == {url: "https://mcp.context7.com/mcp/oauth"}
-' > /dev/null || fail 'Cursor config without a Context7 entry must gain the remote entry'
+  .mcpServers.context7 == {command: $command, args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"]}
+' > /dev/null || fail 'Cursor config without a Context7 entry must gain the wrapped entry'
 print -rn -- '{"unrelated":"preserved"}' | "$cursor_modifier" | jq -e '
   .unrelated == "preserved" and (.mcpServers | keys) == ["context7"]
-' > /dev/null || fail 'Cursor config without an mcpServers object must gain the remote entry'
+' > /dev/null || fail 'Cursor config without an mcpServers object must gain the wrapped entry'
 "$cursor_modifier" < /dev/null | jq -e '(.mcpServers | keys) == ["context7"]' > /dev/null ||
-  fail 'an empty Cursor config must gain only the remote entry'
+  fail 'an empty Cursor config must gain only the wrapped entry'
 
 # A file that is not exactly one JSON document fails with no output.
 expect_cursor_failure() {
