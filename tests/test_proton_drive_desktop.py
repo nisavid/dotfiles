@@ -55,6 +55,13 @@ def private_bus_diagnostics(output):
     ]
 
 
+def read_process_information(path):
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
 def with_mode(information, mode):
     values = list(information)
     values[0] = stat.S_IFMT(information.st_mode) | mode
@@ -5562,6 +5569,7 @@ class PublicCommandTests(unittest.TestCase):
             import subprocess
             import sys
             import tempfile
+            import time
             from unittest import mock
 
             case, test_file, program_name, root_name, pid_file_name = sys.argv[1:]
@@ -5624,6 +5632,22 @@ class PublicCommandTests(unittest.TestCase):
                     **kwargs,
                 )
                 processes.append(process)
+                # The shortened 0.05 s timeouts can beat a Python start; wait
+                # for the leader's handshake (3 s, under the 5 s outer cap).
+                deadline = time.monotonic() + 3
+                while True:
+                    try:
+                        json.loads(pid_file.read_text())
+                        break
+                    except (FileNotFoundError, ValueError):
+                        if time.monotonic() > deadline:
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            process.wait()
+                            raise RuntimeError("producer handshake missing")
+                        time.sleep(0.005)
                 return process
 
             def safe_fstat(descriptor):
@@ -5738,18 +5762,21 @@ class PublicCommandTests(unittest.TestCase):
                         timeout=5,
                         check=False,
                     )
-                    process_information = json.loads(pid_file.read_text())
-                    # A SIGKILLed group member can still be mid-exit for a few
-                    # milliseconds; 3 s is generous headroom for a loaded host.
-                    exit_deadline = time.monotonic() + 3
-                    while True:
-                        child_was_live = process_is_live(process_information["child"])
-                        if not child_was_live or time.monotonic() >= exit_deadline:
-                            break
-                        time.sleep(0.005)
+                    process_information = read_process_information(pid_file)
+                    if process_information is not None:
+                        # A SIGKILLed group member can still be mid-exit for a few
+                        # milliseconds; 3 s is generous headroom for a loaded host.
+                        exit_deadline = time.monotonic() + 3
+                        while True:
+                            child_was_live = process_is_live(
+                                process_information["child"]
+                            )
+                            if not child_was_live or time.monotonic() >= exit_deadline:
+                                break
+                            time.sleep(0.005)
                 finally:
-                    if process_information is None and pid_file.exists():
-                        process_information = json.loads(pid_file.read_text())
+                    if process_information is None:
+                        process_information = read_process_information(pid_file)
                     if (
                         process_information is not None
                         and process_is_live(process_information["child"])
@@ -5768,6 +5795,9 @@ class PublicCommandTests(unittest.TestCase):
                 self.assertEqual("", completed.stderr)
                 self.assertNotIn("synthetic-secret-canary", completed.stdout)
                 self.assertEqual(0, completed.returncode)
+                self.assertIsNotNone(
+                    process_information, "producer wrote no pid file"
+                )
                 report = json.loads(completed.stdout)
                 self.assertEqual(expected, report["result"])
                 self.assertTrue(report["direct_child_reaped"])
