@@ -108,7 +108,9 @@ group_shell_bindings() {
   check_shell_syntax
   zsh -f tests/claude-display2-sway.zsh
   zsh -f tests/claude-skill-sync.zsh
-  zsh -f tests/public-agent-skills.zsh
+  # The suite runs the skills' Python tests. Bytecode written under the checkout
+  # would fail the privacy scan later in this group.
+  PYTHONDONTWRITEBYTECODE=1 zsh -f tests/public-agent-skills.zsh
   zsh -f tests/codex-firecrawl-axi-rules.zsh
   zsh -f tests/platform-portability.zsh
   zsh -f tests/container-runtime-bindings.zsh
