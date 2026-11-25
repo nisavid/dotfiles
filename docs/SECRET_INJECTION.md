@@ -819,9 +819,10 @@ keeps that sign-in on the host in its own credentials file, outside this
 repository, so a new host, or one that lost that file, needs it again. Until the
 sign-in, Claude Code has no Context7 tools from a server; the `ctx7` command is
 not affected. The plugin's tools carry the plugin's prefix rather than
-`mcp__context7__`. Codex, Cursor, and OpenCode reach the same remote server;
-the sections below describe each route. The Codex route builds on the policy
-for Codex's MCP entries, described next.
+`mcp__context7__`. Codex and OpenCode reach the same remote server, and Cursor
+runs a local server through `secret-exec`; the sections below describe each
+route. The Codex route builds on the policy for Codex's MCP entries, described
+next.
 
 ## Codex MCP entries
 
@@ -908,25 +909,51 @@ key by name, and no `context7-mcp` process.
 ## Cursor MCP route
 
 Cursor reads `~/.cursor/mcp.json`, which holds servers the dotfiles do not
-own. A modifier sets only its `context7` entry, to Context7's remote server at
-its OAuth address, `https://mcp.context7.com/mcp/oauth`, with `url` alone. It
-removes `command`, `args`, `type`, `auth`, `env`, `envFile`, `env_vars`,
-`headers`, `http_headers`, and `bearer_token_env_var` from that entry and keeps
-its other metadata, such as `timeout`. Cursor's configuration offers no command
-that could supply the key: a header is a literal, which would put the key in
-the file, or `${env:NAME}`, which would put it in Cursor's environment. Cursor
-therefore signs in with OAuth and registers itself as a client, and the
-`context7` profile is not involved. Every other entry and setting passes
-through unchanged, including Cursor's Firecrawl entry, which this binding does
-not manage. A missing or empty file gains only the managed entry; a file that
-is not one JSON document fails the apply and leaves the file as it was.
+own. A modifier sets only its `context7` entry, to the same `secret-exec`
+launcher the Claude Code binding used before dotfiles#521: `command` is
+`~/.local/bin/secret-exec`, and `args` are `context7`, `--`, `npx`, `-y`, and
+`@upstash/context7-mcp@3.2.4`. That starts the pinned local Context7 server
+under the existing `context7` profile. `secret-exec` resolves the profile and
+passes the key to that server alone, so the key reaches neither `mcp.json` nor
+Cursor's environment, and no new secret is involved. The modifier removes
+`type`, `url`, `auth`, `env`, `envFile`, `env_vars`, `headers`,
+`http_headers`, and `bearer_token_env_var` from the entry and keeps its other
+metadata, such as `timeout`. Every other entry and setting passes through
+unchanged, including Cursor's Firecrawl entry, which this binding does not
+manage. A missing or empty file gains only the managed entry; a file that is
+not one JSON document fails the apply and leaves the file as it was.
 
-The sign-in is the owner's step after the apply: from Cursor's MCP settings,
-and with `agent mcp login context7` for the command-line agent. Cursor keeps it
-on the host, outside this repository, so a new host needs it again. Until the
-sign-in, Cursor has no Context7 tools from a server. If the sign-in does not
-complete, or does not last through a restart of Cursor, Cursor goes back to the
-local binding in a later change (dotfiles#522).
+The entry is local because Cursor's remote route kept its sign-in per
+workspace. Dotfiles#530 had moved Cursor to Context7's remote OAuth address,
+`https://mcp.context7.com/mcp/oauth`; the command-line agent's sign-in then
+reached only the workspace that was signed in (observed on the host on
+2026-11-24, dotfiles#522). The owner chose on 2026-11-25 to return to the local
+binding (dotfiles#573). The local server needs no sign-in, so no OAuth step is
+needed in each workspace. Cursor also keeps a separate per-workspace approval of
+an MCP server (below); whether that approval appears for the local entry has
+not been observed, so whether the owner has any step after the apply is decided
+by the acceptance run in dotfiles#573.
+
+The following were observed on the host with the earlier remote entry; the
+Cursor app itself has not been observed. The first two are expected to hold for
+the local entry as well, but that has not been established: in particular,
+whether a never-used workspace shows `needs approval` for the local server is
+open, and the acceptance run after the apply (dotfiles#573) says.
+
+- Cursor keeps its approval of an MCP server and its MCP sign-in in two
+  separate files under each workspace's project folder, so `needs approval` and
+  `requires_authentication` are distinct states (observed 2026-11-25 with Cursor
+  agent 2026.11.22, dotfiles#573). On 2026-11-24, `agent mcp list` showed
+  `needs approval` in the home folder (dotfiles#522); that this means the
+  workspace had not approved the server is inferred, because what the approval
+  IDs mean was not established.
+- In print mode the command-line agent refuses an MCP tool call unless the run
+  passes `--force` (observed 2026-11-24, dotfiles#522). `--approve-mcps` only
+  approves loading the server (dotfiles#522).
+- Cursor's marketplace plugin `context7-plugin` defines a second Context7
+  server, at Context7's address without a sign-in. This repository does not
+  manage Cursor's plugins. The host checks in dotfiles#522 and dotfiles#573
+  cover the managed entry.
 
 ## OpenCode Context7 route
 
