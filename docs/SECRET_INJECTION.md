@@ -923,13 +923,13 @@ is not one JSON document fails the apply and leaves the file as it was.
 
 The sign-in is the owner's step after the apply: from Cursor's MCP settings,
 and with `agent mcp login context7` for the command-line agent. Cursor keeps it
-on the host, outside this repository. As observed on 2026-11-24, it also keeps
-the sign-in per workspace, so a new host or a new workspace needs it again;
-that is the current behaviour, not a settled design, and finding a sign-in that
-covers every workspace is open work in dotfiles#573. Until the sign-in, Cursor
-has no Context7 tools from the managed server. If the sign-in does not
-complete, or does not last through a restart of Cursor, Cursor goes back to the
-local binding in a later change (dotfiles#522).
+on the host, outside this repository. As observed with the command-line agent
+on 2026-11-24, Cursor also keeps the sign-in per workspace, so a new host or a
+new workspace needs it again; that is the current behaviour, not a settled
+design, and finding a sign-in that covers every workspace is open work in
+dotfiles#573. Until the sign-in, Cursor has no Context7 tools from the managed
+server. If the sign-in does not complete, or does not last through a restart of
+Cursor, Cursor goes back to the local binding in a later change (dotfiles#522).
 
 Three limits were observed on the host on 2026-11-24; the Cursor app itself
 has not been observed:
