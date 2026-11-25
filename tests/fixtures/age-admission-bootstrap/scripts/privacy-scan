@@ -42,7 +42,9 @@ from privacy_age_envelopes import (
     read_regular_file,
 )
 
-ALLOWED_EMAILS = {"ivan@nisavid.io"}
+# SHA-256 digests of the casefolded permitted addresses, so the scanner
+# never names one.
+ALLOWED_EMAIL_SHA256S = {"90e5cfb7c20c4ace01878bf4fbcb6c745f0d77ac2065a12d73d0ec8b1700fcae"}
 ALLOWED_EMAIL_DOMAINS = {"example.com", "example.invalid"}
 ALLOWED_HOME_USERS = {"fixture", "runner", "test", "test-user"}
 AGE_INVENTORY_SKIPPED_DIRECTORIES = {".git"}
@@ -452,7 +454,8 @@ def public_path_label(
     elif MAC_ADDRESS.search(relative):
         rule = "mac-address-filename"
     elif any(
-        match.group(0).casefold() not in ALLOWED_EMAILS
+        hashlib.sha256(match.group(0).casefold().encode()).hexdigest()
+        not in ALLOWED_EMAIL_SHA256S
         and match.group(1).casefold() not in ALLOWED_EMAIL_DOMAINS
         for match in EMAIL.finditer(relative)
     ):
@@ -497,7 +500,8 @@ def sensitive_text_rules(
         rules.append("mac-address")
     if any(
         not (match.group(0).casefold().startswith("git@") and "ssh://git@" in folded)
-        and match.group(0).casefold() not in ALLOWED_EMAILS
+        and hashlib.sha256(match.group(0).casefold().encode()).hexdigest()
+        not in ALLOWED_EMAIL_SHA256S
         and match.group(1).casefold() not in ALLOWED_EMAIL_DOMAINS
         for match in EMAIL.finditer(value)
     ):
