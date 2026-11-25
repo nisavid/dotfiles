@@ -17,6 +17,7 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from tests.age_tooling_test_support import require_age_tooling_or_skip
 
@@ -179,6 +180,16 @@ def trusted_path_ancestors_supported(path: Path) -> bool:
         if parent == current:
             return True
         current = parent
+
+
+TRUSTED_ANCESTORS_UNSUPPORTED = (
+    "trusted-wrapper ancestors are UID-mapped in this sandbox"
+)
+
+
+def require_trusted_path_ancestors_or_skip(path: Path) -> None:
+    if not trusted_path_ancestors_supported(path):
+        require_age_tooling_or_skip(TRUSTED_ANCESTORS_UNSUPPORTED)
 
 
 class ProvisioningInputs:
@@ -1983,6 +1994,33 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         return temporary, ProvisioningInputs(
             root, real_local_tools=real_local_tools, primary=primary
         )
+
+    def test_unsupported_trusted_ancestors_fail_required_runs_and_skip_others(
+        self,
+    ) -> None:
+        def raised() -> BaseException | None:
+            try:
+                require_trusted_path_ancestors_or_skip(Path("/"))
+            except BaseException as error:
+                return error
+            return None
+
+        optional_environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key != "REQUIRE_AGE_TOOLING"
+        }
+        with mock.patch(
+            f"{__name__}.trusted_path_ancestors_supported", return_value=False
+        ):
+            with mock.patch.dict(os.environ, {"REQUIRE_AGE_TOOLING": "1"}):
+                required = raised()
+            with mock.patch.dict(os.environ, optional_environment, clear=True):
+                optional = raised()
+        self.assertIsInstance(required, AssertionError)
+        self.assertIsInstance(optional, unittest.SkipTest)
+        self.assertEqual(str(required), TRUSTED_ANCESTORS_UNSUPPORTED)
+        self.assertEqual(str(optional), TRUSTED_ANCESTORS_UNSUPPORTED)
 
     def assert_terminal_disposition(
         self, inputs: ProvisioningInputs, outcome: str
@@ -5724,10 +5762,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                 ambient.write_text("#!/bin/sh\nexit 77\n")
                 ambient.chmod(0o755)
         inputs.support_bin = secure_support
-        if not trusted_path_ancestors_supported(inputs.root):
-            require_age_tooling_or_skip(
-                "trusted-wrapper ancestors are UID-mapped in this sandbox"
-            )
+        require_trusted_path_ancestors_or_skip(inputs.root)
 
         result = inputs.run(timeout=180)
 
