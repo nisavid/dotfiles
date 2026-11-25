@@ -1112,7 +1112,7 @@ Later steps do not begin until the named evidence passes.
 
 | Path | Replacement |
 | --- | --- |
-| `.scratch/global-agent-equipment/CONTEXT.md` | `docs/agent-equipment/CONTEXT.md` |
+| `.scratch/global-agent-equipment/CONTEXT.md` | `docs/agent-equipment/GLOSSARY.md` |
 | `.scratch/global-agent-equipment/map.md` | This handoff plus Issues #44–#61 and the durable architecture documents |
 
 ### Retired only during the separately authorized migration

@@ -15,11 +15,11 @@ Multi-context repo. Contexts live under `docs/<context>/` rather than `src/<cont
 
 ```text
 /
-├── GLOSSARY-MAP.md                     ← names each context, links its glossary
+├── GLOSSARY-MAP.md                    ← names each context, links its glossary
 ├── docs/
 │   ├── adr/                           ← system-wide decisions (created lazily)
-│   ├── agent-equipment/GLOSSARY.md     ← context glossary
-│   └── secret-injection/GLOSSARY.md    ← context glossary
+│   ├── agent-equipment/GLOSSARY.md    ← context glossary
+│   └── secret-injection/GLOSSARY.md   ← context glossary
 └── home/                              ← chezmoi source state
 ```
 
