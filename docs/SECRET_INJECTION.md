@@ -928,22 +928,28 @@ workspace. Dotfiles#530 had moved Cursor to Context7's remote OAuth address,
 `https://mcp.context7.com/mcp/oauth`; the command-line agent's sign-in then
 reached only the workspace that was signed in (observed on the host on
 2026-11-24, dotfiles#522). The owner chose on 2026-11-25 to return to the local
-binding (dotfiles#573). It needs no sign-in and no per-workspace step, so the
-server is available in every workspace, and the owner has nothing to do after
-the apply.
+binding (dotfiles#573). The local server needs no sign-in, so no OAuth step is
+needed in each workspace. Cursor also keeps a separate per-workspace approval of
+an MCP server (below); whether that approval appears for the local entry has
+not been observed, so whether the owner has any step after the apply is decided
+by the acceptance run in dotfiles#573.
 
-The following were observed on the host on 2026-11-24, with the earlier remote
-entry; the Cursor app itself has not been observed. The first two are
-expected to hold for the local entry as well. That is not established yet: in
-particular, whether a never-used workspace shows `needs approval` for the local
-server is open, and the acceptance run after the apply (dotfiles#573) says.
+The following were observed on the host with the earlier remote entry; the
+Cursor app itself has not been observed. The first two are expected to hold for
+the local entry as well. That is not established yet: in particular, whether a
+never-used workspace shows `needs approval` for the local server is open, and
+the acceptance run after the apply (dotfiles#573) says.
 
-- Cursor keeps its approval of an MCP server per workspace, apart from any
-  sign-in. `agent mcp list` showed `needs approval` in a workspace that had not
-  approved the server (dotfiles#522).
+- Cursor keeps its approval of an MCP server and its MCP sign-in in two
+  separate files under each workspace's project folder, so `needs approval` and
+  `requires_authentication` are distinct states (observed 2026-11-25 with Cursor
+  agent 2026.11.22, dotfiles#573). On 2026-11-24, `agent mcp list` showed
+  `needs approval` in the home folder (dotfiles#522); that this means the
+  workspace had not approved the server is inferred, because what the approval
+  IDs mean was not established.
 - In print mode the command-line agent refuses an MCP tool call unless the run
-  passes `--force` (dotfiles#522). `--approve-mcps` only approves loading the
-  server (dotfiles#568).
+  passes `--force` (observed 2026-11-24, dotfiles#522). `--approve-mcps` only
+  approves loading the server (dotfiles#522).
 - Cursor's marketplace plugin `context7-plugin` defines a second Context7
   server, at Context7's address without a sign-in. This repository does not
   manage Cursor's plugins. The managed entry is the one the host checks
