@@ -934,8 +934,9 @@ the apply.
 
 The following were observed on the host on 2026-11-24, with the earlier remote
 entry; the Cursor app itself has not been observed. The first two are
-expected to hold for the local entry as well, and the check after the apply
-(dotfiles#573) is where that shows.
+expected to hold for the local entry as well. That is not established yet: in
+particular, whether a never-used workspace shows `needs approval` for the local
+server is open, and the acceptance run after the apply (dotfiles#573) says.
 
 - Cursor keeps its approval of an MCP server per workspace, apart from any
   sign-in. `agent mcp list` showed `needs approval` in a workspace that had not
