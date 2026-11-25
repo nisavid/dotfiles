@@ -861,6 +861,9 @@ print -rn -- '{"mcpServers":{"notebooks":{"command":"uvx"}},"unrelated":"preserv
 print -rn -- '{"unrelated":"preserved"}' | "$cursor_modifier" | jq -e '
   .unrelated == "preserved" and (.mcpServers | keys) == ["context7"]
 ' > /dev/null || fail 'Cursor config without an mcpServers object must gain the wrapped entry'
+print -rn -- '{"mcpServers":null,"unrelated":"preserved"}' | "$cursor_modifier" | jq -e '
+  .unrelated == "preserved" and (.mcpServers | keys) == ["context7"]
+' > /dev/null || fail 'Cursor config with a null mcpServers must gain only the wrapped entry'
 "$cursor_modifier" < /dev/null | jq -e '(.mcpServers | keys) == ["context7"]' > /dev/null ||
   fail 'an empty Cursor config must gain only the wrapped entry'
 

@@ -936,9 +936,9 @@ by the acceptance run in dotfiles#573.
 
 The following were observed on the host with the earlier remote entry; the
 Cursor app itself has not been observed. The first two are expected to hold for
-the local entry as well. That is not established yet: in particular, whether a
-never-used workspace shows `needs approval` for the local server is open, and
-the acceptance run after the apply (dotfiles#573) says.
+the local entry as well, but that has not been established: in particular,
+whether a never-used workspace shows `needs approval` for the local server is
+open, and the acceptance run after the apply (dotfiles#573) says.
 
 - Cursor keeps its approval of an MCP server and its MCP sign-in in two
   separate files under each workspace's project folder, so `needs approval` and
@@ -952,8 +952,8 @@ the acceptance run after the apply (dotfiles#573) says.
   approves loading the server (dotfiles#522).
 - Cursor's marketplace plugin `context7-plugin` defines a second Context7
   server, at Context7's address without a sign-in. This repository does not
-  manage Cursor's plugins. The managed entry is the one the host checks
-  (dotfiles#522, dotfiles#573) cover.
+  manage Cursor's plugins. The host checks in dotfiles#522 and dotfiles#573
+  cover the managed entry.
 
 ## OpenCode Context7 route
 
