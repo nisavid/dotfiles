@@ -8,7 +8,7 @@ default = "personal"
 [gitIdentity.selection.byHostname]
 
 [gitIdentity.identities.personal]
-email = "ivan@nisavid.io"
+email = "ivan@example.invalid"
 editorTarget = "cursor"
 branchPrefix = "nisavid/"
 noTracking = false

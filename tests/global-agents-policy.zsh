@@ -504,7 +504,7 @@ identity_required=(
 )
 if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   identity_required+=(
-    "Ivan's default Git identity is \`Ivan D Vasin <ivan@nisavid.io>\`, his GitHub account is \`nisavid\`, and his default branch prefix is \`nisavid/\`."
+    "Ivan's default Git identity is \`Ivan D Vasin <ivan@example.invalid>\`, his GitHub account is \`nisavid\`, and his default branch prefix is \`nisavid/\`."
     'make GitHub mutations through `nisavid`, and prefix new branches with `nisavid/`.'
   )
 fi
@@ -791,7 +791,6 @@ codex_typography=$(grep -F -- "$typography_lead" "$rendered")
   fail "Claude typography rule is not its heading plus the paragraph the Codex policy carries"
 
 repo_agents_forbidden=(
-  'ivan@nisavid.io'
   'Ivan D Vasin'
   '`ivan/`'
   '`nisavid/`'
@@ -803,6 +802,9 @@ repo_agents_forbidden=(
 for phrase in $repo_agents_forbidden; do
   ! grep -Fiq -- "$phrase" "$repo_root/AGENTS.md" || fail "repository AGENTS.md carries personal Git policy"
 done
+# The personal address is never named, so no email address belongs in the file.
+! grep -Eq '[[:alnum:]._%+-]+@[[:alnum:]-]+\.[[:alnum:].-]+' "$repo_root/AGENTS.md" ||
+  fail "repository AGENTS.md carries an email address"
 
 development_line=$(grep -n '^## Development Work$' "$rendered" | cut -d: -f1)
 git_policy_line=$(grep -n '^## Git Checkpoints And Publication$' "$rendered" | cut -d: -f1)
