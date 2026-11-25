@@ -1147,6 +1147,29 @@ assert_invalid_anthropic_fixture 'a locator named for another credential' \
 assert_invalid_anthropic_fixture 'a name-form locator whose item title holds a slash' \
   'invalid Anthropic vault locator' \
   's|pass://fixture-vault/item-k/password|pass://fixture-vault/title/with-slash/password|'
+# Each guard is anchored. Without the anchors, a name or binding could carry a
+# path prefix, or a second line that injects another mapping into the profile.
+assert_invalid_anthropic_fixture 'a profile name with a parent-directory prefix' \
+  'invalid account-qualified Anthropic profile name' \
+  's|"anthropic-experiments.fixture-at-example.org"|"../../x/anthropic-experiments.fixture-at-example.org"|'
+assert_invalid_anthropic_fixture 'a profile name with a path prefix' \
+  'invalid account-qualified Anthropic profile name' \
+  's|"anthropic-experiments.fixture-at-example.org"|"x/anthropic-experiments.fixture-at-example.org"|'
+assert_invalid_anthropic_fixture 'a profile name with a trailing line' \
+  'invalid account-qualified Anthropic profile name' \
+  's|"anthropic-experiments.fixture-at-example.org"|"anthropic-experiments.fixture-at-example.org\\nx"|'
+assert_invalid_anthropic_fixture 'a binding with a second mapping line after it' \
+  'invalid Anthropic vault locator' \
+  's|"ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password"|"ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password\\nOTHER_KEY=pass://x/y/z"|'
+assert_invalid_anthropic_fixture 'a binding with a mapping line before it' \
+  'invalid Anthropic vault locator' \
+  's|"ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password"|"OTHER_KEY=pass://x/y/z\\nANTHROPIC_API_KEY=pass://fixture-vault/item-k/password"|'
+assert_invalid_anthropic_fixture 'a share segment that contains a space' \
+  'invalid Anthropic vault locator' \
+  's|pass://fixture-vault/item-k/password|pass://fixture vault/item-k/password|'
+assert_invalid_anthropic_fixture 'an item segment that contains a space' \
+  'invalid Anthropic vault locator' \
+  's|pass://fixture-vault/item-k/password|pass://fixture-vault/item k/password|'
 # The ID form carries URL-safe base64, including padding and a leading dash.
 sed 's|pass://fixture-vault/item-k/password|pass://-Aa0_zZ9-==/-Bb1_yY8-==/password|' \
   "$anthropic_fixture_config" > "$anthropic_fixture/config.toml"
