@@ -137,6 +137,9 @@ BOOTSTRAP_REVIEWED_SIGNER_ENTRY = (
 # Pin every bootstrap authority blob that is not self-referential. The
 # remaining gate blob is covered by the independent owner-side tree digest in
 # the bootstrap runbook because embedding its own object ID would be circular.
+# The scanner entry is the revision's blob with its permitted-address literal
+# and the two comparisons against it changed to use the address's digest
+# (nisavid/dotfiles#482); every other entry is the revision's own blob.
 BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/admit-age-envelopes": (
         b"blob",
@@ -146,7 +149,7 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/privacy-scan": (
         b"blob",
         b"100755",
-        b"612a2ae9acde883d3f2b5e92ce8cefc4fcf0d1bf",
+        b"4c760203e1522f4cfdefd621e3736818c7cc9913",
     ),
     b"scripts/create-age-admission-receipt": (
         b"blob",
