@@ -93,6 +93,7 @@ check_shell_syntax() {
     tests/proton-pass-session.zsh \
     tests/proton-pass-startup-bindings.zsh \
     tests/proton-pass-startup.zsh \
+    tests/public-agent-skills.zsh \
     tests/secret-command-shims.zsh \
     tests/secret-exec-migrate.zsh \
     tests/secret-exec.zsh \
@@ -107,6 +108,7 @@ group_shell_bindings() {
   check_shell_syntax
   zsh -f tests/claude-display2-sway.zsh
   zsh -f tests/claude-skill-sync.zsh
+  zsh -f tests/public-agent-skills.zsh
   zsh -f tests/codex-firecrawl-axi-rules.zsh
   zsh -f tests/platform-portability.zsh
   zsh -f tests/container-runtime-bindings.zsh
