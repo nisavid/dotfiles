@@ -22,11 +22,9 @@ set -euo pipefail
 # - each oneCopyPerSkill.localWins name is true as
 #   <name>@claude-plugins-official, even where that entry exists as false, and
 #   false as <name>@inline and <name>@synced, so the local copy is the one that
-#   loads. claude-plugins.toml gives each name's reason: the account copies of
-#   cloudflare and skill-creator match the local ones; Claude Code uses the
-#   official context7 plugin and its remote server (dotfiles#521), and an
-#   account copy would start a second Context7 server that needs its own
-#   sign-in;
+#   loads. claude-plugins.toml gives the reason for context7: Claude Code uses
+#   the official plugin and its remote server (dotfiles#521), and an account
+#   copy would start a second Context7 server that needs its own sign-in;
 # - each oneCopyPerSkill.off entry is false, and an existing oneCopyPerSkill.on
 #   entry is true;
 # - github and greptile at claude-plugins-official are false;

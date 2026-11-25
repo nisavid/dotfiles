@@ -113,8 +113,7 @@ explicitlyOff = [
 [claudePlugins.oneCopyPerSkill]
 # The local copy wins for these plugins: <name>@claude-plugins-official is true,
 # even where the entry exists as false, and <name>@inline and <name>@synced are
-# false. The account copies of cloudflare and skill-creator match the local
-# ones. context7: the owner chose the official plugin and its remote server for
+# false. context7: the owner chose the official plugin and its remote server for
 # Claude Code (dotfiles#521), and an account copy would start a second Context7
 # server that needs its own sign-in.
 localWins = [
