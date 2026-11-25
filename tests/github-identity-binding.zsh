@@ -345,8 +345,11 @@ elif command -v setfacl >/dev/null &&
   [[ $(run_launcher) == target-ran ]] ||
     fail 'a read-only POSIX ACL on a checker ancestor must stay trusted'
   setfacl -b "$checker_ancestor"
+  print -u2 -r -- 'ACL branch: ran'
 elif [[ ${REQUIRE_POSIX_ACL_CHECKS:-} == 1 ]]; then
   fail 'required CI needs a working setfacl to check POSIX ACL grants'
+else
+  print -u2 -r -- 'ACL branch: skipped (setfacl unusable)'
 fi
 
 chmod 720 "$homebrew_bin/gh"
