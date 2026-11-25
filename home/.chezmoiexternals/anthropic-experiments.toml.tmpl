@@ -1,0 +1,23 @@
+{{- $catalog := dict -}}
+{{- $fixture := default (dict) (get . "secretExec") -}}
+{{- $enrollment := lstat (joinPath .chezmoi.destDir ".config/secret-exec/enroll-anthropic-experiments") -}}
+{{- if get $fixture "publicFixture" -}}
+{{- $catalog = $fixture -}}
+{{- else if and $enrollment (eq $enrollment.type "file") (eq $enrollment.size 0) -}}
+{{- $catalog = include ".private-secret-exec.toml.age" | decrypt | fromToml -}}
+{{- end -}}
+{{- with (get $catalog "anthropicExperiments") -}}
+{{- if not (regexMatch "^anthropic-experiments[.][A-Za-z0-9][A-Za-z0-9_.-]*$" .name) -}}
+{{- fail "invalid account-qualified Anthropic profile name" -}}
+{{- end -}}
+{{- if not (regexMatch "^ANTHROPIC_API_KEY=pass://[^/[:space:]]+/[^/[:space:]]+/password$" .binding) -}}
+{{- fail "invalid Anthropic vault locator" -}}
+{{- end -}}
+# A local file external lets both the filename and its locator come from the private catalog.
+[{{ printf ".config/secret-exec/profiles/%s.env" .name | quote }}]
+type = "file"
+private = true
+url = "file:///dev/null"
+filter.command = "/usr/bin/printf"
+filter.args = ["%s", {{ .binding | quote }}]
+{{- end }}

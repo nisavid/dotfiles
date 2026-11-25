@@ -77,6 +77,7 @@ case $1 in
       pass://fixture-store/member/token) fixture_value=member-canary ;;
       pass://fixture-store/other/token) fixture_value=other-canary ;;
       pass://fixture-store/openai/password) fixture_value=openai-placeholder ;;
+      pass://fixture-store/anthropic/password) fixture_value=anthropic-placeholder ;;
       *) exit 67 ;;
     esac
     [[ ${PROTON_PASS_AGENT_REASON:-} == 'secret-exec credential resolution' ]] || exit 68
@@ -583,5 +584,49 @@ output=$(OPENAI_API_KEY=ambient-placeholder SECRET_EXEC_INJECTED_PROFILES=member
 [[ $output == 'marker=member openai=unset member=inherited-member' ]] ||
   fail "another profile's reuse must drop an inherited OpenAI key: $output"
 rm -- "$profile_dir/$openai_profile.env" "$real_bin/tool-a" "$real_bin/direct-tool"
+
+# The Anthropic experiments key follows the OpenAI rules. `claude` is a command
+# shim, so a launch through it, named or by the shim's own path, relaunches under
+# its own profile and drops the key. Naming the real executable's absolute path
+# is the bypass, and once the profile is enrolled ANTHROPIC_API_KEY is managed,
+# so every other profile's launch drops an inherited value.
+unset SECRET_EXEC_INJECTED_PROFILES SECRET_EXEC_FALLBACK_PROFILES
+anthropic_profile=anthropic-experiments.fixture-at-example.org
+print -r -- 'ANTHROPIC_API_KEY=pass://fixture-store/anthropic/password' \
+  > "$profile_dir/$anthropic_profile.env"
+chmod 600 "$profile_dir/$anthropic_profile.env"
+print -r -- 'claude=member?' > "$config_dir/commands.env"
+ln -s ../secret-exec-command "$shim_dir/claude"
+cat > "$real_bin/claude" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "marker=${SECRET_EXEC_INJECTED_PROFILES-unset}" \
+  "anthropic=${ANTHROPIC_API_KEY-unset} member=${MEMBER_TOKEN-unset}"
+EOF
+chmod +x "$real_bin/claude"
+cp "$real_bin/claude" "$real_bin/direct-tool"
+
+output=$("$launcher" "$anthropic_profile" -- direct-tool)
+[[ $output == "marker=$anthropic_profile anthropic=anthropic-placeholder member=unset" ]] ||
+  fail "the Anthropic profile must inject its key into a direct child: $output"
+output=$("$launcher" "$anthropic_profile" -- zsh -fc direct-tool)
+[[ $output == "marker=$anthropic_profile anthropic=anthropic-placeholder member=unset" ]] ||
+  fail "the Anthropic key must reach a descendant that bypasses shims: $output"
+output=$("$launcher" "$anthropic_profile" -- claude)
+[[ $output == 'marker=member anthropic=unset member=member-canary' ]] ||
+  fail "a claude launch through its shim must drop the Anthropic key: $output"
+output=$("$launcher" "$anthropic_profile" -- "$shim_dir/claude")
+[[ $output == 'marker=member anthropic=unset member=member-canary' ]] ||
+  fail "the claude shim's own absolute path must relaunch and drop the Anthropic key: $output"
+output=$("$launcher" "$anthropic_profile" -- "$real_bin/claude")
+[[ $output == "marker=$anthropic_profile anthropic=anthropic-placeholder member=unset" ]] ||
+  fail "the real claude executable's absolute path must keep the Anthropic key: $output"
+output=$(ANTHROPIC_API_KEY=ambient-placeholder "$launcher" member -- direct-tool)
+[[ $output == 'marker=member anthropic=unset member=member-canary' ]] ||
+  fail "another profile's launch must drop an inherited Anthropic key: $output"
+output=$(ANTHROPIC_API_KEY=ambient-placeholder SECRET_EXEC_INJECTED_PROFILES=member \
+  MEMBER_TOKEN=inherited-member "$launcher" member -- direct-tool)
+[[ $output == 'marker=member anthropic=unset member=inherited-member' ]] ||
+  fail "another profile's reuse must drop an inherited Anthropic key: $output"
+rm -- "$profile_dir/$anthropic_profile.env" "$real_bin/claude" "$real_bin/direct-tool" "$shim_dir/claude"
 
 print -r -- 'secret command shim checks passed'

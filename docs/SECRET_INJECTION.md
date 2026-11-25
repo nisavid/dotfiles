@@ -41,6 +41,40 @@ shim directory.
 On an enrolled destination, `OPENAI_API_KEY` is a managed name: a launch of any
 other profile removes an inherited value, as it does for every managed name.
 
+### Anthropic experiments
+
+This profile works like the OpenAI one and supplies `ANTHROPIC_API_KEY` to
+the command a trial launches. It is not set in `commands.env` or in any shared
+profile. To enroll a destination that has the catalog's age identity, create
+the empty marker:
+
+```sh
+install -m 600 /dev/null "$HOME/.config/secret-exec/enroll-anthropic-experiments"
+```
+
+`chezmoi managed "$HOME/.config/secret-exec/profiles"` lists the account-qualified
+profile as `anthropic-experiments.<account>.env`. Apply that file, then use its
+name without `.env` in `secret-exec <profile> -- <command>`. On unenrolled
+destinations, chezmoi skips this profile.
+
+The catalog locator must name the vault item by its share ID and item ID,
+`pass://<share-id>/<item-id>/password`. The name form is unusable when the
+item's title contains a slash, because the provider CLI splits the path there.
+
+`claude` is a command shim, so `secret-exec anthropic-experiments.<account> --
+claude ...` does not give Claude Code the key. The shim relaunches under its own
+mapped profile (see [Command shims](#command-shims)), and that launch removes
+every managed name its profile does not set. The shim's own path, which
+`command -v claude` prints, relaunches the same way. To give Claude Code the key,
+name the real executable's absolute path outside the shim directory, for
+example the entry of `whence -a claude` that is not in the shim directory.
+Anything else the launched command starts keeps the key, except processes that
+pass through a shim or another profile's launch.
+
+On an enrolled destination, `ANTHROPIC_API_KEY` is a managed name: a launch of
+any other profile removes an inherited value, so an ordinary `claude` session
+cannot inherit the key.
+
 ### Host-bound GitHub profiles
 
 The GitHub consumer is selected from an encrypted host binding. Each supported

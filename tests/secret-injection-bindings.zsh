@@ -1096,6 +1096,120 @@ for marker_case in absent directory non-empty symlink fifo empty; do
 done
 cp "$openai_fixture_config" "$profile_fixture/config.toml"
 
+# The Anthropic experiments profile follows the OpenAI one: an account-qualified
+# name, one locator in the ID form, and an enrollment marker. A vault item whose
+# title holds a slash cannot be named, so only the two-segment ID form is valid.
+anthropic_fixture=$test_dir/anthropic-profile
+anthropic_peers=$anthropic_fixture/source/dot_config/private_secret-exec/private_profiles
+mkdir -p "$anthropic_fixture/source/.chezmoiexternals" "$anthropic_fixture/dest" "$anthropic_peers"
+print -rn -- 'OTHER_KEY=secret-service://' > "$anthropic_peers/private_other.env"
+cp home/.chezmoiexternals/anthropic-experiments.toml.tmpl "$anthropic_fixture/source/.chezmoiexternals/"
+sed 's/^\[secretExec/[data.secretExec/' tests/fixtures/secret-exec-public.toml > "$anthropic_fixture/config.toml"
+anthropic_fixture_config=$anthropic_fixture/config.toml.orig
+cp "$anthropic_fixture/config.toml" "$anthropic_fixture_config"
+anthropic_chezmoi=(chezmoi --config "$anthropic_fixture/config.toml" -S "$anthropic_fixture/source"
+  -D "$anthropic_fixture/dest" --cache "$anthropic_fixture/cache" --persistent-state "$anthropic_fixture/state.boltdb")
+"${anthropic_chezmoi[@]}" apply
+python3 -I -S - "$anthropic_fixture/dest" <<'PYEOF'
+import stat
+import sys
+from pathlib import Path
+
+profiles = Path(sys.argv[1]) / ".config/secret-exec/profiles"
+target = profiles / "anthropic-experiments.fixture-at-example.org.env"
+assert {p.name for p in profiles.iterdir()} == {target.name, "other.env"}
+assert stat.S_IMODE(profiles.stat().st_mode) == 0o700
+assert stat.S_IMODE(target.stat().st_mode) == 0o600
+assert target.read_text() == "ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password"
+assert (profiles / "other.env").read_text() == "OTHER_KEY=secret-service://"
+PYEOF
+assert_invalid_anthropic_fixture() {
+  local description=$1 expected=$2 replacement=$3
+  sed "$replacement" "$anthropic_fixture_config" > "$anthropic_fixture/config.toml"
+  if "${anthropic_chezmoi[@]}" apply > /dev/null 2> "$anthropic_fixture/invalid.err"; then
+    fail "$description must fail before file creation"
+  fi
+  grep -Fq "$expected" "$anthropic_fixture/invalid.err" ||
+    fail "$description must fail with: $expected"
+}
+assert_invalid_anthropic_fixture 'a profile name with a path separator' \
+  'invalid account-qualified Anthropic profile name' \
+  's|anthropic-experiments.fixture-at-example.org|anthropic-experiments.bad/path|'
+assert_invalid_anthropic_fixture 'a profile name without an account' \
+  'invalid account-qualified Anthropic profile name' \
+  's/"anthropic-experiments.fixture-at-example.org"/"anthropic-experiments"/'
+assert_invalid_anthropic_fixture 'a raw value in place of a vault locator' \
+  'invalid Anthropic vault locator' \
+  's|"ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password"|"ANTHROPIC_API_KEY=not-a-real-key-placeholder"|'
+assert_invalid_anthropic_fixture 'a locator named for another credential' \
+  'invalid Anthropic vault locator' \
+  's|"ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password"|"OPENAI_API_KEY=pass://fixture-vault/item-k/password"|'
+assert_invalid_anthropic_fixture 'a name-form locator whose item title holds a slash' \
+  'invalid Anthropic vault locator' \
+  's|pass://fixture-vault/item-k/password|pass://fixture-vault/title/with-slash/password|'
+# Each guard is anchored. Without the anchors, a name or binding could carry a
+# path prefix, or a second line that injects another mapping into the profile.
+assert_invalid_anthropic_fixture 'a profile name with a parent-directory prefix' \
+  'invalid account-qualified Anthropic profile name' \
+  's|"anthropic-experiments.fixture-at-example.org"|"../../x/anthropic-experiments.fixture-at-example.org"|'
+assert_invalid_anthropic_fixture 'a profile name with a path prefix' \
+  'invalid account-qualified Anthropic profile name' \
+  's|"anthropic-experiments.fixture-at-example.org"|"x/anthropic-experiments.fixture-at-example.org"|'
+assert_invalid_anthropic_fixture 'a profile name with a trailing line' \
+  'invalid account-qualified Anthropic profile name' \
+  's|"anthropic-experiments.fixture-at-example.org"|"anthropic-experiments.fixture-at-example.org\\nx"|'
+assert_invalid_anthropic_fixture 'a binding with a second mapping line after it' \
+  'invalid Anthropic vault locator' \
+  's|"ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password"|"ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password\\nOTHER_KEY=pass://x/y/z"|'
+assert_invalid_anthropic_fixture 'a binding with a mapping line before it' \
+  'invalid Anthropic vault locator' \
+  's|"ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password"|"OTHER_KEY=pass://x/y/z\\nANTHROPIC_API_KEY=pass://fixture-vault/item-k/password"|'
+assert_invalid_anthropic_fixture 'a share segment that contains a space' \
+  'invalid Anthropic vault locator' \
+  's|pass://fixture-vault/item-k/password|pass://fixture vault/item-k/password|'
+assert_invalid_anthropic_fixture 'an item segment that contains a space' \
+  'invalid Anthropic vault locator' \
+  's|pass://fixture-vault/item-k/password|pass://fixture-vault/item k/password|'
+# The ID form carries URL-safe base64, including padding and a leading dash.
+sed 's|pass://fixture-vault/item-k/password|pass://-Aa0_zZ9-==/-Bb1_yY8-==/password|' \
+  "$anthropic_fixture_config" > "$anthropic_fixture/config.toml"
+"${anthropic_chezmoi[@]}" apply ||
+  fail 'a share-ID and item-ID locator must be accepted'
+[[ $(<"$anthropic_fixture/dest/.config/secret-exec/profiles/anthropic-experiments.fixture-at-example.org.env") == \
+  'ANTHROPIC_API_KEY=pass://-Aa0_zZ9-==/-Bb1_yY8-==/password' ]] ||
+  fail 'the ID-form locator must reach the profile file unchanged'
+
+# Only an empty regular marker enrolls a destination, as for the OpenAI profile.
+# This source holds no catalog, so an enrolled apply fails on the missing include.
+sed '/^publicFixture = true$/d' "$anthropic_fixture_config" > "$anthropic_fixture/config.toml"
+for marker_case in absent directory non-empty symlink fifo empty; do
+  marker_dest=$anthropic_fixture/marker-$marker_case
+  marker=$marker_dest/.config/secret-exec/enroll-anthropic-experiments
+  mkdir -p "${marker:h}"
+  case $marker_case in
+    directory) mkdir "$marker" ;;
+    non-empty) print -r -- enrolled > "$marker" ;;
+    symlink) : > "$marker_dest/empty"; ln -s ../../empty "$marker" ;;
+    fifo) mkfifo "$marker" ;;
+    empty) : > "$marker" ;;
+  esac
+  marker_chezmoi=(chezmoi --config "$anthropic_fixture/config.toml" -S "$anthropic_fixture/source"
+    -D "$marker_dest" --cache "$marker_dest.cache" --persistent-state "$marker_dest.boltdb")
+  if [[ $marker_case == empty ]]; then
+    if "${marker_chezmoi[@]}" apply > /dev/null 2> "$marker_dest.err"; then
+      fail 'an empty regular Anthropic enrollment marker must read the private catalog'
+    fi
+    grep -Fq 'include ".private-secret-exec.toml.age"' "$marker_dest.err" ||
+      fail 'an empty regular Anthropic enrollment marker must fail only on the missing catalog'
+  else
+    "${marker_chezmoi[@]}" apply ||
+      fail "a $marker_case Anthropic enrollment marker must leave the destination unenrolled"
+    [[ -z $(print -l "$marker_dest"/.config/secret-exec/profiles/anthropic-experiments*(N)) ]] ||
+      fail "a $marker_case Anthropic enrollment marker must not create the Anthropic profile"
+  fi
+  [[ $marker_case != fifo ]] || rm -- "$marker"
+done
+
 render_github_profile() {
   local host=$1
   local target=$2
