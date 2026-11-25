@@ -5739,7 +5739,14 @@ class PublicCommandTests(unittest.TestCase):
                         check=False,
                     )
                     process_information = json.loads(pid_file.read_text())
-                    child_was_live = process_is_live(process_information["child"])
+                    # A SIGKILLed group member can still be mid-exit for a few
+                    # milliseconds; 3 s is generous headroom for a loaded host.
+                    exit_deadline = time.monotonic() + 3
+                    while True:
+                        child_was_live = process_is_live(process_information["child"])
+                        if not child_was_live or time.monotonic() >= exit_deadline:
+                            break
+                        time.sleep(0.005)
                 finally:
                     if process_information is None and pid_file.exists():
                         process_information = json.loads(pid_file.read_text())
