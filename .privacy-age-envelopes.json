@@ -39,7 +39,7 @@
     },
     {
       "path": "home/.private-secret-exec.toml.age",
-      "sha256": "sha256:3d252cf04250e18a5f210b057ac48a2e9e84196aafedd5214b693bb2a89dd7e9"
+      "sha256": "sha256:df0ed386b1137e2befa43d3407d86821da1fe42b8850c62018302ff4195945d6"
     }
   ]
 }

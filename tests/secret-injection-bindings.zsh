@@ -1022,7 +1022,7 @@ peer_profiles=$profile_fixture/source/dot_config/private_secret-exec/private_pro
 mkdir -p "$profile_fixture/source/.chezmoiexternals" "$profile_fixture/dest" "$peer_profiles"
 print -rn -- 'OTHER_KEY=secret-service://' > "$peer_profiles/private_other.env"
 cp home/.chezmoiexternals/openai-experiments.toml.tmpl "$profile_fixture/source/.chezmoiexternals/"
-sed 's/^\[secretExec/[data.secretExec/' tests/fixtures/secret-exec-public.toml > "$profile_fixture/config.toml"
+sed -E 's/^(\[{1,2})secretExec/\1data.secretExec/' tests/fixtures/secret-exec-public.toml > "$profile_fixture/config.toml"
 profile_chezmoi=(chezmoi --config "$profile_fixture/config.toml" -S "$profile_fixture/source"
   -D "$profile_fixture/dest" --cache "$profile_fixture/cache" --persistent-state "$profile_fixture/state.boltdb")
 "${profile_chezmoi[@]}" apply
@@ -1096,15 +1096,13 @@ for marker_case in absent directory non-empty symlink fifo empty; do
 done
 cp "$openai_fixture_config" "$profile_fixture/config.toml"
 
-# The Anthropic experiments profile follows the OpenAI one: an account-qualified
-# name, one locator in the ID form, and an enrollment marker. A vault item whose
-# title holds a slash cannot be named, so only the two-segment ID form is valid.
+# Each enrolled Anthropic experiment profile carries its own ID-form locator.
 anthropic_fixture=$test_dir/anthropic-profile
 anthropic_peers=$anthropic_fixture/source/dot_config/private_secret-exec/private_profiles
 mkdir -p "$anthropic_fixture/source/.chezmoiexternals" "$anthropic_fixture/dest" "$anthropic_peers"
 print -rn -- 'OTHER_KEY=secret-service://' > "$anthropic_peers/private_other.env"
 cp home/.chezmoiexternals/anthropic-experiments.toml.tmpl "$anthropic_fixture/source/.chezmoiexternals/"
-sed 's/^\[secretExec/[data.secretExec/' tests/fixtures/secret-exec-public.toml > "$anthropic_fixture/config.toml"
+sed -E 's/^(\[{1,2})secretExec/\1data.secretExec/' tests/fixtures/secret-exec-public.toml > "$anthropic_fixture/config.toml"
 anthropic_fixture_config=$anthropic_fixture/config.toml.orig
 cp "$anthropic_fixture/config.toml" "$anthropic_fixture_config"
 anthropic_chezmoi=(chezmoi --config "$anthropic_fixture/config.toml" -S "$anthropic_fixture/source"
@@ -1116,22 +1114,35 @@ import sys
 from pathlib import Path
 
 profiles = Path(sys.argv[1]) / ".config/secret-exec/profiles"
-target = profiles / "anthropic-experiments.fixture-at-example.org.env"
-assert {p.name for p in profiles.iterdir()} == {target.name, "other.env"}
+expected = {
+    "anthropic-experiments.fixture-at-example.org.env": b"ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password",
+    "anthropic-experiments.2.env": b"ANTHROPIC_API_KEY=pass://1/2/password",
+    "anthropic-experiments.3.env": b"ANTHROPIC_API_KEY=pass://1/3/password",
+}
+assert {p.name for p in profiles.iterdir()} == expected.keys() | {"other.env"}
 assert stat.S_IMODE(profiles.stat().st_mode) == 0o700
-assert stat.S_IMODE(target.stat().st_mode) == 0o600
-assert target.read_text() == "ANTHROPIC_API_KEY=pass://fixture-vault/item-k/password"
+for name, binding in expected.items():
+    target = profiles / name
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert target.read_bytes() == binding
 assert (profiles / "other.env").read_text() == "OTHER_KEY=secret-service://"
 PYEOF
 assert_invalid_anthropic_fixture() {
   local description=$1 expected=$2 replacement=$3
   sed "$replacement" "$anthropic_fixture_config" > "$anthropic_fixture/config.toml"
-  if "${anthropic_chezmoi[@]}" apply > /dev/null 2> "$anthropic_fixture/invalid.err"; then
-    fail "$description must fail before file creation"
+  if "${anthropic_chezmoi[@]}" managed > "$anthropic_fixture/invalid.out" 2> "$anthropic_fixture/invalid.err"; then
+    fail "$description must fail the render"
   fi
+  [[ ! -s $anthropic_fixture/invalid.out ]] || fail "$description must not list partial targets"
   grep -Fq "$expected" "$anthropic_fixture/invalid.err" ||
     fail "$description must fail with: $expected"
 }
+assert_invalid_anthropic_fixture 'two entries naming the same profile' \
+  'duplicate Anthropic profile name' \
+  's|"anthropic-experiments.3"|"anthropic-experiments.2"|'
+assert_invalid_anthropic_fixture 'an invalid binding between valid entries' \
+  'invalid Anthropic vault locator' \
+  's|pass://1/2/password|pass://1/2/username|'
 assert_invalid_anthropic_fixture 'a profile name with a path separator' \
   'invalid account-qualified Anthropic profile name' \
   's|anthropic-experiments.fixture-at-example.org|anthropic-experiments.bad/path|'

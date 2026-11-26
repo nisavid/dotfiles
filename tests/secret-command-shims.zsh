@@ -78,6 +78,7 @@ case $1 in
       pass://fixture-store/other/token) fixture_value=other-canary ;;
       pass://fixture-store/openai/password) fixture_value=openai-placeholder ;;
       pass://fixture-store/anthropic/password) fixture_value=anthropic-placeholder ;;
+      pass://1/2/password) fixture_value=second-placeholder ;;
       *) exit 67 ;;
     esac
     [[ ${PROTON_PASS_AGENT_REASON:-} == 'secret-exec credential resolution' ]] || exit 68
@@ -592,9 +593,12 @@ rm -- "$profile_dir/$openai_profile.env" "$real_bin/tool-a" "$real_bin/direct-to
 # so every other profile's launch drops an inherited value.
 unset SECRET_EXEC_INJECTED_PROFILES SECRET_EXEC_FALLBACK_PROFILES
 anthropic_profile=anthropic-experiments.fixture-at-example.org
+second_anthropic_profile=anthropic-experiments.2
 print -r -- 'ANTHROPIC_API_KEY=pass://fixture-store/anthropic/password' \
   > "$profile_dir/$anthropic_profile.env"
-chmod 600 "$profile_dir/$anthropic_profile.env"
+print -r -- 'ANTHROPIC_API_KEY=pass://1/2/password' \
+  > "$profile_dir/$second_anthropic_profile.env"
+chmod 600 "$profile_dir/$anthropic_profile.env" "$profile_dir/$second_anthropic_profile.env"
 print -r -- 'claude=member?' > "$config_dir/commands.env"
 ln -s ../secret-exec-command "$shim_dir/claude"
 cat > "$real_bin/claude" <<'EOF'
@@ -608,6 +612,9 @@ cp "$real_bin/claude" "$real_bin/direct-tool"
 output=$("$launcher" "$anthropic_profile" -- direct-tool)
 [[ $output == "marker=$anthropic_profile anthropic=anthropic-placeholder member=unset" ]] ||
   fail "the Anthropic profile must inject its key into a direct child: $output"
+output=$("$launcher" "$anthropic_profile" -- "$launcher" "$second_anthropic_profile" -- direct-tool)
+[[ $output == "marker=$second_anthropic_profile anthropic=second-placeholder member=unset" ]] ||
+  fail 'switching Anthropic experiment profiles must replace the first profile’s key'
 output=$("$launcher" "$anthropic_profile" -- zsh -fc direct-tool)
 [[ $output == "marker=$anthropic_profile anthropic=anthropic-placeholder member=unset" ]] ||
   fail "the Anthropic key must reach a descendant that bypasses shims: $output"
@@ -627,6 +634,7 @@ output=$(ANTHROPIC_API_KEY=ambient-placeholder SECRET_EXEC_INJECTED_PROFILES=mem
   MEMBER_TOKEN=inherited-member "$launcher" member -- direct-tool)
 [[ $output == 'marker=member anthropic=unset member=inherited-member' ]] ||
   fail "another profile's reuse must drop an inherited Anthropic key: $output"
-rm -- "$profile_dir/$anthropic_profile.env" "$real_bin/claude" "$real_bin/direct-tool" "$shim_dir/claude"
+rm -- "$profile_dir/$anthropic_profile.env" "$profile_dir/$second_anthropic_profile.env" \
+  "$real_bin/claude" "$real_bin/direct-tool" "$shim_dir/claude"
 
 print -r -- 'secret command shim checks passed'

@@ -11,8 +11,9 @@ literal values, credential-bearing URLs, or ambient environment bindings.
 ## Profile contract
 
 Chezmoi keeps the profile catalog encrypted. Apply renders individual profile
-files into a mode-`0700` directory with mode-`0600` files. Profile names and
-credential names must be unique and syntactically valid.
+files into a mode-`0700` directory with mode-`0600` files. Profile names must be
+unique across the catalog. Credential names must be unique within each profile.
+Both must be syntactically valid.
 
 ### OpenAI experiments
 
@@ -43,23 +44,25 @@ other profile removes an inherited value, as it does for every managed name.
 
 ### Anthropic experiments
 
-This profile works like the OpenAI one and supplies `ANTHROPIC_API_KEY` to
-the command a trial launches. It is not set in `commands.env` or in any shared
-profile. To enroll a destination that has the catalog's age identity, create
-the empty marker:
+Each entry in the encrypted catalog's `[[anthropicExperiments]]` list defines
+one profile. Its `name` is a unique `anthropic-experiments.<account>` and its
+single `binding` is `ANTHROPIC_API_KEY=pass://<share-id>/<item-id>/password`.
+A duplicate name or an invalid entry fails the render for the whole list.
+To enroll a destination that has the catalog's age identity, create the empty
+marker:
 
 ```sh
 install -m 600 /dev/null "$HOME/.config/secret-exec/enroll-anthropic-experiments"
 ```
 
-`chezmoi managed "$HOME/.config/secret-exec/profiles"` lists the account-qualified
-profile as `anthropic-experiments.<account>.env`. Apply that file, then use its
-name without `.env` in `secret-exec <profile> -- <command>`. On unenrolled
-destinations, chezmoi skips this profile.
+`chezmoi managed "$HOME/.config/secret-exec/profiles"` lists one
+`anthropic-experiments.<account>.env` file per account. Apply the profiles you
+need. To give a trial the key for a particular account, use that profile's name
+without `.env` in `secret-exec <profile> -- <command>`. On unenrolled
+destinations, chezmoi skips all the Anthropic experiment profiles.
 
-The catalog locator must name the vault item by its share ID and item ID,
-`pass://<share-id>/<item-id>/password`. The name form is unusable when the
-item's title contains a slash, because the provider CLI splits the path there.
+Share and item IDs keep the locator usable even when the item's title contains
+a slash, which the provider CLI treats as a path separator.
 
 `claude` is a command shim, so `secret-exec anthropic-experiments.<account> --
 claude ...` does not give Claude Code the key. The shim relaunches under its own
@@ -71,9 +74,10 @@ example the entry of `whence -a claude` that is not in the shim directory.
 Anything else the launched command starts keeps the key, except processes that
 pass through a shim or another profile's launch.
 
-On an enrolled destination, `ANTHROPIC_API_KEY` is a managed name: a launch of
-any other profile removes an inherited value, so an ordinary `claude` session
-cannot inherit the key.
+Switching to another Anthropic experiment profile replaces the inherited key
+with the selected account's key. Shared profiles and `commands.env` have no
+`ANTHROPIC_API_KEY` binding, so an ordinary `claude` session on an enrolled
+destination drops an inherited key.
 
 ### Host-bound GitHub profiles
 
