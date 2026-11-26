@@ -962,17 +962,17 @@ workspace. Dotfiles#530 had moved Cursor to Context7's remote OAuth address,
 `https://mcp.context7.com/mcp/oauth`; the command-line agent's sign-in then
 reached only the workspace that was signed in (observed on the host on
 2026-11-24, dotfiles#522). The owner chose on 2026-11-25 to return to the local
-binding (dotfiles#573). The local server needs no sign-in, so no OAuth step is
-needed in each workspace. Cursor also keeps a separate per-workspace approval of
-an MCP server (below); whether that approval appears for the local entry has
-not been observed, so whether the owner has any step after the apply is decided
-by the acceptance run in dotfiles#573.
+binding (dotfiles#573).
 
-The following were observed on the host with the earlier remote entry; the
-Cursor app itself has not been observed. The first two are expected to hold for
-the local entry as well, but that has not been established: in particular,
-whether a never-used workspace shows `needs approval` for the local server is
-open, and the acceptance run after the apply (dotfiles#573) says.
+After the apply on 2026-11-25 (dotfiles#573), `agent mcp list` showed
+`context7: ready` in a folder Cursor had never seen, with no approval prompt
+and no sign-in. A read-only `resolve-library-id` call succeeded there before
+the command-line agent exited with a streaming error. In a folder that had
+approved the earlier remote entry, the list showed `needs approval`. The owner
+approves the new entry once in that folder. No sign-in is needed.
+The Cursor app itself has not been observed.
+
+The following observations on the host used the earlier remote entry:
 
 - Cursor keeps its approval of an MCP server and its MCP sign-in in two
   separate files under each workspace's project folder, so `needs approval` and
@@ -983,7 +983,8 @@ open, and the acceptance run after the apply (dotfiles#573) says.
   IDs mean was not established.
 - In print mode the command-line agent refuses an MCP tool call unless the run
   passes `--force` (observed 2026-11-24, dotfiles#522). `--approve-mcps` only
-  approves loading the server (dotfiles#522).
+  approves loading the server (dotfiles#522). Whether the local entry also
+  requires `--force` in print mode has not been established.
 - Cursor's marketplace plugin `context7-plugin` defines a second Context7
   server, at Context7's address without a sign-in. This repository does not
   manage Cursor's plugins. The host checks in dotfiles#522 and dotfiles#573
