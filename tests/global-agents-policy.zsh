@@ -19,6 +19,9 @@ claude_review_rule_template="$source_root/dot_claude/rules/review-before-shippin
 cross_harness_partial_name=cross-harness-work.tmpl
 cross_harness_partial="$source_root/.chezmoitemplates/$cross_harness_partial_name"
 claude_cross_harness_rule_template="$source_root/dot_claude/rules/cross-harness-work.md.tmpl"
+merge_methods_partial_name=merge-methods.tmpl
+merge_methods_partial="$source_root/.chezmoitemplates/$merge_methods_partial_name"
+claude_merge_methods_rule_template="$source_root/dot_claude/rules/merge-methods.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
 codex_config_modifier="$source_root/dot_codex/modify_private_config.toml.tmpl"
 cold_archive_envelope_name=.private-cold-archive.md.age
@@ -124,7 +127,7 @@ source_git_mode=$(git -C "$repo_root" ls-files --stage -- home/dot_codex/private
 [[ $(mode_of "$claude_rule_template") == 644 ]] || fail "Claude rule template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$claude_rule_template") == "$HOME/.claude/rules/ticket-tracker-preflight.md" ]] ||
   fail "Claude rule template targets the wrong file"
-for partial in "$identity_partial" "$checkpoint_partial" "$review_partial" "$cross_harness_partial" "$question_partial" "$typography_partial"; do
+for partial in "$identity_partial" "$checkpoint_partial" "$review_partial" "$cross_harness_partial" "$merge_methods_partial" "$question_partial" "$typography_partial"; do
   [[ -f "$partial" ]] || fail "${partial:t} partial is missing"
   [[ $(mode_of "$partial") == 644 ]] || fail "${partial:t} partial mode must be 0644"
 done
@@ -140,6 +143,10 @@ done
 [[ $(mode_of "$claude_cross_harness_rule_template") == 644 ]] || fail "Claude cross-harness rule source template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$claude_cross_harness_rule_template") == "$HOME/.claude/rules/cross-harness-work.md" ]] ||
   fail "Claude cross-harness rule template targets the wrong file"
+[[ -f "$claude_merge_methods_rule_template" ]] || fail "Claude merge-methods rule template is missing"
+[[ $(mode_of "$claude_merge_methods_rule_template") == 644 ]] || fail "Claude merge-methods rule source template mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_merge_methods_rule_template") == "$HOME/.claude/rules/merge-methods.md" ]] ||
+  fail "Claude merge-methods rule template targets the wrong file"
 
 [[ -f "$cold_archive_envelope" ]] || fail "cold-archive envelope is missing"
 [[ -f "$claude_cold_archive_rule_template" ]] || fail "Claude cold-archive rule template is missing"
@@ -221,6 +228,7 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$checkpoint_partial" "$render_fixture/.chezmoitemplates/$checkpoint_partial_name"
   cp -p -- "$review_partial" "$render_fixture/.chezmoitemplates/$review_partial_name"
   cp -p -- "$cross_harness_partial" "$render_fixture/.chezmoitemplates/$cross_harness_partial_name"
+  cp -p -- "$merge_methods_partial" "$render_fixture/.chezmoitemplates/$merge_methods_partial_name"
   cp -p -- "$question_partial" "$render_fixture/.chezmoitemplates/$question_partial_name"
   cp -p -- "$typography_partial" "$render_fixture/.chezmoitemplates/$typography_partial_name"
   cp -p -- "$source_root/.chezmoitemplates/outcome-reassessment.tmpl" "$render_fixture/.chezmoitemplates/outcome-reassessment.tmpl"
@@ -238,6 +246,8 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$claude_review_rule_template" "$render_claude_review_rule_template"
   render_claude_cross_harness_rule_template="$render_fixture/dot_claude/rules/${claude_cross_harness_rule_template:t}"
   cp -p -- "$claude_cross_harness_rule_template" "$render_claude_cross_harness_rule_template"
+  cp -p -- "$claude_merge_methods_rule_template" "$render_fixture/dot_claude/rules/"
+  cp -p -- "$source_root"/dot_claude/rules/{increment-definition,outcome-reassessment}.md.tmpl "$render_fixture/dot_claude/rules/"
   render_claude_cold_archive_rule_template="$render_fixture/dot_claude/rules/${claude_cold_archive_rule_template:t}"
   grep -Fv -- "$cold_archive_envelope_name" "$claude_cold_archive_rule_template" > "$render_claude_cold_archive_rule_template"
   chmod 644 "$render_claude_cold_archive_rule_template"
@@ -352,7 +362,6 @@ required=(
   'Where a dash is not the best structure, use a colon, parentheses, a semicolon, or a new sentence; judge fit, not count.'
   'An en dash joins numeric ranges'
   'Inline lists take the Oxford comma.'
-  'Prefer squash merging when several merge methods are available.'
   'Punctuation respects the unity of a quoted phrase rather than intruding into it'
   "In review replies, do not restate the comment, justify the reviewer's suggestion, or import unrelated decisions."
   'If agreeing and proceeding, say little.'
@@ -412,6 +421,29 @@ awk '
   found && /^## / { exit }
   found { print }
 ' "$rendered" > "$pr_policy"
+
+merge_methods_digest=$(
+  cd "$source_root"
+  chezmoi -S "$source_root" execute-template "{{ include \".chezmoitemplates/$merge_methods_partial_name\" | sha256sum }}"
+)
+[[ $merge_methods_digest == 57d7b01532da00ac4ce53db2edd195e17f4d31d26dc1d2fe383ac0865e1992d0 ]] ||
+  fail "merge-methods partial differs from the approved rule text"
+jq -ne --rawfile section "$pr_policy" --rawfile partial "$merge_methods_partial" \
+  '$section | startswith("\n" + $partial + "\n")' > /dev/null ||
+  fail "Codex Pull Requests And Issues does not open with the shared merge-methods partial"
+assert_partial_carried_once "$(<"$merge_methods_partial")" "merge-methods rule" "$template" "$claude_merge_methods_rule_template"
+
+chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules" > "$claude_state"
+[[ $(jq -r '.[".claude/rules/merge-methods.md"].perm' "$claude_state") == 420 ]] ||
+  fail "Claude merge-methods rule target mode is not 0644"
+jq -e --rawfile partial "$merge_methods_partial" \
+  '.[".claude/rules/merge-methods.md"].contents == ("# Merge Methods\n\n" + $partial)' "$claude_state" > /dev/null ||
+  fail "Claude merge-methods rule is not the heading plus the shared partial"
+
+legacy_merge_rule='Prefer squash merging when several merge methods are available'
+! grep -Fq -- "$legacy_merge_rule" "$rendered" || fail "Codex policy contains the superseded squash rule"
+jq -e --arg legacy "$legacy_merge_rule" 'all(.[] | .contents? // empty; contains($legacy) | not)' \
+  "$claude_state" > /dev/null || fail "Claude policy contains the superseded squash rule"
 
 [[ $(<"$pr_policy") == *"$preflight"* ]] || fail "Codex policy does not carry the preflight in Pull Requests And Issues"
 [[ $(<"$claude_rule") == "# Ticket Tracker Preflight"$'\n\n'"$preflight" ]] ||
