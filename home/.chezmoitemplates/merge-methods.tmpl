@@ -1,0 +1,25 @@
+A pull request into a long-lived branch is one of two kinds, and its kind decides how it merges.
+
+- **Locally developed pull request:** work written for the repository it merges into. Squash it.
+- **Hop:** a pull request whose purpose is to bring the history of one long-lived branch into another: an upstream into a fork, one long-lived branch of a repository into another, or a long-lived branch into a branch cut from it. Merge it with a merge commit, so that every commit keeps its identity. Never squash a hop.
+
+Do not use rebase merging for either kind, unless the repository's own written policy requires it or Ivan explicitly asks for it.
+
+A pull request is one kind or the other, and the test is ancestry, not the branch that a merge commit's message names. In a locally developed pull request, every commit it adds to its base is its own work, apart from merge commits that bring in only commits the base already has. A hop adds only commits that are already on the source branch, plus the merge commit that joins the two branches and resolves their conflicts. When a pull request is both, land the other branch's history first by a hop of its own. The pull request then adds only its own work.
+
+Open a hop from a short-lived branch cut at the exact commit being brought over, never from the long-lived branch itself. The hop then brings what was reviewed even if the source branch moves on, and resolving a conflict adds commits to the short-lived branch, not to the source.
+
+When you squash, let the repository's default supply the squash commit's message, and pass no subject or body of your own. By default that message is the pull request's title alone, so write the title as the commit subject it becomes. Where a repository's default also takes the body from the pull request's description, write the description as a commit body.
+
+GitHub cannot choose the method for each pull request: a branch that takes both kinds allows both methods. So check a pull request's kind before you authorize or perform its merge, and state the method in words.
+
+If an earlier hop was squashed or rebase-merged, the target has that history's content without its ancestry. The sign is a merged pull request from the source whose head commit is not an ancestor of the target. Look for it before the first hop into a branch that has taken the source's history any other way. Do not rewrite history, and do not merge the source branch again as it stands: a plain merge would bring back, without a conflict, whatever the target has removed or reverted since. Repair it first with a hop that changes no file. Cut its head from the target's tip, and merge into that head the exact commit that was brought over (that pull request's head commit) while keeping the target's files (`git merge -s ours <commit>`). Confirm that the head's tree equals the target's, then merge the hop with a merge commit. Never use the source branch's tip for this: newer source commits would count as merged without their content. Bring those in a later hop.
+
+A repository's own written policy wins over this rule unless Ivan clearly intends an informed override. When the two conflict and his intent is unclear, ask.
+
+These are the defaults for the settings of Ivan's own repositories. A repository departs from one only for a reason written in its agent docs, and a change to a setting still needs the approval its owner requires.
+
+- A branch that takes no hops allows squash merging only. A branch that takes hops allows merge commits and squash merging, and has no linear-history rule. Rebase merging is off.
+- The squash commit takes its subject from the pull request's title and has no body. A repository whose pull request descriptions are written as commit messages may take the body from the description.
+- Required status checks are gate jobs. Each workflow that gates merging ends in one job that always runs and that fails if a job it needs failed, was cancelled, or was skipped. The branch rule requires only the gate jobs, each bound to GitHub Actions as its source, and every gate reports on every pull request, including the ones automation opens.
+- Every long-lived branch has a rule against deletion and a rule against force-push.
