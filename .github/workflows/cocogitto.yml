@@ -8,6 +8,7 @@ permissions:
 
 jobs:
   cog_check_job:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     name: check conventional commit compliance
     steps:

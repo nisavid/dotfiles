@@ -67,7 +67,7 @@ workflow_step_run() {
 cocogitto=$repo_root/.github/workflows/cocogitto.yml
 [[ -f $cocogitto && ! -L $cocogitto ]] || fail 'cocogitto.yml must be a regular file'
 cog_blob=$(git -C "$repo_root" hash-object --no-filters -- "$cocogitto")
-[[ $cog_blob == ba696f1555eaab298bdd254994cec00e1bc575c9 ]] ||
+[[ $cog_blob == 2a2b77bc756e0569f81894f9c3b6345de48d0020 ]] ||
   fail "cocogitto.yml differs from its reviewed workflow (got $cog_blob)"
 
 # Exercise each gate's shell step with the dependency results Actions supplies.

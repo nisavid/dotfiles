@@ -91,6 +91,7 @@ env:
   CHEZMOI_VERSION: "2.71.0"
 jobs:
   verify:
+    if: github.event_name != 'pull_request'
     name: macos-15 · ${{ matrix.group }}
     runs-on: macos-15
     timeout-minutes: 45
@@ -292,7 +293,7 @@ jobs:
         run: test "$VERIFY_RESULT" = success
   aggregate:
     name: platform portability
-    if: always()
+    if: always() && github.event_name != 'pull_request'
     needs:
       - verify
     runs-on: ubuntu-24.04

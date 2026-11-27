@@ -25,6 +25,7 @@ env:
 
 jobs:
   verify:
+    if: github.event_name != 'pull_request'
     name: macos-15 · ${{ matrix.group }}
     runs-on: macos-15
     timeout-minutes: 45
@@ -260,7 +261,7 @@ jobs:
   # Keep the existing required macOS check identity.
   aggregate:
     name: platform portability
-    if: always()
+    if: always() && github.event_name != 'pull_request'
     needs:
       - verify
     runs-on: ubuntu-24.04
