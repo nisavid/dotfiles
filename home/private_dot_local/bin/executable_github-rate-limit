@@ -1,0 +1,112 @@
+#!/usr/bin/python3
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+
+def expected_login(config_home):
+    # The deployed GitHub profile has a login marker followed by provider locators.
+    marker = b"# secret-exec-github-login="
+    with (config_home / "secret-exec/profiles/github.env").open("rb") as profile:
+        logins = []
+        for line in profile:
+            if not line.startswith(b"#"):
+                break
+            if line.startswith(marker):
+                logins.append(line[len(marker):].removesuffix(b"\n"))
+    if len(logins) != 1 or not re.fullmatch(rb"[a-zA-Z0-9_.-]+", logins[0]):
+        raise ValueError
+    return logins[0].lower()
+
+
+# Admit gh's plain host/account mappings, including their JSON flow form.
+# Only login and Git protocol fields may carry scalar values. Other YAML
+# constructs (including escaped keys and aliases) fail closed before gh runs.
+METADATA = re.compile(
+    rb'[ \t\r\n{},]+'
+    rb'|(?:user|"user")[ \t]*:[ \t]*(?:"[a-zA-Z0-9_.-]+"|[a-zA-Z0-9_.-]+)'
+    rb'|(?:git_protocol|"git_protocol")[ \t]*:[ \t]*(?:"(?:https|ssh)"|https|ssh)'
+    rb'|(?P<key>"[a-zA-Z0-9_.-]+"|[a-zA-Z0-9_.-]+)[ \t]*:'
+)
+
+
+def validate_metadata(line):
+    offset = 0
+    while offset < len(line):
+        field = METADATA.match(line, offset)
+        if not field:
+            raise ValueError
+        key = field["key"]
+        if key and key.strip(b'"').lower().split(b"_")[-1] == b"token":
+            raise ValueError
+        offset = field.end()
+
+
+def copy_keyring_metadata(source, destination):
+    # Check each key at its colon, before reading its value, even on a flow line.
+    with source.open("rb", buffering=0) as hosts, destination.open("wb") as snapshot:
+        line = bytearray()
+        for char in iter(lambda: hosts.read(1), b""):
+            line.extend(char)
+            if char in (b":", b"\n"):
+                validate_metadata(line)
+            if char == b"\n":
+                snapshot.write(line)
+                line.clear()
+        validate_metadata(line)
+        snapshot.write(line)
+
+
+def check_login(expected, config_dir, hosts):
+    copy_keyring_metadata(hosts, Path(config_dir) / "hosts.yml")
+    login = subprocess.run(
+        ["gh", "config", "get", "user", "--host", "github.com"],
+        env={
+            "PATH": os.environ.get("PATH", os.defpath),
+            "HOME": config_dir,
+            "GH_CONFIG_DIR": config_dir,
+            "GH_NO_UPDATE_NOTIFIER": "1",
+            "GH_TELEMETRY": "0",
+        },
+        # A cold start of gh can take seconds, so allow the same bound as the API read.
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=30,
+    ).stdout
+    if login.removesuffix(b"\n").lower() != expected:
+        raise ValueError
+
+
+def sample():
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    expected = expected_login(config_home)
+    gh_dir = Path(os.environ.get("GH_CONFIG_DIR") or config_home / "gh")
+    with tempfile.TemporaryDirectory() as config_dir:
+        # gh otherwise falls back to a global user when the host has none.
+        (Path(config_dir) / "config.yml").write_text("version: 1\n")
+        check_login(expected, config_dir, gh_dir / "hosts.yml")
+        # Keep gh on its private copy for the API call, with the user session's keyring.
+        os.environ["GH_CONFIG_DIR"] = config_dir
+        response = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", "rate_limit"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=30,
+        )
+        check_login(expected, config_dir, gh_dir / "hosts.yml")
+    resources = json.loads(response.stdout)["resources"]
+    counters = []
+    for resource in ("core", "graphql"):
+        for field in ("limit", "remaining", "used", "reset"):
+            value = resources[resource][field]
+            if type(value) is not int or value < 0:
+                raise ValueError
+            counters.append(value)
+    return counters
+
+
+if __name__ == "__main__":
+    try:
+        print(*sample())
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, RecursionError):
+        sys.exit("GitHub rate limit unavailable")
