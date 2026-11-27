@@ -87,6 +87,8 @@ Read operator-owned and work-contract checklists before planning or editing. Cha
 
 {{ includeTemplate "ticket-tracker-preflight.tmpl" . | trim }}
 
+{{ includeTemplate "bulk-github-reads.tmpl" . | trim }}
+
 ## Delegation
 
 Use native subagents when the expected savings in time or context clearly exceed coordination cost. Strong candidates include independent investigation, disjoint implementation, browser or computer-use QA, long waits, and isolated worktree execution. Use the least-permissive agent shape, keep leadership and integration local, and review delegated output.
