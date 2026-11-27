@@ -36,8 +36,9 @@ cursor=$(journalctl --user -b -n 1 -o json --output-fields=__CURSOR |
   jq -ers 'select(length == 1) | .[0].__CURSOR | strings | select(length > 0)')
 now=$(date +%s)
 first=$(( (now / 300 + 1) * 300 ))
-# Allow one second of timer coalescing, two 2-second login checks, and the 30-second API read.
-tolerance=35
+# Allow one second of timer coalescing, two login checks and the API read (each bounded at
+# 30 seconds), and a few seconds of margin.
+tolerance=95
 sleep "$((first + 300 + tolerance + 1 - now))"
 
 journalctl --user -b --after-cursor="$cursor" _SYSTEMD_USER_UNIT=github-rate-limit.service \

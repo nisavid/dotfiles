@@ -152,7 +152,7 @@ esac
                     result = subprocess.run(
                         [sys.executable, str(SAMPLER)], cwd=root, capture_output=True,
                         env={"HOME": tmp, "PATH": tmp, "XDG_CONFIG_HOME": str(config),
-                             "GH_CONFIG_DIR": str(gh_dir)}, timeout=10,
+                             "GH_CONFIG_DIR": str(gh_dir)}, timeout=70,
                     )
                     self.assertEqual(requested.exists(), bool(before))
                     self.assertEqual(result.returncode == 0, ok, result.stderr)
@@ -226,7 +226,7 @@ class JournalCadenceTest(unittest.TestCase):
             for tool in ("jq", "awk", "cmp", "dirname"):
                 (fixture / tool).symlink_to(shutil.which(tool))
             command("date", 'echo 550\n')
-            command("sleep", '[ -f captured ] && [ "$1" = 386 ] && : > elapsed\n')
+            command("sleep", '[ -f captured ] && [ "$1" = 446 ] && : > elapsed\n')
             timer = "github-rate-limit" if listed else "unrelated"
             command("systemctl", f"""case "$*" in
   '--user daemon-reload'|'--user start github-rate-limit.timer') echo "$*" >> activation;;
@@ -272,9 +272,13 @@ esac
         accepted = self.verify([first, second])
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         self.assertEqual(self.verify([first, second], activate=False).returncode, 0)
+        # Each lookup and the API read may take up to 30 seconds after the boundary.
+        slowest = [(691, sample, "a" * 32), (991, sample, "b" * 32)]
+        self.assertEqual(self.verify(slowest).returncode, 0)
         for reason, records in {
             "one second apart across a boundary": [(899, *first[1:]), (900, *second[1:])],
             "nearly ten minutes apart": [first, (1199, *second[1:])],
+            "past the tolerance": [first, (996, *second[1:])],
             "stale pair": [(300, *first[1:]), (600, *second[1:])],
             "missing firing": [first],
             "duplicate sample": [first, first, second],
