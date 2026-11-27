@@ -27,7 +27,7 @@ class GitHubRateLimitTest(unittest.TestCase):
 
     def sample(self, body, status=0, before="fixture", after="fixture", calls=None,
                profile_header="# secret-exec-github-login=fixture\n",
-               hosts_before=b"github.com:\n    user: fixture\n", hosts_after=None):
+               hosts_before=b"github.com:\n    user: fixture\n", hosts_after=None, first_login_delay=0):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp)
             hosts = fixture / ".config/gh/hosts.yml"
@@ -49,6 +49,7 @@ printf '%s\\n' "$*" >> calls
 echo 'unexpected diagnostic' >&2
 case "$*" in
   '{self.login}')
+    [ -f requested ] || /bin/sleep {first_login_delay}
     echo 'updated by a config migration' >> "$GH_CONFIG_DIR/hosts.yml"
     if [ -f requested ]; then /bin/cat after; else /bin/cat before; fi;;
   '{self.quota}')
@@ -63,7 +64,7 @@ esac
             gh.chmod(0o755)
             result = subprocess.run(
                 [sys.executable, str(SAMPLER)], cwd=fixture, capture_output=True,
-                env={"PATH": tmp, "HOME": tmp}, timeout=5,
+                env={"PATH": tmp, "HOME": tmp}, timeout=10,
             )
             if calls is None:
                 calls = [self.login, self.quota] if status else [self.login, self.quota, self.login]
@@ -105,7 +106,8 @@ esac
                 self.assertEqual(result.stdout, b"")
                 self.assertEqual(result.stderr, b"GitHub rate limit unavailable\n")
 
-    @unittest.skipUnless(shutil.which("gh"), "GitHub CLI required for its configuration format")
+    @unittest.skipUnless(shutil.which("gh") and shutil.which("chezmoi"),
+                         "GitHub CLI and chezmoi required for the real configuration format")
     def test_real_config_uses_only_the_host_login_and_observes_replacement(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -157,6 +159,13 @@ esac
                     expected_line = b"5000 0 5000 1795800600 7000 6983 17 1795801200\n" if ok else b""
                     self.assertEqual(result.stdout, expected_line)
                     self.assertEqual(result.stderr, b"" if ok else b"GitHub rate limit unavailable\n")
+
+    def test_slow_first_login_lookup_still_samples(self):
+        # A cold gh start on a loaded host or CI runner can exceed a few seconds.
+        result = self.sample(json.dumps(RESPONSE), first_login_delay=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b"5000 0 5000 1795800600 7000 6983 17 1795801200\n")
+        self.assertEqual(result.stderr, b"")
 
     def test_sample_contains_only_the_eight_counters(self):
         result = self.sample(json.dumps(RESPONSE))

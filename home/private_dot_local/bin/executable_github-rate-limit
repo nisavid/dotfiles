@@ -72,7 +72,8 @@ def check_login(expected, config_dir, hosts):
             "GH_NO_UPDATE_NOTIFIER": "1",
             "GH_TELEMETRY": "0",
         },
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=2,
+        # A cold start of gh can take seconds, so allow the same bound as the API read.
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=30,
     ).stdout
     if login.removesuffix(b"\n").lower() != expected:
         raise ValueError
