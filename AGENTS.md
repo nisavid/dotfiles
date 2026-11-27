@@ -27,7 +27,7 @@ Treat `$HOME/.local/share/chezmoi` as the stable primary checkout. Preserve whic
 Before publication, run the suites that own the touched files.
 
 - Run `zsh tests/platform-portability.zsh` for deployment bindings, `cocogitto.yml`, and `platform-portability.yml`. For `platform-portability.yml`, also run `zsh tests/ci-test-group.zsh` for concurrency and matrix coverage.
-- Run `GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 zsh -f tests/global-agents-policy.zsh` for the repository’s `AGENTS.md`.
+- Run `GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 zsh -f tests/global-agents-policy.zsh` for the repository's `AGENTS.md`.
 - Run `zsh tests/public-agent-skills.zsh` for agent skills.
 - Run `zsh tests/privacy-scan.zsh` and `python3 scripts/privacy-scan --root . --require-age-manifest` for anything touching encrypted or private material.
 
