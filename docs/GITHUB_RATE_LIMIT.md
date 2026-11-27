@@ -2,7 +2,7 @@
 
 On Linux, `github-rate-limit.timer` samples the host’s configured GitHub.com account
 at five-minute clock boundaries. To read the samples, run
-`journalctl --user -u github-rate-limit.service -o cat`.
+`journalctl --user _SYSTEMD_USER_UNIT=github-rate-limit.service -o short-iso`.
 
 After applying the sampler, run `bash tests/verify-github-rate-limit-timer.sh --activate` from the merged checkout. It verifies the installed executable, both units, the wants link, and their chezmoi status before reloading the user manager and starting the timer. It then checks the next two firings.
 
