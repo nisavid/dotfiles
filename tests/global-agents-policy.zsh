@@ -207,6 +207,28 @@ grep -Fq 'mode-`0600` `~/.claude/rules/artifact-store.md` target' "$encryption_d
 [[ $(chezmoi -S "$source_root" target-path "$claude_cards_rule") == "$HOME/.claude/rules/question-cards-stand-alone.md" ]] ||
   fail "Claude question-cards rule targets the wrong file"
 
+# Auto-fix is a plain Claude-only rule, so render it directly from the source tree.
+claude_auto_fix_target=.claude/rules/auto-fix.md
+claude_auto_fix_rule="$source_root/dot_claude/rules/auto-fix.md"
+[[ -f "$claude_auto_fix_rule" && ! -L "$claude_auto_fix_rule" ]] ||
+  fail "Claude Auto-fix rule is missing or is not a plain file"
+[[ ! -e "$claude_auto_fix_rule.tmpl" ]] || fail "Claude Auto-fix rule has a template beside its plain file"
+[[ $(mode_of "$claude_auto_fix_rule") == 644 ]] || fail "Claude Auto-fix rule source mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$claude_auto_fix_rule") == "$HOME/$claude_auto_fix_target" ]] ||
+  fail "Claude Auto-fix rule targets the wrong file"
+claude_auto_fix_digest=$(
+  cd "$source_root"
+  chezmoi -S "$source_root" execute-template '{{ include "dot_claude/rules/auto-fix.md" | sha256sum }}'
+)
+[[ $claude_auto_fix_digest == 55bbfd17299a70aff8c76615e6877bb65c2ec9cc62de3a8dddc0071547b0ef49 ]] ||
+  fail "Claude Auto-fix rule differs from the approved text"
+chezmoi -S "$source_root" dump --format json "$HOME/$claude_auto_fix_target" > "$claude_state"
+[[ $(jq -r --arg target "$claude_auto_fix_target" '.[$target].perm' "$claude_state") == 420 ]] ||
+  fail "Claude Auto-fix rule target mode is not 0644"
+jq -e --arg target "$claude_auto_fix_target" --rawfile source "$claude_auto_fix_rule" \
+  '.[$target].contents == $source' "$claude_state" > /dev/null ||
+  fail "Claude Auto-fix rule target state differs from the approved text"
+
 [[ -f "$claude_typography_rule_template" ]] || fail "Claude typography rule template is missing"
 [[ ! -e "${claude_typography_rule_template%.tmpl}" ]] || fail "plain Claude typography rule still exists beside its template"
 [[ $(mode_of "$claude_typography_rule_template") == 644 ]] || fail "Claude typography rule source template mode must be 0644"
