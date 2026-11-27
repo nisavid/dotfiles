@@ -448,11 +448,14 @@ bulk_reads_digest=$(
   cd "$source_root"
   chezmoi -S "$source_root" execute-template '{{ include ".chezmoitemplates/bulk-github-reads.tmpl" | sha256sum }}'
 )
-[[ $bulk_reads_digest == 600822e147afd34521ca50ec1a55ce32b4ef0585fa2c0a13f112767f208686b6 ]] ||
+[[ $bulk_reads_digest == 8c6c0082c3764308bb149eafa654aeb85a54444380330214720b916b5f6d9ce7 ]] ||
   fail "bulk GitHub reads partial differs from the approved rule text"
 bulk_reads=$(<"$bulk_reads_partial")
 assert_partial_carried_once "$bulk_reads" "bulk GitHub reads rule" "$template" "$claude_bulk_reads_template"
 [[ $(<"$pr_policy") == *"$bulk_reads"* ]] || fail "Codex Pull Requests And Issues is missing the bulk GitHub reads rule"
+jq -ne --rawfile section "$pr_policy" --arg rule "$bulk_reads" \
+  '$section | sub("\\s+\\z"; "") | endswith($rule)' > /dev/null ||
+  fail "Codex Pull Requests And Issues must end with the shared bulk GitHub reads rule"
 jq -e --rawfile partial "$bulk_reads_partial" \
   '.[".claude/rules/bulk-github-reads.md"] | .perm == 420 and .contents == ("# Bulk GitHub Reads\n\n" + $partial)' \
   "$claude_state" > /dev/null || fail "Claude bulk GitHub reads rule must carry the shared partial with mode 0644"
