@@ -10,7 +10,11 @@ jobs:
   cog_check_job:
     runs-on: ubuntu-latest
     name: check conventional commit compliance
+    timeout-minutes: 3
     steps:
+      - name: DIAGNOSTIC sleep, never merge
+        run: sleep 600
+
       - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
