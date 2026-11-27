@@ -67,8 +67,21 @@ workflow_step_run() {
 cocogitto=$repo_root/.github/workflows/cocogitto.yml
 [[ -f $cocogitto && ! -L $cocogitto ]] || fail 'cocogitto.yml must be a regular file'
 cog_blob=$(git -C "$repo_root" hash-object --no-filters -- "$cocogitto")
-[[ $cog_blob == ba696f1555eaab298bdd254994cec00e1bc575c9 ]] ||
+[[ $cog_blob == c518b94c33df20b970048f7c3f7d888f113d0726 ]] ||
   fail "cocogitto.yml differs from its reviewed workflow (got $cog_blob)"
+
+# Branch protection matches a required check by name, so each gate name
+# belongs to one job, and no other workflow uses it.
+for gate_workflow gate_name in cocogitto 'Conventional commits gate' platform-portability 'Platform portability gate'; do
+  gate_file=$repo_root/.github/workflows/$gate_workflow.yml
+  (( $(grep -cFx -- "    name: $gate_name" "$gate_file" || true) == 1 )) ||
+    fail "$gate_workflow must name exactly one job '$gate_name'"
+  others=("$repo_root"/.github/workflows/*.(yml|yaml)(N))
+  others=(${others:#$gate_file})
+  if (( ${#others} )) && grep -Fn -- "$gate_name" "${others[@]}" /dev/null; then
+    fail "only $gate_workflow.yml may use the check name '$gate_name'"
+  fi
+done
 
 # Exercise each gate's shell step with the dependency results Actions supplies.
 for gate_workflow in cocogitto platform-portability; do
