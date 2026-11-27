@@ -447,7 +447,7 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
             self.assertEqual(target.read_text(), binding)
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
 
-    def test_anthropic_profile_opens_catalog_only_on_enrolled_destinations(self) -> None:
+    def test_anthropic_profiles_open_catalog_only_on_enrolled_destinations(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             root = Path(temporary)
             destination = root / "home"
@@ -465,11 +465,17 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
             owner = root / "catalog-owner.key"
             subprocess.run(["age-keygen", "-o", owner], capture_output=True, check=True)
             recipient = subprocess.check_output(["age-keygen", "-y", owner], text=True).strip()
-            binding = "ANTHROPIC_API_KEY=pass://test-vault/test-item/password"
-            profile = "anthropic-experiments.fixture-at-example.org"
+            profiles = {
+                f"anthropic-experiments.{n}": f"ANTHROPIC_API_KEY=pass://1/{n}/password"
+                for n in (1, 2, 3)
+            }
+            catalog = "".join(
+                f'[[anthropicExperiments]]\nname = "{name}"\nbinding = "{binding}"\n'
+                for name, binding in profiles.items()
+            )
             subprocess.run(
                 ["age", "-r", recipient, "-o", source / ".private-secret-exec.toml.age"],
-                input=f'[anthropicExperiments]\nname = "{profile}"\nbinding = "{binding}"\n',
+                input=catalog,
                 text=True, capture_output=True, check=True,
             )
 
@@ -496,17 +502,20 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
             broker.mkdir(parents=True)
             (broker / "profiles").mkdir(mode=0o700)
             (broker / "enroll-anthropic-experiments").touch(mode=0o600)
-            target = broker / "profiles" / f"{profile}.env"
-            rejected = chezmoi("apply", target)
+            targets = [broker / "profiles" / f"{name}.env" for name in profiles]
+            rejected = chezmoi("apply", *targets)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("decrypt", rejected.stderr)
-            self.assertFalse(target.exists())
+            self.assertEqual(list((broker / "profiles").iterdir()), [])
 
             owner.replace(identity)
-            applied = chezmoi("apply", target)
+            applied = chezmoi("apply", *targets)
             self.assertEqual(applied.returncode, 0, applied.stderr)
-            self.assertEqual(target.read_text(), binding)
-            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+            self.assertCountEqual((broker / "profiles").iterdir(), targets)
+            for target in targets:
+                with self.subTest(profile=target.stem):
+                    self.assertEqual(target.read_bytes(), profiles[target.stem].encode())
+                    self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
 
     def test_unbound_hindsight_is_ignored_and_preserves_existing_targets(self) -> None:
         sources = [
