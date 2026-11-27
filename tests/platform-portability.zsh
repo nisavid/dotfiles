@@ -586,6 +586,8 @@ expected_linux_source_inventory=$(
     'dot_config/systemd/user/claude-display2-sway.service' \
     'dot_config/systemd/user/codex-usage-safeguard.service.tmpl' \
     'dot_config/systemd/user/default.target.wants/symlink_memory-telemetry.service' \
+    'dot_config/systemd/user/drkonqi-coredump-cleanup.timer.d/10-ordering.conf' \
+    'dot_config/systemd/user/drkonqi-sentry-postman.path.d/10-ordering.conf' \
     'dot_config/systemd/user/github-rate-limit.service' \
     'dot_config/systemd/user/github-rate-limit.timer' \
     'dot_config/systemd/user/graphical-session.target.wants/symlink_ydotool.service' \
@@ -620,6 +622,14 @@ mkdir -p \
   "$fixture_source/private_dot_local/private_share/applications" \
   "$fixture_home"
 cp "$test_root/linux-ignore" "$fixture_source/.chezmoiignore"
+
+typeset -a drkonqi_targets=()
+for unit in drkonqi-coredump-cleanup.timer drkonqi-sentry-postman.path; do
+  drop_in=systemd/user/$unit.d/10-ordering.conf
+  mkdir -p "$fixture_source/dot_config/${drop_in:h}"
+  cp "$repo_root/home/dot_config/$drop_in" "$fixture_source/dot_config/$drop_in"
+  drkonqi_targets+=(".config/$drop_in")
+done
 
 while IFS= read -r source_path; do
   relative_source=${source_path#"$repo_root/home/"}
@@ -673,18 +683,18 @@ typeset -a display2_targets=(
   '.local/bin/claude-display2-link'
   'enable-claude-display2-sway.sh'
 )
-for display2_target in $display2_targets; do
-  print -r -- "$managed" | grep -Fqx -- "$display2_target" ||
-    fail "Linux does not manage $display2_target"
+for target in $display2_targets $drkonqi_targets; do
+  print -r -- "$managed" | grep -Fqx -- "$target" ||
+    fail "Linux does not manage $target"
 done
 cp "$test_root/darwin-ignore" "$fixture_source/.chezmoiignore"
 darwin_managed=$(
   HOME=$fixture_home chezmoi -S "$fixture_source" -D "$fixture_home" \
     --config "$fixture_config" managed
 )
-for display2_target in $display2_targets; do
-  ! print -r -- "$darwin_managed" | grep -Fqx -- "$display2_target" ||
-    fail "Darwin manages $display2_target"
+for target in $display2_targets $drkonqi_targets; do
+  ! print -r -- "$darwin_managed" | grep -Fqx -- "$target" ||
+    fail "Darwin manages $target"
 done
 cp "$test_root/linux-ignore" "$fixture_source/.chezmoiignore"
 
