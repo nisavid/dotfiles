@@ -444,15 +444,13 @@ jq -e --rawfile partial "$merge_methods_partial" \
   '.[".claude/rules/merge-methods.md"].contents == ("# Merge Methods\n\n" + $partial)' "$claude_state" > /dev/null ||
   fail "Claude merge-methods rule is not the heading plus the shared partial"
 
+bulk_reads_digest=$(
+  cd "$source_root"
+  chezmoi -S "$source_root" execute-template '{{ include ".chezmoitemplates/bulk-github-reads.tmpl" | sha256sum }}'
+)
+[[ $bulk_reads_digest == 600822e147afd34521ca50ec1a55ce32b4ef0585fa2c0a13f112767f208686b6 ]] ||
+  fail "bulk GitHub reads partial differs from the approved rule text"
 bulk_reads=$(<"$bulk_reads_partial")
-for clause in 'more than about 100 REST calls' 'run `gh api rate_limit`' \
-  'at most 4 REST requests at a time' 'core quota falls below 1,000 remaining requests' \
-  'at least a minute between status checks' 'one GraphQL query per repository over REST calls for individual pull requests' \
-  'Prefer local Git' '`git fetch`, `git log`, and `git merge-base`' 'commits, ancestry, or merge methods' \
-  'Prefer conditional requests' '`ETag` with `If-None-Match`' '`If-Modified-Since`' '304 response costs no primary quota'; do
-  [[ $bulk_reads == *"$clause"* ]] || fail "bulk GitHub reads rule is missing: $clause"
-done
-[[ $bulk_reads != *'gh event listen'* ]] || fail "bulk GitHub reads rule names an event subscription"
 assert_partial_carried_once "$bulk_reads" "bulk GitHub reads rule" "$template" "$claude_bulk_reads_template"
 [[ $(<"$pr_policy") == *"$bulk_reads"* ]] || fail "Codex Pull Requests And Issues is missing the bulk GitHub reads rule"
 jq -e --rawfile partial "$bulk_reads_partial" \
