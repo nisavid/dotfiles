@@ -4,6 +4,8 @@ On Linux, `github-rate-limit.timer` samples the active GitHub.com CLI login
 at five-minute clock boundaries. To read the samples, run
 `journalctl --user -u github-rate-limit.service -o cat`.
 
+After applying the units, run `systemctl --user daemon-reload && systemctl --user start github-rate-limit.timer` to activate the timer. From the repository root, `bash tests/verify-github-rate-limit-timer.sh` checks the next two firings.
+
 Each sample has eight space-separated integers. The first four describe
 `core` (REST) and the last four describe `graphql`. In each group the
 columns are the limit, remaining count, used count, and reset time in Unix
