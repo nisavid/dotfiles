@@ -2,6 +2,8 @@
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
+This repository does not use GitHub issue types.
+
 ## Conventions
 
 Commands substitute values through shell variables such as `$n` and `$map`, and `gh api` paths use gh's own `{owner}`/`{repo}` substitution; angle brackets appear only in issue-body templates, never in a command, because the shell reads them as redirections.
@@ -14,6 +16,14 @@ Commands substitute values through shell variables such as `$n` and `$map`, and 
 - **Close**: `gh issue close "$n" --comment "..."`
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+
+## Issue labels
+
+Triage here follows `/triage`: a triaged issue carries the work kind and triage state the skill assigns, with `bug` and `enhancement` as the work-kind labels. See [the five triage-state labels](triage-labels.md).
+
+Preserve all other labels. Optional labels include `documentation` for documentation changes and `agent-equipment` for work on global agent skills, plugins, MCP servers, hooks, or harness configuration, including shared rules.
+
+Do not sweep already-triaged issues to add missing work-kind labels.
 
 ## Pull requests as a triage surface
 
