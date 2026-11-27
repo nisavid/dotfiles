@@ -593,6 +593,7 @@ expected_linux_source_inventory=$(
     'dot_config/systemd/user/graphical-session.target.wants/symlink_ydotool.service' \
     'dot_config/systemd/user/kde-baloo.service.d/10-display-ready.conf' \
     'dot_config/systemd/user/memory-telemetry.service' \
+    'dot_config/systemd/user/open-terminal.service.d/10-clean-stop.conf' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
     'dot_config/systemd/user/proton-drive-desktop.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
@@ -613,7 +614,9 @@ python3 -B -m unittest discover -s "$repo_root/tests" -p test_github_rate_limit.
 fixture_source=$test_root/source
 fixture_home=$test_root/home
 fixture_config=$test_root/chezmoi.toml
+open_terminal_dropin=systemd/user/open-terminal.service.d/10-clean-stop.conf
 mkdir -p \
+  "$fixture_source/dot_config/${open_terminal_dropin:h}" \
   "$fixture_source/private_dot_docker" \
   "$fixture_source/private_dot_local/libexec/fixture" \
   "$fixture_source/private_Library/private_LaunchAgents" \
@@ -622,6 +625,7 @@ mkdir -p \
   "$fixture_source/private_dot_local/private_share/applications" \
   "$fixture_home"
 cp "$test_root/linux-ignore" "$fixture_source/.chezmoiignore"
+cp "$repo_root/home/dot_config/$open_terminal_dropin" "$fixture_source/dot_config/$open_terminal_dropin"
 
 typeset -a drkonqi_targets=()
 for unit in drkonqi-coredump-cleanup.timer drkonqi-sentry-postman.path; do
@@ -657,6 +661,15 @@ managed=$(
   HOME=$fixture_home chezmoi -S "$fixture_source" -D "$fixture_home" \
     --config "$fixture_config" managed
 )
+print -r -- "$managed" | grep -Fqx -- ".config/$open_terminal_dropin" ||
+  fail 'Linux does not manage the open-terminal service drop-in'
+open_terminal_policy=$(
+  HOME=$fixture_home chezmoi -S "$fixture_source" -D "$fixture_home" \
+    --config "$fixture_config" cat "$fixture_home/.config/$open_terminal_dropin" |
+    awk '!/^[[:space:]]*([#;]|$)/'
+)
+[[ $open_terminal_policy == $'[Service]\nSuccessExitStatus=143' ]] ||
+  fail 'the open-terminal service drop-in must accept only exit status 143 in addition to the defaults'
 [[ $managed != *hindsight* ]] ||
   fail 'Linux manages a Hindsight fixture'
 [[ $managed != *'.docker'* ]] ||
@@ -701,6 +714,8 @@ darwin_managed=$(
   HOME=$fixture_home chezmoi -S "$fixture_source" -D "$fixture_home" \
     --config "$fixture_config" managed
 )
+! print -r -- "$darwin_managed" | grep -Fqx -- ".config/$open_terminal_dropin" ||
+  fail 'Darwin manages the open-terminal service drop-in'
 for target in $display2_targets $drkonqi_targets; do
   ! print -r -- "$darwin_managed" | grep -Fqx -- "$target" ||
     fail "Darwin manages $target"
