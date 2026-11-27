@@ -448,7 +448,7 @@ bulk_reads_digest=$(
   cd "$source_root"
   chezmoi -S "$source_root" execute-template '{{ include ".chezmoitemplates/bulk-github-reads.tmpl" | sha256sum }}'
 )
-[[ $bulk_reads_digest == 8c6c0082c3764308bb149eafa654aeb85a54444380330214720b916b5f6d9ce7 ]] ||
+[[ $bulk_reads_digest == 9b815691164fe07ac7ca4abbc242d42a8094099ee4a5a8d9d55b976aef184791 ]] ||
   fail "bulk GitHub reads partial differs from the approved rule text"
 bulk_reads=$(<"$bulk_reads_partial")
 assert_partial_carried_once "$bulk_reads" "bulk GitHub reads rule" "$template" "$claude_bulk_reads_template"
