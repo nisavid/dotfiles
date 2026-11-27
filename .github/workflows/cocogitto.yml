@@ -1,5 +1,11 @@
+# A push run attaches only to the commit pushed to main. No open pull request
+# into main has a commit already on main as its head, so such a head gets this
+# workflow's checks from its pull_request runs alone. A branch gets no hosted
+# check until it has a pull request; main's push run checks the whole history.
 on:
   push:
+    branches:
+      - main
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
