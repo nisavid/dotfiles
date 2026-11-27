@@ -62,9 +62,25 @@ workflow_step_run() {
   ' "$1"
 }
 
+cocogitto=$repo_root/.github/workflows/cocogitto.yml
+cog_workflow=$(chezmoi -c "$test_root/config.toml" -S "$test_root" execute-template \
+  --with-stdin '{{ .chezmoi.stdin | fromYaml | toJson }}' < "$cocogitto")
+jq -e '.on.pull_request | (.types // [] | sort) == ["edited", "opened", "reopened", "synchronize"]
+  and keys == ["types"]' <<<"$cog_workflow" >/dev/null ||
+  fail 'Cocogitto must run on PR opens, updates, reopens, and edits without filters'
+
+jq -e --arg always '${{ always() }}' \
+  --arg results "\${{ join(needs.*.result, ',') }}" '
+  .jobs.required
+  | .name == "Conventional commits gate" and .needs == ["cog_check_job"] and .if == $always
+    and any(.steps[]; .name == "Check required job results" and .if == $always
+      and .shell == "sh" and (.run | type) == "string" and .env.NEEDS_RESULTS == $results)
+' <<<"$cog_workflow" >/dev/null ||
+  fail 'Conventional commits gate and its result-checking step must always run on the compliance result'
+
 # GitHub's synthetic PR merge subject is outside the contributor's commit history.
 grep -Fxq '          ref: ${{ github.event.pull_request.head.sha || github.sha }}' \
-  "$repo_root/.github/workflows/cocogitto.yml" ||
+  "$cocogitto" ||
   fail 'Cocogitto must check the PR head or the pushed commit'
 
 # Exercise each gate's shell step with the dependency results Actions supplies.
@@ -86,7 +102,7 @@ done
 
 # The portability concurrency group is pinned in ci-test-group.zsh.
 # Cocogitto runs independently on each PR event, including body edits.
-if grep -Eq '^[[:space:]]*concurrency:' "$repo_root/.github/workflows/cocogitto.yml"; then
+if grep -Eq '^[[:space:]]*concurrency:' "$cocogitto"; then
   fail 'Cocogitto runs must remain independent across PR events'
 fi
 # Linux uses the workflow's pinned downloads and normal runner user.
