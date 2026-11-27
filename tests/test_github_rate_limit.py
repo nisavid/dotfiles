@@ -2,6 +2,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -21,26 +22,120 @@ RESPONSE = {
 
 
 class GitHubRateLimitTest(unittest.TestCase):
-    def sample(self, body, status=0):
+    login = "config get user --host github.com"
+    quota = "api --hostname github.com rate_limit"
+
+    def sample(self, body, status=0, before="fixture", after="fixture", calls=None,
+               profile_header="# secret-exec-github-login=fixture\n"):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp)
+            hosts = fixture / ".config/gh/hosts.yml"
+            hosts.parent.mkdir(parents=True)
+            hosts.touch()
+            profile = fixture / ".config/secret-exec/profiles/github.env"
+            profile.parent.mkdir(parents=True)
+            if profile_header is not None:
+                profile.write_text(profile_header)
+            for name, value in (("before", before), ("after", after)):
+                if value is not None:
+                    (fixture / name).write_text(value + "\n")
             (fixture / "response").write_text(body)
             gh = fixture / "gh"
-            gh.write_text(
-                '#!/bin/sh\n'
-                'printf "%s\\n" "$*" >> calls\n'
-                'printf "%s\\n" "unexpected diagnostic" >&2\n'
-                '/bin/cat response\n'
-                f'exit {status}\n'
-            )
+            gh.write_text(f"""#!/bin/sh
+printf '%s\\n' "$*" >> calls
+echo 'unexpected diagnostic' >&2
+case "$*" in
+  '{self.login}')
+    if [ -f requested ]; then /bin/cat after; else /bin/cat before; fi;;
+  '{self.quota}')
+    : > requested
+    /bin/cat response
+    exit {status};;
+  *) exit 2;;
+esac
+""")
             gh.chmod(0o755)
             result = subprocess.run(
                 [sys.executable, str(SAMPLER)], cwd=fixture, capture_output=True,
                 env={"PATH": tmp, "HOME": tmp}, timeout=5,
             )
-            self.assertTrue((fixture / "calls").exists(), result.stderr)
-            self.assertEqual((fixture / "calls").read_text(), "api --hostname github.com rate_limit\n")
+            if calls is None:
+                calls = [self.login, self.quota] if status else [self.login, self.quota, self.login]
+            log = fixture / "calls"
+            self.assertEqual(log.read_text().splitlines() if log.exists() else [], calls)
             return result
+
+    def test_bad_login_discards_sample_and_never_retries(self):
+        for bad in ("different", "", None):
+            for phase in ("before", "after"):
+                with self.subTest(phase=phase, login=bad):
+                    calls = [self.login] if phase == "before" else [self.login, self.quota, self.login]
+                    result = self.sample(json.dumps(RESPONSE), calls=calls, **{phase: bad})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, b"")
+                    self.assertEqual(result.stderr, b"GitHub rate limit unavailable\n")
+
+    def test_missing_or_ambiguous_deploy_binding_stops_before_gh(self):
+        for header in (None, "", "# secret-exec-github-login=\n",
+                       "# secret-exec-github-login=fixture\n" * 2):
+            with self.subTest(header=header):
+                result = self.sample(json.dumps(RESPONSE), profile_header=header, calls=[])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(result.stderr, b"GitHub rate limit unavailable\n")
+
+    @unittest.skipUnless(shutil.which("gh"), "GitHub CLI required for its configuration format")
+    def test_real_config_uses_only_the_host_login_and_observes_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config"
+            gh_dir = root / "gh-config"
+            gh_dir.mkdir()
+            profile = config / "secret-exec/profiles/github.env"
+            profile.parent.mkdir(parents=True)
+            template = ROOT / "home/dot_config/private_secret-exec/private_profiles/private_github.env.tmpl"
+            profile.write_bytes(subprocess.check_output(
+                [shutil.which("chezmoi"), "-S", tmp, "execute-template",
+                 "--override-data-file", str(ROOT / "tests/fixtures/secret-exec-public.toml"),
+                 "--override-data", '{"chezmoi":{"hostname":"second-host"}}'],
+                input=template.read_bytes(), env={"HOME": tmp, "PATH": "/usr/bin:/bin"},
+            ))
+            (gh_dir / "config.yml").write_text("version: 1\nuser: fixture-secondary\n")
+            real_gh = shlex.quote(shutil.which("gh"))
+            stub = root / "gh"
+            stub.write_text(f"""#!/bin/sh
+case "$*" in
+  '{self.login}') exec {real_gh} "$@";;
+  '{self.quota}')
+    : > requested
+    /bin/mv replacement gh-config/hosts.yml
+    /bin/cat response;;
+  *) exit 2;;
+esac
+""")
+            stub.chmod(0o755)
+            (root / "response").write_text(json.dumps(RESPONSE))
+            for before, after, ok in (
+                ("fixture-secondary", "FIXTURE-SECONDARY", True),
+                ("fixture-secondary", "other", False),
+                ("", "fixture-secondary", False),
+            ):
+                with self.subTest(before=before, after=after):
+                    requested = root / "requested"
+                    requested.unlink(missing_ok=True)
+                    for target, login in ((gh_dir / "hosts.yml", before), (root / "replacement", after)):
+                        host = {"user": login} if login else {}
+                        target.write_text(json.dumps({"github.com": host}))
+                    result = subprocess.run(
+                        [sys.executable, str(SAMPLER)], cwd=root, capture_output=True,
+                        env={"HOME": tmp, "PATH": tmp, "XDG_CONFIG_HOME": str(config),
+                             "GH_CONFIG_DIR": str(gh_dir)}, timeout=10,
+                    )
+                    self.assertEqual(requested.exists(), bool(before))
+                    self.assertEqual(result.returncode == 0, ok, result.stderr)
+                    expected_line = b"5000 0 5000 1795800600 7000 6983 17 1795801200\n" if ok else b""
+                    self.assertEqual(result.stdout, expected_line)
+                    self.assertEqual(result.stderr, b"" if ok else b"GitHub rate limit unavailable\n")
 
     def test_sample_contains_only_the_eight_counters(self):
         result = self.sample(json.dumps(RESPONSE))
@@ -70,7 +165,7 @@ class GitHubRateLimitTest(unittest.TestCase):
 
 
 class JournalCadenceTest(unittest.TestCase):
-    def verify(self, records, cursor="test-cursor", active=True, listed=True):
+    def verify(self, records, cursor="test-cursor", active=True, listed=True, stale_sampler=False):
         # The verification begins at epoch second 550; the next firings are 600 and 900.
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp)
@@ -80,7 +175,10 @@ class JournalCadenceTest(unittest.TestCase):
                 path.write_text("#!/bin/sh\n" + body)
                 path.chmod(0o755)
 
-            for tool in ("jq", "awk"):
+            deployed = fixture / ".local/bin/github-rate-limit"
+            deployed.parent.mkdir(parents=True)
+            deployed.write_bytes(b"old sampler" if stale_sampler else SAMPLER.read_bytes())
+            for tool in ("jq", "awk", "cmp", "dirname"):
                 (fixture / tool).symlink_to(shutil.which(tool))
             command("date", 'echo 550\n')
             command("sleep", '[ -f captured ] && [ "$1" = 386 ] && : > elapsed\n')
@@ -130,8 +228,8 @@ esac
             with self.subTest(reason=reason):
                 self.assertNotEqual(self.verify(records).returncode, 0)
 
-    def test_requires_an_active_listed_timer_and_a_cursor(self):
+    def test_requires_current_sampler_active_listed_timer_and_cursor(self):
         records = [(t, "5 0 5 101 8 2 6 102", i * 32) for t, i in [(601, "a"), (901, "b")]]
-        for missing in ({"active": False}, {"listed": False}, {"cursor": ""}):
+        for missing in ({"stale_sampler": True}, {"active": False}, {"listed": False}, {"cursor": ""}):
             with self.subTest(missing=missing):
                 self.assertNotEqual(self.verify(records, **missing).returncode, 0)

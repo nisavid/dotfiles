@@ -2,6 +2,10 @@
 # Run once after applying and starting the timer in the target Linux user session.
 set -euo pipefail
 
+repo_root=$(cd -- "$(dirname -- "$0")/.." && pwd)
+cmp -s "$repo_root/home/private_dot_local/bin/executable_github-rate-limit" \
+  "$HOME/.local/bin/github-rate-limit" || { echo 'Applied sampler differs from checkout' >&2; exit 1; }
+
 systemctl --user is-active --quiet github-rate-limit.timer
 systemctl --user list-timers --full --no-legend --no-pager github-rate-limit.timer |
   awk 'NF >= 2 && $(NF-1) == "github-rate-limit.timer" && $NF == "github-rate-limit.service" { listed = 1 }
@@ -11,7 +15,7 @@ cursor=$(journalctl --user -b -n 1 -o json --output-fields=__CURSOR |
   jq -ers 'select(length == 1) | .[0].__CURSOR | strings | select(length > 0)')
 now=$(date +%s)
 first=$(( (now / 300 + 1) * 300 ))
-# Allow one second of timer coalescing and the sampler's 30-second read timeout.
+# Allow one second of timer coalescing, two 2-second login checks, and the 30-second API read.
 tolerance=35
 sleep "$((first + 300 + tolerance + 1 - now))"
 
