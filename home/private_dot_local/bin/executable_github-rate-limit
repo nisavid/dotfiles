@@ -23,7 +23,46 @@ def expected_login(config_home):
     return logins[0].lower()
 
 
-def check_login(expected, config_dir):
+# Admit gh's plain host/account mappings, including their JSON flow form.
+# Only login and Git protocol fields may carry scalar values. Other YAML
+# constructs (including escaped keys and aliases) fail closed before gh runs.
+METADATA = re.compile(
+    rb'[ \t\r\n{},]+'
+    rb'|(?:user|"user")[ \t]*:[ \t]*(?:"[a-zA-Z0-9_.-]+"|[a-zA-Z0-9_.-]+)'
+    rb'|(?:git_protocol|"git_protocol")[ \t]*:[ \t]*(?:"(?:https|ssh)"|https|ssh)'
+    rb'|(?P<key>"[a-zA-Z0-9_.-]+"|[a-zA-Z0-9_.-]+)[ \t]*:'
+)
+
+
+def validate_metadata(line):
+    offset = 0
+    while offset < len(line):
+        field = METADATA.match(line, offset)
+        if not field:
+            raise ValueError
+        key = field["key"]
+        if key and key.strip(b'"').lower().split(b"_")[-1] == b"token":
+            raise ValueError
+        offset = field.end()
+
+
+def copy_keyring_metadata(source, destination):
+    # Check each key at its colon, before reading its value, even on a flow line.
+    with source.open("rb", buffering=0) as hosts, destination.open("wb") as snapshot:
+        line = bytearray()
+        for char in iter(lambda: hosts.read(1), b""):
+            line.extend(char)
+            if char in (b":", b"\n"):
+                validate_metadata(line)
+            if char == b"\n":
+                snapshot.write(line)
+                line.clear()
+        validate_metadata(line)
+        snapshot.write(line)
+
+
+def check_login(expected, config_dir, hosts):
+    copy_keyring_metadata(hosts, Path(config_dir) / "hosts.yml")
     login = subprocess.run(
         ["gh", "config", "get", "user", "--host", "github.com"],
         env={
@@ -45,15 +84,15 @@ def sample():
     gh_dir = Path(os.environ.get("GH_CONFIG_DIR") or config_home / "gh")
     with tempfile.TemporaryDirectory() as config_dir:
         # gh otherwise falls back to a global user when the host has none.
-        # Link the path so the second check sees replacements made during the read.
         (Path(config_dir) / "config.yml").write_text("version: 1\n")
-        (Path(config_dir) / "hosts.yml").symlink_to(gh_dir.absolute() / "hosts.yml")
-        check_login(expected, config_dir)
+        check_login(expected, config_dir, gh_dir / "hosts.yml")
+        # Keep gh on its private copy for the API call, with the user session's keyring.
+        os.environ["GH_CONFIG_DIR"] = config_dir
         response = subprocess.run(
             ["gh", "api", "--hostname", "github.com", "rate_limit"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=30,
         )
-        check_login(expected, config_dir)
+        check_login(expected, config_dir, gh_dir / "hosts.yml")
     resources = json.loads(response.stdout)["resources"]
     counters = []
     for resource in ("core", "graphql"):
