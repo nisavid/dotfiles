@@ -70,16 +70,19 @@ hidden=$(LC_ALL=C grep -anE $'[\x01-\x09\x0b-\x1f\x7f]|\xc2\x85|\xe2\x80[\xa8\xa
 # GROUP from matrix.group, under shell: bash with no BASH_ENV or defaults; no
 # step continues on error; each named platform aggregate needs only its own
 # matrix job, always runs, and fails unless that entire matrix succeeded.
+# The final gate requires both matrices and both named aggregates. An edit
+# that leaves the base alone cannot evict a running or pending matrix.
 expected_workflow=$(cat <<'PIN'
 name: Platform portability
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches:
       - main
   workflow_dispatch:
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.action == 'edited' && !github.event.changes.base && github.run_id || github.ref }}
   cancel-in-progress: true
 permissions:
   contents: read
@@ -299,6 +302,30 @@ jobs:
         env:
           VERIFY_RESULT: ${{ needs.verify.result }}
         run: test "$VERIFY_RESULT" = success
+  required:
+    name: Platform portability gate
+    needs: [verify, verify-linux, aggregate, linux-aggregate]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Check required job results
+        if: ${{ always() }}
+        shell: sh
+        working-directory: .
+        env:
+          NEEDS_RESULTS: ${{ join(needs.*.result, ',') }}
+        run: |
+          printf 'Needed job results: %s\n' "$NEEDS_RESULTS"
+          remaining=$NEEDS_RESULTS
+          while :; do
+            case "$remaining" in
+              success) exit 0 ;;
+              success,*) remaining=${remaining#*,} ;;
+              *) exit 1 ;;
+            esac
+          done
 PIN
 )
 require_pin "$portability" 'the GitHub Actions pin' "${expected_workflow//@GROUPS@/$workflow_groups}"

@@ -62,11 +62,33 @@ workflow_step_run() {
   ' "$1"
 }
 
-workflow_concurrency=$(workflow_block "$workflow" concurrency)
-[[ $workflow_concurrency == *'group: ${{ github.workflow }}-${{ github.ref }}'* ]] ||
-  fail 'platform workflow does not group superseded runs by workflow and ref'
-[[ $workflow_concurrency == *'cancel-in-progress: true'* ]] ||
-  fail 'platform workflow does not cancel superseded runs'
+# GitHub's synthetic PR merge subject is outside the contributor's commit history.
+grep -Fxq '          ref: ${{ github.event.pull_request.head.sha || github.sha }}' \
+  "$repo_root/.github/workflows/cocogitto.yml" ||
+  fail 'Cocogitto must check the PR head or the pushed commit'
+
+# Exercise each gate's shell step with the dependency results Actions supplies.
+for gate_workflow in cocogitto platform-portability; do
+  gate_command=$(workflow_step_run "$repo_root/.github/workflows/$gate_workflow.yml" 'Check required job results')
+  [[ -n $gate_command ]] || fail "$gate_workflow has no gate step"
+  for results in success success,success; do
+    NEEDS_RESULTS=$results sh -e -c "$gate_command" >/dev/null ||
+      fail "$gate_workflow rejects successful dependencies"
+  done
+  for result in failure cancelled skipped ''; do
+    for results in "$result" "success,$result" "$result,success"; do
+      if NEEDS_RESULTS=$results sh -e -c "$gate_command" >/dev/null; then
+        fail "$gate_workflow accepts dependency results '$results'"
+      fi
+    done
+  done
+done
+
+# The portability concurrency group is pinned in ci-test-group.zsh.
+# Cocogitto runs independently on each PR event, including body edits.
+if grep -Eq '^[[:space:]]*concurrency:' "$repo_root/.github/workflows/cocogitto.yml"; then
+  fail 'Cocogitto runs must remain independent across PR events'
+fi
 # Linux uses the workflow's pinned downloads and normal runner user.
 linux_install=$(workflow_step_run "$workflow" 'Install Linux dependencies')
 linux_packages=$(

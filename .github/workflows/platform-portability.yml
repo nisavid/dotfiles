@@ -4,13 +4,15 @@ name: Platform portability
 # its own required aggregate so an older macOS-only result cannot satisfy Linux.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches:
       - main
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Isolate metadata edits so they cannot cancel or displace the PR's matrix.
+  group: ${{ github.workflow }}-${{ github.event.action == 'edited' && !github.event.changes.base && github.run_id || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -268,3 +270,28 @@ jobs:
         env:
           VERIFY_RESULT: ${{ needs.verify.result }}
         run: test "$VERIFY_RESULT" = success
+
+  required:
+    name: Platform portability gate
+    needs: [verify, verify-linux, aggregate, linux-aggregate]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Check required job results
+        if: ${{ always() }}
+        shell: sh
+        working-directory: .
+        env:
+          NEEDS_RESULTS: ${{ join(needs.*.result, ',') }}
+        run: |
+          printf 'Needed job results: %s\n' "$NEEDS_RESULTS"
+          remaining=$NEEDS_RESULTS
+          while :; do
+            case "$remaining" in
+              success) exit 0 ;;
+              success,*) remaining=${remaining#*,} ;;
+              *) exit 1 ;;
+            esac
+          done
