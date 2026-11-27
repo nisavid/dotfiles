@@ -22,6 +22,8 @@ claude_cross_harness_rule_template="$source_root/dot_claude/rules/cross-harness-
 merge_methods_partial_name=merge-methods.tmpl
 merge_methods_partial="$source_root/.chezmoitemplates/$merge_methods_partial_name"
 claude_merge_methods_rule_template="$source_root/dot_claude/rules/merge-methods.md.tmpl"
+bulk_reads_partial="$source_root/.chezmoitemplates/bulk-github-reads.tmpl"
+claude_bulk_reads_template="$source_root/dot_claude/rules/bulk-github-reads.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
 codex_config_modifier="$source_root/dot_codex/modify_private_config.toml.tmpl"
 cold_archive_envelope_name=.private-cold-archive.md.age
@@ -229,6 +231,7 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   cp -p -- "$review_partial" "$render_fixture/.chezmoitemplates/$review_partial_name"
   cp -p -- "$cross_harness_partial" "$render_fixture/.chezmoitemplates/$cross_harness_partial_name"
   cp -p -- "$merge_methods_partial" "$render_fixture/.chezmoitemplates/$merge_methods_partial_name"
+  cp -p -- "$bulk_reads_partial" "$render_fixture/.chezmoitemplates/"
   cp -p -- "$question_partial" "$render_fixture/.chezmoitemplates/$question_partial_name"
   cp -p -- "$typography_partial" "$render_fixture/.chezmoitemplates/$typography_partial_name"
   cp -p -- "$source_root/.chezmoitemplates/outcome-reassessment.tmpl" "$render_fixture/.chezmoitemplates/outcome-reassessment.tmpl"
@@ -247,6 +250,7 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   render_claude_cross_harness_rule_template="$render_fixture/dot_claude/rules/${claude_cross_harness_rule_template:t}"
   cp -p -- "$claude_cross_harness_rule_template" "$render_claude_cross_harness_rule_template"
   cp -p -- "$claude_merge_methods_rule_template" "$render_fixture/dot_claude/rules/"
+  cp -p -- "$claude_bulk_reads_template" "$render_fixture/dot_claude/rules/"
   cp -p -- "$source_root"/dot_claude/rules/{increment-definition,outcome-reassessment}.md.tmpl "$render_fixture/dot_claude/rules/"
   render_claude_cold_archive_rule_template="$render_fixture/dot_claude/rules/${claude_cold_archive_rule_template:t}"
   grep -Fv -- "$cold_archive_envelope_name" "$claude_cold_archive_rule_template" > "$render_claude_cold_archive_rule_template"
@@ -439,6 +443,21 @@ chezmoi -S "$render_source_root" dump --format json "$HOME/.claude/rules" > "$cl
 jq -e --rawfile partial "$merge_methods_partial" \
   '.[".claude/rules/merge-methods.md"].contents == ("# Merge Methods\n\n" + $partial)' "$claude_state" > /dev/null ||
   fail "Claude merge-methods rule is not the heading plus the shared partial"
+
+bulk_reads_digest=$(
+  cd "$source_root"
+  chezmoi -S "$source_root" execute-template '{{ include ".chezmoitemplates/bulk-github-reads.tmpl" | sha256sum }}'
+)
+[[ $bulk_reads_digest == 983a627b81577322ee0211daab7d5d8585e862cfa909fec7cc328fc90ca4803f ]] ||
+  fail "bulk GitHub reads partial differs from the approved rule text"
+bulk_reads=$(<"$bulk_reads_partial")
+assert_partial_carried_once "$bulk_reads" "bulk GitHub reads rule" "$template" "$claude_bulk_reads_template"
+jq -ne --rawfile section "$pr_policy" --arg rule "$bulk_reads" \
+  '$section | sub("\\s+\\z"; "") | endswith("\n\n" + $rule)' > /dev/null ||
+  fail "Codex Pull Requests And Issues must end with a blank line followed by the shared bulk GitHub reads rule"
+jq -e --rawfile partial "$bulk_reads_partial" \
+  '.[".claude/rules/bulk-github-reads.md"] | .perm == 420 and .contents == ("# Bulk GitHub Reads\n\n" + $partial)' \
+  "$claude_state" > /dev/null || fail "Claude bulk GitHub reads rule must carry the shared partial with mode 0644"
 
 legacy_merge_rule='Prefer squash merging when several merge methods are available'
 ! grep -Fq -- "$legacy_merge_rule" "$rendered" || fail "Codex policy contains the superseded squash rule"
