@@ -1,0 +1,27 @@
+#!/usr/bin/python3
+import json
+import subprocess
+import sys
+
+
+def sample():
+    response = subprocess.run(
+        ["gh", "api", "--hostname", "github.com", "rate_limit"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=30,
+    )
+    resources = json.loads(response.stdout)["resources"]
+    counters = []
+    for resource in ("core", "graphql"):
+        for field in ("limit", "remaining", "used", "reset"):
+            value = resources[resource][field]
+            if type(value) is not int or value < 0:
+                raise ValueError
+            counters.append(value)
+    return counters
+
+
+if __name__ == "__main__":
+    try:
+        print(*sample())
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, RecursionError):
+        sys.exit("GitHub rate limit unavailable")

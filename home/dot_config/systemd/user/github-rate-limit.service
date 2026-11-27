@@ -1,0 +1,11 @@
+[Unit]
+Description=Sample GitHub REST and GraphQL rate limits
+After=plasma-kwallet-pam.service
+
+[Service]
+Type=oneshot
+Environment=GH_NO_UPDATE_NOTIFIER=1 GH_PROMPT_DISABLED=1
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+ExecStart="%h/.local/bin/github-rate-limit"
+StandardOutput=journal
+StandardError=journal

@@ -45,6 +45,7 @@ Library
 .config/systemd
 .local/bin/claude-display2-link
 .local/bin/cmake
+.local/bin/github-rate-limit
 .local/bin/makepkg
 .local/bin/memory-telemetry
 .local/bin/ninja

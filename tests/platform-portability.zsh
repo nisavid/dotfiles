@@ -523,6 +523,7 @@ typeset -a darwin_only_patterns=(
   '.config/systemd'
   '.local/bin/claude-display2-link'
   '.local/bin/cmake'
+  '.local/bin/github-rate-limit'
   '.local/bin/makepkg'
   '.local/bin/memory-telemetry'
   '.local/bin/ninja'
@@ -585,6 +586,8 @@ expected_linux_source_inventory=$(
     'dot_config/systemd/user/claude-display2-sway.service' \
     'dot_config/systemd/user/codex-usage-safeguard.service.tmpl' \
     'dot_config/systemd/user/default.target.wants/symlink_memory-telemetry.service' \
+    'dot_config/systemd/user/github-rate-limit.service' \
+    'dot_config/systemd/user/github-rate-limit.timer' \
     'dot_config/systemd/user/graphical-session.target.wants/symlink_ydotool.service' \
     'dot_config/systemd/user/kde-baloo.service.d/10-display-ready.conf' \
     'dot_config/systemd/user/memory-telemetry.service' \
@@ -592,6 +595,7 @@ expected_linux_source_inventory=$(
     'dot_config/systemd/user/proton-drive-desktop.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
     'dot_config/systemd/user/standing-resource-admission.service' \
+    'dot_config/systemd/user/timers.target.wants/symlink_github-rate-limit.timer' \
     'dot_config/systemd/user/ydotool.service.d/50-graphical-session.conf' \
     'private_dot_local/private_share/applications/claude-code-url-handler.desktop' \
     'private_dot_local/private_share/applications/proton-drive.desktop.tmpl' \
@@ -601,6 +605,8 @@ expected_linux_source_inventory=$(
   fail 'Linux-only source inventory changed without updating the non-Linux gate'
 
 python3 -B -m unittest discover -s "$repo_root/tests" -p test_baloo_startup.py
+
+python3 -B -m unittest discover -s "$repo_root/tests" -p test_github_rate_limit.py
 
 fixture_source=$test_root/source
 fixture_home=$test_root/home
