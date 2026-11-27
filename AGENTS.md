@@ -24,7 +24,14 @@ Use Conventional Commits for commits and pull request titles; `cog.toml` and the
 
 Treat `$HOME/.local/share/chezmoi` as the stable primary checkout. Preserve whichever branch is checked out there: do not switch or detach that checkout unless Ivan explicitly directs the branch change. Perform other branch work in a persistent sibling worktree under `$HOME/.local/share/chezmoi.wt/`.
 
-Before publication, run the test suites that own the touched surface: `zsh tests/public-agent-skills.zsh` for agent skills, `zsh tests/platform-portability.zsh` for deployment bindings, and `zsh tests/privacy-scan.zsh` plus `python3 scripts/privacy-scan --root . --require-age-manifest` for anything touching encrypted or private material. CI runs all of them; local full scanning requires the official checksum-pinned `age-inspect` from `.github/workflows/privacy-age-integrity.yml` with exact version output `v1.3.1`, installed in an absolute directory outside the scan root named by `AGE_TOOLING_DIRECTORY`. Invoke it with `AGE_TOOLING_DIRECTORY=/absolute/external/age-bin python3 scripts/privacy-scan --root . --require-age-manifest`; a PATH-only `age` or `age-inspect` installation is insufficient.
+Before publication, run the suites that own the touched files.
+
+- Run `zsh tests/platform-portability.zsh` for deployment bindings, `cocogitto.yml`, and `platform-portability.yml`. For `platform-portability.yml`, also run `zsh tests/ci-test-group.zsh` for concurrency and matrix coverage.
+- Run `GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 zsh -f tests/global-agents-policy.zsh` for the repository’s `AGENTS.md`.
+- Run `zsh tests/public-agent-skills.zsh` for agent skills.
+- Run `zsh tests/privacy-scan.zsh` and `python3 scripts/privacy-scan --root . --require-age-manifest` for anything touching encrypted or private material.
+
+CI runs these checks. Local full scanning requires the official checksum-pinned `age-inspect` from `.github/workflows/privacy-age-integrity.yml` with exact version output `v1.3.1`, installed in an absolute directory outside the scan root named by `AGE_TOOLING_DIRECTORY`. Invoke it with `AGE_TOOLING_DIRECTORY=/absolute/external/age-bin python3 scripts/privacy-scan --root . --require-age-manifest`; a PATH-only `age` or `age-inspect` installation is insufficient.
 
 `Verify trusted base against candidate data` is the sole job in `privacy-age-integrity.yml`. With no job condition or dependencies, it serves as the workflow's gate. Lost-signer recovery requires that exact check name and removes it for one merge. A separate gate would duplicate the expected failure. Reconsider the gate design if the workflow gains a second job.
 
