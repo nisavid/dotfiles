@@ -687,6 +687,15 @@ for target in $display2_targets $drkonqi_targets; do
   print -r -- "$managed" | grep -Fqx -- "$target" ||
     fail "Linux does not manage $target"
 done
+for target in $drkonqi_targets; do
+  drkonqi_policy=$(
+    HOME=$fixture_home chezmoi -S "$fixture_source" -D "$fixture_home" \
+      --config "$fixture_config" cat "$fixture_home/$target" |
+      awk '!/^[[:space:]]*([#;]|$)/'
+  )
+  [[ $drkonqi_policy == $'[Unit]\nDefaultDependencies=no\nConflicts=shutdown.target\nBefore=shutdown.target' ]] ||
+    fail "$target must set only DefaultDependencies=no, Conflicts=shutdown.target and Before=shutdown.target under [Unit]"
+done
 cp "$test_root/darwin-ignore" "$fixture_source/.chezmoiignore"
 darwin_managed=$(
   HOME=$fixture_home chezmoi -S "$fixture_source" -D "$fixture_home" \
