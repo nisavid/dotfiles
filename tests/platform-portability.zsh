@@ -62,11 +62,31 @@ workflow_step_run() {
   ' "$1"
 }
 
-workflow_concurrency=$(workflow_block "$workflow" concurrency)
-[[ $workflow_concurrency == *'group: ${{ github.workflow }}-${{ github.ref }}'* ]] ||
-  fail 'platform workflow does not group superseded runs by workflow and ref'
-[[ $workflow_concurrency == *'cancel-in-progress: true'* ]] ||
-  fail 'platform workflow does not cancel superseded runs'
+# Pin the complete workflow so an untested Actions setting cannot skip or soften
+# a required check. Review the workflow diff before updating its Git blob ID.
+cocogitto=$repo_root/.github/workflows/cocogitto.yml
+[[ -f $cocogitto && ! -L $cocogitto ]] || fail 'cocogitto.yml must be a regular file'
+cog_blob=$(git -C "$repo_root" hash-object --no-filters -- "$cocogitto")
+[[ $cog_blob == ba696f1555eaab298bdd254994cec00e1bc575c9 ]] ||
+  fail "cocogitto.yml differs from its reviewed workflow (got $cog_blob)"
+
+# Exercise each gate's shell step with the dependency results Actions supplies.
+for gate_workflow in cocogitto platform-portability; do
+  gate_command=$(workflow_step_run "$repo_root/.github/workflows/$gate_workflow.yml" 'Check required job results')
+  [[ -n $gate_command ]] || fail "$gate_workflow has no gate step"
+  for results in success success,success; do
+    NEEDS_RESULTS=$results sh -e -c "$gate_command" >/dev/null ||
+      fail "$gate_workflow rejects successful dependencies"
+  done
+  for result in failure cancelled skipped ''; do
+    for results in "$result" "success,$result" "$result,success"; do
+      if NEEDS_RESULTS=$results sh -e -c "$gate_command" >/dev/null; then
+        fail "$gate_workflow accepts dependency results '$results'"
+      fi
+    done
+  done
+done
+
 # Linux uses the workflow's pinned downloads and normal runner user.
 linux_install=$(workflow_step_run "$workflow" 'Install Linux dependencies')
 linux_packages=$(
